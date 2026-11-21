@@ -21,6 +21,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - The checker error `ArenaFull` is a resource failure, with exit code 3.
 - `rulean-core` has definitional equality of engine F on values (spec 05.4.4), in the module `conv`. It uses the quick checks, beta, delta, iota, the `Nat` extension, lazy delta on folded definitions, the same head with equal arguments and function eta. Engine F answers a query first. An "equal" answer is final, except in the confirm set of spec 05.1, where engine R confirms it. A "not equal" answer, or a fault of engine F, makes engine R decide the query.
 - `rulean check --engine F|R` selects the engine, and `--confirm default|all` selects the queries where engine R confirms engine F. In this version the default is `--engine R`, because engine F is new. The JSON report has the new `engine` object with the counts of engine F.
+- `scripts/arena-confirm.sh` runs engine F with `--confirm all` on each Arena test and fails if engine R does not confirm an equality of engine F. The `arena` and `arena either` CI jobs run it.
 
 ### Changed
 

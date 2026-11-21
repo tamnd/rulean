@@ -123,6 +123,9 @@ version = "0.0.2"
 [[package]]
 name = "rulean-store"
 version = "0.0.2"
+dependencies = [
+ "rulean-nat",
+]
 
 [[package]]
 name = "serde"

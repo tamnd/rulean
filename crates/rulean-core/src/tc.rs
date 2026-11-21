@@ -57,6 +57,20 @@ pub enum ErrorKind {
     DeepRecursion,
     /// A constant of the environment does not have the expected kind. The official kernel fails with an assertion here.
     BadConst,
+    /// `already_declared_exception`.
+    AlreadyDeclared,
+    /// "duplicate universe level parameter".
+    DuplicateLevelParam,
+    /// `declaration_has_free_vars_exception`.
+    FreeVar,
+    /// `theorem_type_is_not_prop`.
+    TheoremNotProp,
+    /// One of the "invalid mutual definition" messages of `add_mutual`.
+    BadMutual,
+    /// One of the "failed to initialize quot module" messages of `add_quot`, or an exported quotient type that is not the reference type (spec 06.5).
+    BadQuot,
+    /// A declaration kind that this version of rulean does not check yet.
+    Unsupported,
 }
 
 /// The first error of a declaration.

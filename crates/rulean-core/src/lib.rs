@@ -19,6 +19,7 @@
 
 extern crate alloc;
 
+pub mod decl;
 pub mod defeq;
 pub mod env;
 pub mod expr;

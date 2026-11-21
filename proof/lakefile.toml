@@ -1,0 +1,11 @@
+name = "rulean-proof"
+defaultTargets = ["RuleanProof"]
+
+# con-leche gives the set-theoretic model that theorem T1 uses (spec 10.2). It is pinned by commit. A change of the pin is a PR of its own, and lean-toolchain must name the same Lean release as con-leche at that commit.
+[[require]]
+name = "con-leche"
+git = "https://github.com/leanprover/con-leche"
+rev = "5ea446d5c79d23ef1f954215d094db2162f1ab6f"
+
+[[lean_lib]]
+name = "RuleanProof"

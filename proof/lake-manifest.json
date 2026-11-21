@@ -1,0 +1,16 @@
+{"version": "1.3.0",
+ "packagesDir": ".lake/packages",
+ "packages":
+ [{"url": "https://github.com/leanprover/con-leche",
+   "type": "git",
+   "subDir": null,
+   "scope": "",
+   "rev": "5ea446d5c79d23ef1f954215d094db2162f1ab6f",
+   "name": "«con-leche»",
+   "manifestFile": "lake-manifest.json",
+   "inputRev": "5ea446d5c79d23ef1f954215d094db2162f1ab6f",
+   "inherited": false,
+   "configFile": "lakefile.lean"}],
+ "name": "«rulean-proof»",
+ "lakeDir": ".lake",
+ "fixedToolchain": false}

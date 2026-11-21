@@ -8,6 +8,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 - `flake.nix` pins Aeneas, Charon and the Rust nightly of Charon with one Aeneas commit.
 - `scripts/extract.sh` translates the four crates of the verified core to Lean with Charon and Aeneas, and the `extract` CI job runs it on each PR.
+- The Lean proof package in `proof/`, with con-leche pinned by commit. The `proof` CI job builds it, checks it with the official kernel and audits its axioms.
+- `scripts/proof-rules.sh` checks the source rules of spec 10.9 on the Lean files.
 
 ## [0.0.1] - 2026-11-21
 

@@ -71,6 +71,26 @@ pub enum ErrorKind {
     BadQuot,
     /// A declaration kind that this version of rulean does not check yet.
     Unsupported,
+    /// An inductive block that is not well formed: no type, types with different level parameters or parameter counts, "number of parameters mismatch" or "parameters of all inductive datatypes must match".
+    BadInductive,
+    /// "mutually inductive types must live in the same universe".
+    UniverseMismatch,
+    /// "invalid occurrence of datatype being declared" (`check_uniform_ind_occs`).
+    NonUniformOcc,
+    /// "does not match inductive datatypes parameters" of a constructor.
+    CtorParamMismatch,
+    /// "universe level of type_of(arg) is too big for the corresponding inductive datatype".
+    UniverseTooBig,
+    /// "has a non positive occurrence" or "contains a non valid occurrence" of the datatypes being declared.
+    NonPositive,
+    /// "invalid return type" of a constructor, or "duplicate constructor name".
+    BadCtor,
+    /// "generated recursor computation rule is not type-preserving".
+    BadRecRule,
+    /// A declaration uses the reserved prefix `_nested`.
+    NestedPrefix,
+    /// An exported field that rulean recomputes does not match the recomputed value (spec 06.1).
+    ExportMismatch,
 }
 
 /// The first error of a declaration.
@@ -117,6 +137,11 @@ pub struct Builtins {
     pub quot_lift: NameId,
     pub quot_ind: NameId,
     pub eq: NameId,
+    /// The type annotations that `consume_type_annotations` removes.
+    pub opt_param: NameId,
+    pub auto_param: NameId,
+    pub out_param: NameId,
+    pub semi_out_param: NameId,
     /// `Nat`, `String`, `Nat.zero`, `Nat.succ`, `Bool.true`, `Bool.false` and `String.ofList` as constants with no levels.
     pub e_nat: ExprId,
     pub e_string: ExprId,
@@ -175,6 +200,10 @@ impl Builtins {
         let quot_lift = name2(st, b"Quot", b"lift");
         let quot_ind = name2(st, b"Quot", b"ind");
         let eq = name1(st, b"Eq");
+        let opt_param = name1(st, b"optParam");
+        let auto_param = name1(st, b"autoParam");
+        let out_param = name1(st, b"outParam");
+        let semi_out_param = name1(st, b"semiOutParam");
         let e_nat = const0(st, nat);
         let e_string = const0(st, string);
         let e_nat_zero = const0(st, nat_zero);
@@ -223,6 +252,10 @@ impl Builtins {
             quot_lift,
             quot_ind,
             eq,
+            opt_param,
+            auto_param,
+            out_param,
+            semi_out_param,
             e_nat,
             e_string,
             e_nat_zero,
@@ -846,7 +879,7 @@ impl Checker {
     }
 
     /// The data of the inductive type of a slot that `infer_proj` needs: the number of parameters, the number of indices, the number of constructors and the first constructor.
-    fn induct_shape(&self, slot: u32) -> Option<(u32, u32, usize, NameId)> {
+    pub(crate) fn induct_shape(&self, slot: u32) -> Option<(u32, u32, usize, NameId)> {
         let anon = self.st.anon();
         match &self.env.at(slot).kind {
             ConstKind::Induct(i) => Some(induct_data(i, anon)),

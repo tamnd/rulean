@@ -1,0 +1,33 @@
+# The expected verdict of each Arena "either" test for the v4.35 profile (spec 05.2 and 11.3.3).
+# The verdict is the verdict of the official kernel v4.35.0 in the Arena results of 2026-11-21 (Arena commit dbb57ce5). "either" means that the official kernel timed out, so the test has no pinned verdict.
+# test	verdict
+corner-cases/alg-conv-trans-acc	reject
+corner-cases/alg-conv-trans-acc-left	accept
+corner-cases/alg-conv-trans-acc-right	accept
+corner-cases/alg-conv-trans-quot	reject
+corner-cases/alg-conv-trans-quot-left	reject
+corner-cases/alg-conv-trans-quot-left-def	accept
+corner-cases/alg-conv-trans-quot-right	accept
+corner-cases/eta-ctor	reject
+corner-cases/eta-rec-struct	reject
+corner-cases/eta-rule-k	reject
+corner-cases/eta-struct-major-and	reject
+corner-cases/eta-struct-major-and-no-whnf	either
+corner-cases/eta-struct-major-no-whnf	either
+corner-cases/eta-unit-like-nested	reject
+corner-cases/eta-unit-like-pi	reject
+corner-cases/eta-unit-like-proof-field	reject
+corner-cases/eta-unit-like-struct	reject
+corner-cases/imax-nested-absorption	reject
+corner-cases/imax-right-successor	reject
+corner-cases/large-elim-maybe-prop	reject
+corner-cases/let-value-type-mismatch	reject
+corner-cases/nested-nonuniform-param	reject
+corner-cases/nested-redex-aux	accept
+corner-cases/positivity-whnf	reject
+corner-cases/proj-maybe-prop	accept
+corner-cases/proj-maybe-prop-past	accept
+corner-cases/proof-param-swap	reject
+corner-cases/subject-reduction-redex	accept
+corner-cases/subject-reduction-reduct	reject
+corner-cases/vanishing-occurrence	accept

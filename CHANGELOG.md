@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 - `rulean-nat` has the `Nat` type of spec 04.6 with the 15 kernel operations, `log2` and decimal conversion. Multiplication uses Karatsuba from 32 limbs, and division uses algorithm D of Knuth. The tests compare each operation with `num-bigint`.
 - `rulean-store` has the term store of spec 04: `u32` handles with the kind in the handle, one node array for each kind, side records with the hash, the loose bound variable range and the flags, and hash-consing with an open-addressing table. It also interns strings, names, levels, level lists and natural number literals.
+- `rulean-format` has the lean4export NDJSON 3.x parser of spec 07.1. It is a hand-written scanner that writes into the term store and returns the declaration stream of spec 04.7. It checks the input rules of 07.1.2: index tables with a defined bit, no duplicate keys or indices, strict integers, UTF-8 and surrogate pairs, `natVal` form and bound, and `mdata` stripping. All 225 Arena tests parse.
 
 ### Fixed
 

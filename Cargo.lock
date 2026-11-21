@@ -76,6 +76,10 @@ dependencies = [
 [[package]]
 name = "rulean-cli"
 version = "0.0.2"
+dependencies = [
+ "rulean-format",
+ "rulean-store",
+]
 
 [[package]]
 name = "rulean-core"

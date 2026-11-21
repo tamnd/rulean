@@ -19,6 +19,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ### Changed
 
+- `scripts/arena-build.py` builds the Arena tests with a `url` field, such as Mathlib. It fetches the pinned commit of the repository, runs the `pre-build` commands with bash, and exports the module with the `leanexport` binary of the toolchain of the repository. It reads the test files with PyYAML if it is installed. With `--check RULEAN`, it sends each export to `rulean check -` through a pipe and does not write the export to the disk. The con-leche test is accepted in this mode.
 - Engine R checks axioms, definitions, theorems and opaque constants in the scratch tier of spec 04.8. The terms that the checker makes for one declaration go into a separate node array, and the checker clears that array after the declaration. Inductive and quotient declarations use the frozen tier. On the full Init prelude, the check now takes 54 s and 964 MB, and before this change it took 93 s and 3.45 GB. On Std, it now takes 60 s and 1.6 GB, and before this change it took 192 s and 4.55 GB.
 - `rulean check` reads the export one line at a time, and computes the SHA-256 digest of the input at the same time. The input is not in memory as a whole, so the peak memory of a check is less by the size of the export. A check of standard input with `-` works the same way.
 - `rulean check` without `--parse-only` checks the export with engine R. Before this change, it declined.

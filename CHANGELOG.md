@@ -10,6 +10,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `scripts/extract.sh` translates the four crates of the verified core to Lean with Charon and Aeneas, and the `extract` CI job runs it on each PR.
 - The Lean proof package in `proof/`, with con-leche pinned by commit. The `proof` CI job builds it, checks it with the official kernel and audits its axioms.
 - `scripts/proof-rules.sh` checks the source rules of spec 10.9 on the Lean files.
+- A draft of `proof/RuleanProof/Statements.lean` with the theorems T1 to T6 of spec 10.1, stated over an interface of the objects that later milestones add.
+- `scripts/leanchecker.sh` checks the proof package and all of its imports with the official kernel.
 
 ## [0.0.1] - 2026-11-21
 

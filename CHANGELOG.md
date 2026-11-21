@@ -11,6 +11,10 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - The Lean proof package in `proof/`, with con-leche pinned by commit. The `proof` CI job builds it, checks it with the official kernel and audits its axioms.
 - `scripts/proof-rules.sh` checks the source rules of spec 10.9 on the Lean files.
 
+### Changed
+
+- The `extract` CI job keeps the Nix store in the Actions cache, so it does not build the Aeneas tools again on each run.
+
 ## [0.0.1] - 2026-11-21
 
 ### Added

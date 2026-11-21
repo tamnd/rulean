@@ -1,6 +1,8 @@
 //! Expression nodes, side records and literals (spec 04.2).
 //!
 //! Each kind has its own node array, and each node has a side record of 8 bytes in a parallel array. One open-addressing table interns the nodes of all kinds. The hash of a node is structural: it mixes the kind seed with the hashes of the fields, not with their handles. So equal terms in two stores have equal hashes.
+//!
+//! The hash of a `lam`, `pi` or `let` node does not mix the binder name or the binder info. This is the method of Lean. Two terms that differ only in binder names and binder info have different handles but equal hashes. So the checker can use the hash to reject terms that are not alpha-equivalent (`expr_eq_fn` of the official kernel). The interning table compares the full node, so this costs only a longer probe walk when such terms occur.
 
 use alloc::vec::Vec;
 use rulean_nat::Nat;
@@ -381,9 +383,8 @@ impl Store {
     fn binder_side(&self, kind: Kind, b: Binder) -> (u32, u32) {
         let sd = self.side(b.dom);
         let sb = self.side(b.body);
-        let mut h = hash::mix(seed(kind), self.name_hash(b.name));
-        h = hash::mix(h, b.info as u32);
-        h = hash::mix(hash::mix(h, sd.hash), sb.hash);
+        // The hash does not mix the binder name or the binder info, as in Lean. So alpha-equivalent terms have equal hashes (see the module documentation).
+        let h = hash::mix(hash::mix(seed(kind), sd.hash), sb.hash);
         let range = max32(sd.info & SATURATED, range_under(sb.info & SATURATED));
         let flags = ((sd.info | sb.info) >> 24) as u8;
         (hash::finish(h), pack(range, flags))
@@ -418,8 +419,10 @@ impl Store {
         let st = self.side(ty);
         let sv = self.side(value);
         let sb = self.side(body);
-        let mut h = hash::mix(seed(Kind::Let), self.name_hash(name));
-        h = hash::mix(hash::mix(hash::mix(h, st.hash), sv.hash), sb.hash);
+        let h = hash::mix(
+            hash::mix(hash::mix(seed(Kind::Let), st.hash), sv.hash),
+            sb.hash,
+        );
         let range = max32(
             max32(st.info & SATURATED, sv.info & SATURATED),
             range_under(sb.info & SATURATED),

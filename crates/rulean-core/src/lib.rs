@@ -10,7 +10,13 @@
 // `Option` combinators and `?` are outside the subset, so the code matches by hand.
 #![allow(clippy::collapsible_if)]
 #![allow(clippy::comparison_chain)]
+// `Vec::clear`, `slice::swap` and `checked_sub` are outside the modelled functions too.
+#![allow(clippy::manual_clear)]
+#![allow(clippy::manual_swap)]
+#![allow(clippy::implicit_saturating_sub)]
 
 extern crate alloc;
 
+pub mod expr;
 pub mod level;
+pub mod memo;

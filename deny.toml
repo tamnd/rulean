@@ -1,0 +1,46 @@
+# The dependency policy of spec section 13.3. Before you add a dependency, answer four questions in the pull request: does it compile C, is the licence compatible, is it maintained, does it have unsafe code?
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+allow = ["Apache-2.0", "MIT", "Unicode-3.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib"]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+# Each crate here compiles C or C++, runs a C build tool, or links a C library. Spec 13.3.1 bans them.
+deny = [
+  { crate = "cc", reason = "compiles C (spec 13.3.1)" },
+  { crate = "cmake", reason = "runs a C build tool (spec 13.3.1)" },
+  { crate = "bindgen", reason = "reads C headers (spec 13.3.1)" },
+  { crate = "pkg-config", reason = "finds C libraries (spec 13.3.1)" },
+  { crate = "vcpkg", reason = "finds C libraries (spec 13.3.1)" },
+  { crate = "mimalloc", reason = "C allocator (spec 13.3.1)" },
+  { crate = "libmimalloc-sys", reason = "C allocator (spec 13.3.1)" },
+  { crate = "tikv-jemallocator", reason = "C allocator (spec 13.3.1)" },
+  { crate = "tikv-jemalloc-sys", reason = "C allocator (spec 13.3.1)" },
+  { crate = "jemallocator", reason = "C allocator (spec 13.3.1)" },
+  { crate = "snmalloc-rs", reason = "C++ allocator (spec 13.3.1)" },
+  { crate = "snmalloc-sys", reason = "C++ allocator (spec 13.3.1)" },
+  { crate = "rpmalloc", reason = "C allocator (spec 13.3.1)" },
+  { crate = "rpmalloc-sys", reason = "C allocator (spec 13.3.1)" },
+  { crate = "rug", reason = "GMP binding (spec 13.3.1)" },
+  { crate = "gmp-mpfr-sys", reason = "GMP binding (spec 13.3.1)" },
+  { crate = "zstd-sys", reason = "C zstd; use ruzstd (spec 13.3.4)" },
+  { crate = "libz-sys", reason = "C zlib (spec 13.3.1)" },
+  { crate = "openssl-sys", reason = "C OpenSSL (spec 13.3.1)" },
+  { crate = "ring", reason = "C and assembly (spec 13.3.1)" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

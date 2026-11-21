@@ -49,11 +49,50 @@ pub struct Member {
     pub deps: Vec<Dep>,
 }
 
+/// A package of the resolved dependency graph, with the workspace members included.
+#[derive(Debug)]
+pub struct Package {
+    pub name: String,
+    pub version: String,
+    /// The native library that the package links, from the `links` key of its manifest.
+    pub links: Option<String>,
+}
+
 /// Reads the workspace members from `cargo metadata`.
 pub fn members() -> Result<Vec<Member>, Vec<String>> {
+    let json = cargo_metadata(&["--no-deps"])?;
+    let packages = json["packages"].as_array().cloned().unwrap_or_default();
+    Ok(packages.iter().map(member).collect())
+}
+
+/// Reads every package of the resolved graph, for all targets and all features.
+pub fn resolved_packages() -> Result<Vec<Package>, Vec<String>> {
+    let json = cargo_metadata(&["--all-features"])?;
+    let packages = json["packages"].as_array().cloned().unwrap_or_default();
+    Ok(packages
+        .iter()
+        .map(|p| Package {
+            name: p["name"].as_str().unwrap_or_default().to_owned(),
+            version: p["version"].as_str().unwrap_or_default().to_owned(),
+            links: p["links"].as_str().map(str::to_owned),
+        })
+        .collect())
+}
+
+/// The root directory of the workspace.
+pub fn workspace_root() -> Result<PathBuf, Vec<String>> {
+    let json = cargo_metadata(&["--no-deps"])?;
+    json["workspace_root"]
+        .as_str()
+        .map(PathBuf::from)
+        .ok_or_else(|| vec!["cargo metadata gave no workspace_root".to_owned()])
+}
+
+fn cargo_metadata(extra: &[&str]) -> Result<Value, Vec<String>> {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let output = Command::new(cargo)
-        .args(["metadata", "--format-version", "1", "--no-deps", "--locked"])
+        .args(["metadata", "--format-version", "1", "--locked"])
+        .args(extra)
         .output()
         .map_err(|e| vec![format!("cannot run cargo metadata: {e}")])?;
     if !output.status.success() {
@@ -62,10 +101,8 @@ pub fn members() -> Result<Vec<Member>, Vec<String>> {
             String::from_utf8_lossy(&output.stderr)
         )]);
     }
-    let json: Value = serde_json::from_slice(&output.stdout)
-        .map_err(|e| vec![format!("cargo metadata gave bad JSON: {e}")])?;
-    let packages = json["packages"].as_array().cloned().unwrap_or_default();
-    Ok(packages.iter().map(member).collect())
+    serde_json::from_slice(&output.stdout)
+        .map_err(|e| vec![format!("cargo metadata gave bad JSON: {e}")])
 }
 
 fn member(package: &Value) -> Member {

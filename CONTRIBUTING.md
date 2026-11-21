@@ -12,7 +12,10 @@ Read `docs/spec/00-README.md`. The spec settles the design. If a change does not
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo xtask all
 ```
+
+`cargo xtask all` checks the dependency rule and the no-C policy. It runs `cargo vendor`, so it needs the network on the first run.
 
 The toolchain is pinned in `rust-toolchain.toml`. rustup installs it on the first build.
 

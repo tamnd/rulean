@@ -33,7 +33,8 @@ pub const PROFILE_COUNT: usize = 1;
 pub const PROFILES: [Profile; PROFILE_COUNT] = [Profile::V4_35];
 
 impl Profile {
-    /// The identifier of the profile, for `--profile` and the report.
+    /// The identifier of the profile, for `--profile` and the report. Aeneas does not translate a `match` that gives string constants, so the extract keeps this function and `of_id` opaque.
+    #[cfg_attr(rulean_extract, charon::opaque)]
     pub fn id(self) -> &'static str {
         match self {
             Profile::V4_35 => "v4.35",
@@ -88,6 +89,7 @@ pub fn of_lean_version(v: &[u8]) -> Option<Profile> {
 }
 
 /// The profile with the identifier `id`, for `--profile`.
+#[cfg_attr(rulean_extract, charon::opaque)]
 pub fn of_id(id: &[u8]) -> Option<Profile> {
     let mut i = 0;
     let mut r = None;

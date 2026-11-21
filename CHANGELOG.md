@@ -10,6 +10,11 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `rulean-store` has the term store of spec 04: `u32` handles with the kind in the handle, one node array for each kind, side records with the hash, the loose bound variable range and the flags, and hash-consing with an open-addressing table. It also interns strings, names, levels, level lists and natural number literals.
 - `rulean-format` has the lean4export NDJSON 3.x parser of spec 07.1. It is a hand-written scanner that writes into the term store and returns the declaration stream of spec 04.7. It checks the input rules of 07.1.2: index tables with a defined bit, no duplicate keys or indices, strict integers, UTF-8 and surrogate pairs, `natVal` form and bound, and `mdata` stripping. All 225 Arena tests parse.
 - `rulean-core` has the universe level functions of spec 05.6, as a transcription of `level.cpp` of the official kernel v4.35.0: `mk_max` and `mk_imax` with their simplifications, `normalize` with a cache for each level handle, `is_equivalent`, `is_geq`, `normalizes_to_zero`, `instantiate` and the name order of the kernel.
+- `rulean-core` has the expression operations of engine R, as a transcription of `instantiate.cpp`, `abstract.cpp`, `expr.cpp` and `expr_eq_fn.cpp` of the official kernel v4.35.0: `instantiate`, `instantiate_rev`, `abstract_fvars`, `lift_loose_bvars`, `lower_loose_bvars`, `has_loose_bvar`, `instantiate_lparams`, the application spine functions, `head_beta`, `cheap_beta_reduce` and `expr_equal`. Each operation has a cache keyed by the node and the binder offset.
+
+### Changed
+
+- The store hash of a `lam`, `pi` or `let` node does not mix the binder name or the binder info. This is the method of Lean. Alpha-equivalent terms now have equal hashes, so `expr_equal` can use the hash to reject unequal terms.
 
 ### Fixed
 

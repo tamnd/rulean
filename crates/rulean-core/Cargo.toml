@@ -1,0 +1,17 @@
+[package]
+name = "rulean-core"
+description = "The rulean type checker: levels, engines F and R, inductive types and declarations."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[package.metadata.rulean]
+# The layer of spec section 03.2. xtask checks the dependency rule of 03.3 from this value.
+layer = "core"
+
+[lints]
+workspace = true

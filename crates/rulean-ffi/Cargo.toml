@@ -1,0 +1,17 @@
+[package]
+name = "rulean-ffi"
+description = "The in-process kernel: the Lean object ABI in pure Rust."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[package.metadata.rulean]
+# The layer of spec section 03.2. xtask checks the dependency rule of 03.3 from this value.
+layer = "hardened"
+
+[lints]
+workspace = true

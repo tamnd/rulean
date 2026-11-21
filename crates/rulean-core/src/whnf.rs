@@ -287,19 +287,10 @@ impl Checker {
             Expr::Const(n, _) => n,
             _ => return None,
         };
-        let rules = match &self.env.at(slot).kind {
-            ConstKind::Rec(r) => &r.rules,
-            _ => return None,
-        };
-        let mut found: Option<RuleInfo> = None;
-        let mut i = 0;
-        while found.is_none() && i < rules.len() {
-            if rules[i].ctor == n {
-                found = Some(rules[i]);
-            }
-            i += 1;
+        match &self.env.at(slot).kind {
+            ConstKind::Rec(r) => find_rule(&r.rules, n),
+            _ => None,
         }
-        found
     }
 
     /// `inductive_reduce_rec`.
@@ -849,4 +840,17 @@ impl Checker {
         }
         r
     }
+}
+
+/// The rule of the constructor `n` in `rules`, if there is one.
+fn find_rule(rules: &[RuleInfo], n: NameId) -> Option<RuleInfo> {
+    let mut found: Option<RuleInfo> = None;
+    let mut i = 0;
+    while found.is_none() && i < rules.len() {
+        if rules[i].ctor == n {
+            found = Some(rules[i]);
+        }
+        i += 1;
+    }
+    found
 }

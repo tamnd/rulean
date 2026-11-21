@@ -763,22 +763,35 @@ impl Checker {
         let nargs = args.len();
         let mut i = 0;
         while i < nargs && !self.bad() {
-            match self.st.node(f_type) {
-                Expr::Pi(b) => f_type = b.body,
-                _ => {
-                    let t = self.instantiate_rev(f_type, &args[j..i]);
-                    let t = self.ensure_pi_core(t, e);
-                    let (_, body) = self.binding(t);
-                    f_type = body;
-                    j = i;
-                }
-            }
+            let (t, k) = self.app_only_step(e, f_type, &args, j, i);
+            f_type = t;
+            j = k;
             i += 1;
         }
         if self.bad() {
             return self.dummy;
         }
         self.instantiate_rev(f_type, &args[j..nargs])
+    }
+
+    /// One step of `infer_app_only`. It gives the new function type and the new start of the chunk.
+    fn app_only_step(
+        &mut self,
+        e: ExprId,
+        f_type: ExprId,
+        args: &[ExprId],
+        j: usize,
+        i: usize,
+    ) -> (ExprId, usize) {
+        match self.st.node(f_type) {
+            Expr::Pi(b) => (b.body, j),
+            _ => {
+                let t = self.instantiate_rev(f_type, &args[j..i]);
+                let t = self.ensure_pi_core(t, e);
+                let (_, body) = self.binding(t);
+                (body, i)
+            }
+        }
     }
 
     /// `infer_let`.
@@ -820,15 +833,9 @@ impl Checker {
 
     /// The data of the inductive type of a slot that `infer_proj` needs: the number of parameters, the number of indices, the number of constructors and the first constructor.
     fn induct_shape(&self, slot: u32) -> Option<(u32, u32, usize, NameId)> {
+        let anon = self.st.anon();
         match &self.env.at(slot).kind {
-            ConstKind::Induct(i) => {
-                let first = if i.ctors.len() > 0 {
-                    i.ctors[0]
-                } else {
-                    self.st.anon()
-                };
-                Some((i.nparams, i.nindices, i.ctors.len(), first))
-            }
+            ConstKind::Induct(i) => Some(induct_data(i, anon)),
             _ => None,
         }
     }
@@ -1036,4 +1043,14 @@ impl Checker {
         let l = self.sort_level(s);
         level::normalizes_to_zero(&self.st, l)
     }
+}
+
+/// The number of parameters, the number of indices, the number of constructors and the first constructor of an inductive type. If there is no constructor, the first constructor is `anon`.
+fn induct_data(i: &crate::env::InductInfo, anon: NameId) -> (u32, u32, usize, NameId) {
+    let n = i.ctors.len();
+    let mut first = anon;
+    if n > 0 {
+        first = i.ctors[0];
+    }
+    (i.nparams, i.nindices, n, first)
 }

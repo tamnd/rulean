@@ -288,10 +288,11 @@ pub fn code_of(kind: ErrorKind) -> Code {
     }
 }
 
-/// The exit code of a checker error (spec 09.3). A depth bound is a resource failure, and a declaration kind that rulean does not check is a decline. Every other error is a reject.
+/// The exit code of a checker error (spec 09.3). A depth bound and a full value arena are resource failures, and a declaration kind that rulean does not check is a decline. Every other error is a reject.
 pub fn code_of_check(kind: CheckError) -> Code {
     match kind {
         CheckError::DeepRecursion => Code::Resource,
+        CheckError::ArenaFull => Code::Resource,
         CheckError::Unsupported => Code::Decline,
         _ => Code::Reject,
     }
@@ -388,6 +389,7 @@ mod tests {
         assert_eq!(code_of(ErrorKind::StoreFull), Code::Resource);
         assert_eq!(code_of_check(CheckError::AppTypeMismatch), Code::Reject);
         assert_eq!(code_of_check(CheckError::DeepRecursion), Code::Resource);
+        assert_eq!(code_of_check(CheckError::ArenaFull), Code::Resource);
         assert_eq!(code_of_check(CheckError::Unsupported), Code::Decline);
     }
 

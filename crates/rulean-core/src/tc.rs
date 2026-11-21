@@ -17,6 +17,7 @@ use crate::level::{self, LevelCache};
 use crate::memo::Memo;
 use crate::pin;
 use crate::profile::{Flags, Profile};
+use crate::value::Arena;
 
 /// The upper bound in bytes of a `Nat` literal (`LEAN_NAT_MAX_SIZE_DEFAULT`). This is semantics and not a resource limit (spec 05.11).
 pub const NAT_MAX_BYTES: u64 = 128 * 1024 * 1024;
@@ -57,6 +58,8 @@ pub enum ErrorKind {
     CountTooLarge,
     /// The call depth is above the bound. This is a resource failure and not a verdict (spec 05.11).
     DeepRecursion,
+    /// The value arena of engine F is full (spec 04.5). This is a resource failure and not a verdict.
+    ArenaFull,
     /// A constant of the environment does not have the expected kind. The official kernel fails with an assertion here.
     BadConst,
     /// `already_declared_exception`.
@@ -316,6 +319,10 @@ pub struct Checker {
     pub b: Builtins,
     pub(crate) lc: LevelCache,
     pub(crate) x: Scratch,
+    /// The value arena of engine F. It is cleared at the start of each declaration.
+    pub(crate) va: Arena,
+    /// The number of binders that `quote` of engine F has opened. Their free variables are not in the local context.
+    pub(crate) f_under: u32,
     /// The level parameters of the declaration (`m_lparams`). They are checked only if `check_lparams` is true.
     pub(crate) lparams: Vec<NameId>,
     pub(crate) check_lparams: bool,
@@ -364,6 +371,8 @@ impl Checker {
             b,
             lc: LevelCache::new(),
             x: Scratch::new(),
+            va: Arena::new(),
+            f_under: 0,
             lparams: Vec::new(),
             check_lparams: false,
             safety: Safety::Safe,
@@ -400,6 +409,8 @@ impl Checker {
         self.lctx_ty.truncate(0);
         self.lctx_val.truncate(0);
         self.clear_caches();
+        self.va.reset();
+        self.f_under = 0;
         self.eager = false;
         self.depth = 0;
         self.fault = None;

@@ -11,6 +11,7 @@
 #![allow(clippy::collapsible_if)]
 #![allow(clippy::collapsible_match)]
 #![allow(clippy::question_mark)]
+#![allow(clippy::manual_map)]
 #![allow(clippy::comparison_chain)]
 // `Vec::clear`, `slice::swap` and `checked_sub` are outside the modelled functions too.
 #![allow(clippy::manual_clear)]
@@ -30,6 +31,7 @@ pub mod inductive;
 pub mod level;
 pub mod memo;
 pub mod names;
+pub mod nbe;
 pub mod nested;
 pub mod pin;
 pub mod profile;

@@ -61,10 +61,10 @@ pub enum Head {
 pub enum Value {
     Sort(LevelId),
     Lit(Literal),
-    /// A lambda: the binder information, the domain and the body.
-    Lam(BinderInfo, ValueId, Closure),
-    /// A pi type: the binder information, the domain and the body.
-    Pi(BinderInfo, ValueId, Closure),
+    /// A lambda: the binder name and information, the domain and the body. The name is used only by read-back.
+    Lam(NameId, BinderInfo, ValueId, Closure),
+    /// A pi type: the binder name and information, the domain and the body.
+    Pi(NameId, BinderInfo, ValueId, Closure),
     /// A neutral value: a head and its arguments.
     Neu(Head, SpineId),
     /// A definition applied to its arguments, in folded form, with a slot for its unfolding.

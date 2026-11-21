@@ -14,10 +14,13 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `scripts/arena-run.sh` is the entry of rulean in the Lean Kernel Arena. It runs `rulean check --profile v4.35` and maps the exit codes of spec 09.3 to the three Arena codes. `docs/arena/rulean.yaml` is the draft of the Arena entry.
 - `scripts/arena-check.sh` runs the Arena entry on every Arena test and compares each verdict with the expected verdict. `docs/arena/either-v4.35.tsv` pins the verdict of each "either" test for the `v4.35` profile to the verdict of the official kernel v4.35.0. The `arena` CI job runs the script. All 225 tests of the Arena tarball give the expected verdict.
 - `scripts/arena-build.py` builds the exports of the Arena tests that are not in the Arena tarball, with lake and the `leanexport` binary of the Lean toolchain. It keeps only the exports with the hash of the results. The new `arena either` CI job builds the 30 "either" tests with the Lean v4.36.0 release and checks the verdicts. `scripts/arena-check.sh` reads the `either/` directory and does not run the 2 tests on which the official kernel timed out. The other 28 tests give the pinned verdict.
+- `rulean-format` has `Stream`, a parse that takes the export one line at a time. `parse_export` uses it.
+- `rulean-core` has `sha256::Hasher`, a SHA-256 digest that takes its input in parts.
 
 ### Changed
 
 - Engine R checks axioms, definitions, theorems and opaque constants in the scratch tier of spec 04.8. The terms that the checker makes for one declaration go into a separate node array, and the checker clears that array after the declaration. Inductive and quotient declarations use the frozen tier. On the full Init prelude, the check now takes 54 s and 964 MB, and before this change it took 93 s and 3.45 GB. On Std, it now takes 60 s and 1.6 GB, and before this change it took 192 s and 4.55 GB.
+- `rulean check` reads the export one line at a time, and computes the SHA-256 digest of the input at the same time. The input is not in memory as a whole, so the peak memory of a check is less by the size of the export. A check of standard input with `-` works the same way.
 - `rulean check` without `--parse-only` checks the export with engine R. Before this change, it declined.
 - The `arena parse` CI job is now the `arena` job. It also checks the verdicts of the Arena tests.
 

@@ -215,6 +215,25 @@ fn negative_occurrence_is_rejected() {
 }
 
 #[test]
+fn unsafe_type_skips_strict_positivity() {
+    // unsafe inductive N : Type | mk : (N -> N) -> N
+    // The checker skips strict positivity for an unsafe type (spec 05.10). The block has no exported recursor, so the next check rejects it, and the error is not NonPositive.
+    let mut t = T::new();
+    let ty = t.sort(1);
+    let n = t.k("N");
+    let mut ity = t.ind_type("N", ty, 0, &["N.mk"]);
+    ity.safety = Safety::Unsafe;
+    let f = t.pi("x", n, n);
+    let cty = t.pi("f", f, n);
+    let mut c = t.ctor("N.mk", cty, "N", 0, 0, 1);
+    c.safety = Safety::Unsafe;
+    assert_eq!(
+        t.add(vec![ity], vec![c], Vec::new()),
+        Some(ErrorKind::ExportMismatch)
+    );
+}
+
+#[test]
 fn field_in_a_larger_universe_is_rejected() {
     // inductive U : Type | mk : Type -> U
     let mut t = T::new();

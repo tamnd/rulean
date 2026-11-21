@@ -9,6 +9,7 @@ use rulean_store::{Expr, ExprId, Literal, NameId};
 
 use crate::env::{ConstKind, RuleInfo};
 use crate::expr;
+use crate::pin::{PIN_NAT, PIN_STRING};
 use crate::tc::{
     Checker, ErrorKind, NAT_ADD, NAT_BEQ, NAT_BLE, NAT_DIV, NAT_GCD, NAT_LAND, NAT_LOR, NAT_MOD,
     NAT_MUL, NAT_POW, NAT_SHL, NAT_SHR, NAT_SUB, NAT_XOR,
@@ -329,11 +330,11 @@ impl Checker {
             return None;
         }
         major = match self.st.node(major) {
-            Expr::Lit(Literal::Nat(n)) => {
+            Expr::Lit(Literal::Nat(n)) if self.pin_on(PIN_NAT) => {
                 let v = self.st.nat(n).clone();
                 self.nat_lit_to_constructor(&v)
             }
-            Expr::Lit(Literal::Str(s)) => {
+            Expr::Lit(Literal::Str(s)) if self.pin_on(PIN_STRING) => {
                 let c = self.string_lit_to_constructor(s);
                 self.rec_whnf(c, cheap_rec, cheap_proj)
             }
@@ -432,7 +433,9 @@ impl Checker {
         idx: u32,
     ) -> Option<ExprId> {
         let mut c = c0;
-        if let Some(s) = self.string_lit(c) {
+        if let Some(s) = self.string_lit(c)
+            && self.pin_on(PIN_STRING)
+        {
             let k = self.string_lit_to_constructor(s);
             c = self.whnf(k);
             if self.bad() {
@@ -762,6 +765,9 @@ impl Checker {
 
     /// `reduce_nat`: the 15 built-in operations on literals (spec 05.8).
     pub(crate) fn reduce_nat(&mut self, e: ExprId) -> Option<ExprId> {
+        if !self.pin_on(PIN_NAT) {
+            return None;
+        }
         let nargs = expr::app_num_args(&self.st, e);
         if nargs == 1 {
             let f = self.app_fn1(e);
@@ -781,7 +787,7 @@ impl Checker {
                 return None;
             }
             let op = self.nat_op_index(f);
-            if op >= self.b.nat_ops.len() {
+            if op >= self.b.nat_ops.len() || !self.pin_on(1 << op) {
                 return None;
             }
             let (v1, v2) = match self.nat_args(e) {

@@ -15,6 +15,7 @@ use crate::env::{ConstKind, Env};
 use crate::expr::{self, Scratch};
 use crate::level::{self, LevelCache};
 use crate::memo::Memo;
+use crate::pin;
 
 /// The upper bound in bytes of a `Nat` literal (`LEAN_NAT_MAX_SIZE_DEFAULT`). This is semantics and not a resource limit (spec 05.11).
 pub const NAT_MAX_BYTES: u64 = 128 * 1024 * 1024;
@@ -158,6 +159,8 @@ pub struct Builtins {
     pub e_list_nil_char: ExprId,
     /// The binary operations of `reduce_nat` as constants with no levels, in the order of the `NAT_*` indices.
     pub nat_ops: Vec<ExprId>,
+    /// The names of the pinned primitives, in the order of `pin::TARGET_NAMES`.
+    pub pin_names: Vec<NameId>,
 }
 
 fn name2(st: &mut Store, a: &[u8], b: &[u8]) -> NameId {
@@ -175,6 +178,23 @@ fn nat_op(st: &mut Store, out: &mut Vec<ExprId>, op: &[u8]) {
     let n = name2(st, b"Nat", op);
     let c = const0(st, n);
     out.push(c);
+}
+
+/// The name with the parts of `b`, separated by a dot.
+fn dotted_name(st: &mut Store, b: &[u8]) -> NameId {
+    let mut n = st.anon();
+    let mut part: Vec<u8> = Vec::new();
+    let mut i = 0;
+    while i <= b.len() {
+        if i == b.len() || b[i] == b'.' {
+            n = st.name_str_bytes(n, &part);
+            part.truncate(0);
+        } else {
+            part.push(b[i]);
+        }
+        i += 1;
+    }
+    n
 }
 
 fn const0(st: &mut Store, n: NameId) -> ExprId {
@@ -236,6 +256,13 @@ impl Builtins {
         nat_op(st, &mut nat_ops, b"xor");
         nat_op(st, &mut nat_ops, b"shiftLeft");
         nat_op(st, &mut nat_ops, b"shiftRight");
+        let mut pin_names = Vec::with_capacity(pin::TARGET_COUNT);
+        let mut k = 0;
+        while k < pin::TARGET_COUNT {
+            let n = dotted_name(st, pin::TARGET_NAMES[k]);
+            pin_names.push(n);
+            k += 1;
+        }
         Builtins {
             nat,
             nat_zero,
@@ -269,6 +296,7 @@ impl Builtins {
             e_list_cons_char,
             e_list_nil_char,
             nat_ops,
+            pin_names,
         }
     }
 }
@@ -315,6 +343,14 @@ pub struct Checker {
     pub(crate) depth: u32,
     pub max_depth: u32,
     pub(crate) fault: Option<Fault>,
+    /// The extension bits that primitive pinning turned off (spec 05.8).
+    pub(crate) pin_off: u32,
+    /// The targets that are compared, one bit for each target.
+    pub(crate) pin_done: u32,
+    /// The targets whose declaration is not equal to the reference, in the order of the comparison.
+    pub pin_mismatch: Vec<NameId>,
+    /// `--trust-primitives-by-name`: keep the extensions on after a mismatch, as the official kernel does.
+    pub trust_primitives: bool,
     /// The value that a function returns after a fault.
     pub(crate) dummy: ExprId,
 }
@@ -348,6 +384,10 @@ impl Checker {
             depth: 0,
             max_depth: MAX_DEPTH,
             fault: None,
+            pin_off: 0,
+            pin_done: 0,
+            pin_mismatch: Vec::new(),
+            trust_primitives: false,
             dummy,
         }
     }
@@ -773,7 +813,9 @@ impl Checker {
     /// True if `e` is `eagerReduce _ _` (`is_eager_reduce`).
     fn is_eager_reduce(&self, e: ExprId) -> bool {
         let f = expr::app_fn(&self.st, e);
-        self.is_constant_named(f, self.b.eager_reduce) && expr::app_num_args(&self.st, e) == 2
+        self.pin_on(pin::PIN_EAGER)
+            && self.is_constant_named(f, self.b.eager_reduce)
+            && expr::app_num_args(&self.st, e) == 2
     }
 
     /// `infer_app`.

@@ -15,7 +15,7 @@ cargo test --workspace
 cargo xtask all
 ```
 
-`cargo xtask all` checks the dependency rule and the no-C policy. It runs `cargo vendor`, so it needs the network on the first run.
+`cargo xtask all` checks the dependency rule, the Aeneas subset of spec 10.6 and the no-C policy. It runs `cargo vendor`, so it needs the network on the first run.
 
 The toolchain is pinned in `rust-toolchain.toml`. rustup installs it on the first build.
 

@@ -32,6 +32,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `rulean-format` has `parse_export`, which gives the declarations and the `lean.version` and `format.version` fields of the meta line.
 - `scripts/arena-run.sh` is the entry of rulean in the Lean Kernel Arena. It runs `rulean check --profile v4.35` and maps the exit codes of spec 09.3 to the three Arena codes. `docs/arena/rulean.yaml` is the draft of the Arena entry.
 - `scripts/arena-check.sh` runs the Arena entry on every Arena test and compares each verdict with the expected verdict. `docs/arena/either-v4.35.tsv` pins the verdict of each "either" test for the `v4.35` profile to the verdict of the official kernel v4.35.0. The `arena` CI job runs the script. All 225 tests of the Arena tarball give the expected verdict.
+- `scripts/arena-build.py` builds the exports of the Arena tests that are not in the Arena tarball, with lake and the `leanexport` binary of the Lean toolchain. It keeps only the exports with the hash of the results. The new `arena either` CI job builds the 30 "either" tests with the Lean v4.36.0 release and checks the verdicts. `scripts/arena-check.sh` reads the `either/` directory and does not run the 2 tests on which the official kernel timed out. The other 28 tests give the pinned verdict.
 
 ### Changed
 

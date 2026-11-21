@@ -11,3 +11,5 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - CI on Linux (x86-64 and ARM), macOS and Windows, CodeQL, OpenSSF Scorecard, zizmor and Dependabot.
 - A release workflow that builds the binaries, writes SHA-256 checksums and signs build provenance attestations.
 - The specification in `docs/spec/`.
+- The crates of spec section 03.3 as empty libraries. The four crates of the verified core are `no_std`.
+- `cargo xtask deps`, which checks the dependency rule of spec section 03.3, and the `policy` CI job that runs it.

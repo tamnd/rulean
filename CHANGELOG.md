@@ -16,6 +16,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `scripts/arena-build.py` builds the exports of the Arena tests that are not in the Arena tarball, with lake and the `leanexport` binary of the Lean toolchain. It keeps only the exports with the hash of the results. The new `arena either` CI job builds the 30 "either" tests with the Lean v4.36.0 release and checks the verdicts. `scripts/arena-check.sh` reads the `either/` directory and does not run the 2 tests on which the official kernel timed out. The other 28 tests give the pinned verdict.
 - `rulean-format` has `Stream`, a parse that takes the export one line at a time. `parse_export` uses it.
 - `rulean-core` has `sha256::Hasher`, a SHA-256 digest that takes its input in parts.
+- `rulean-core` has the value arena of engine F (spec 04.5), in the module `value`. It holds values, closures, environments, spines and unfolding slots in typed arrays with `u32` handles. Environments and spines are persistent lists, so a push copies nothing. `reset` clears the arena at the end of a declaration. Engine F does not use it yet.
 
 ### Changed
 

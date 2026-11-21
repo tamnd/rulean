@@ -35,4 +35,5 @@ pub mod pin;
 pub mod profile;
 pub mod sha256;
 pub mod tc;
+pub mod value;
 pub mod whnf;

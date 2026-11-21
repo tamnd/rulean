@@ -334,26 +334,31 @@ impl Scanner {
 
     /// Skips one JSON value that starts at `start`, and checks that it is well-formed. The result is the position after the value. The nesting is kept on a stack, so a deep value uses no call stack.
     ///
-    /// The loop body is in two functions, `skip_open` and `skip_close`. Each step gives the new position and the new value of `want_value`. This keeps the loop state small for Aeneas.
+    /// The loop body is in `skip_step`, and the loop test is in `skip_more`. Each step gives the new position and the new value of `want_value`. This keeps the loop state small for Aeneas.
     pub fn skip_value(&mut self, b: &[u8], start: usize) -> usize {
         self.stack.clear();
         let mut i = start;
         let mut want_value = true;
-        let mut done = false;
-        while !done && self.ok() {
-            if !want_value && self.stack.len() == 0 {
-                done = true;
-            } else if want_value {
-                let (j, w) = self.skip_open(b, i);
-                i = j;
-                want_value = w;
-            } else {
-                let (j, w) = self.skip_close(b, i);
-                i = j;
-                want_value = w;
-            }
+        while self.skip_more(want_value) {
+            let (j, w) = self.skip_step(b, i, want_value);
+            i = j;
+            want_value = w;
         }
         i
+    }
+
+    /// True if `skip_value` must read more: there is no fault, and a value must come next or an array or object is open.
+    fn skip_more(&self, want_value: bool) -> bool {
+        self.ok() && (want_value || self.stack.len() != 0)
+    }
+
+    /// One step of `skip_value`.
+    fn skip_step(&mut self, b: &[u8], i: usize, want_value: bool) -> (usize, bool) {
+        if want_value {
+            self.skip_open(b, i)
+        } else {
+            self.skip_close(b, i)
+        }
     }
 
     /// One step of `skip_value` where a value must come next. It skips a scalar value, or it opens an array or an object.

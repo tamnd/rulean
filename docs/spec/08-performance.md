@@ -119,6 +119,8 @@ Engine R (05.5) runs on F's "not equal" answers and on the confirm set (05.1).
 
 Instruction counts are deterministic to within about 0.1% for a single-threaded run. The pull-request gate uses a single-threaded run for that reason.
 
+GitHub-hosted runners do not expose the hardware counters, so `perf` cannot count instructions on them. `rulean-bench` has three counters for that reason: `perf` (the Arena measure), the `I refs` of valgrind cachegrind (no hardware counter, about 50 times slower), and `instructions retired` of `/usr/bin/time -l` on macOS (includes the system calls). The P1 numbers and the baseline use `perf`. The other counters are for a trend on one machine and must not be compared with Arena numbers.
+
 ### 08.7.3 Profiling
 
 - Each engine phase has a counter (number of calls, nodes made, cache hits and misses). Counters are compiled in and cost one increment each.

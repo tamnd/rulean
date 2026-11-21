@@ -1,1 +1,6 @@
-//! The bench harness. It runs a checker on an export and records the instructions, the wall time and the peak memory. See spec section 08.7.
+//! The bench harness. It runs a checker on each test of a corpus and records the instructions, the wall time, the CPU time and the peak memory. The results are in the format of the Lean Kernel Arena, so that they can be compared with the Arena numbers. See spec section 08.7.
+
+pub mod compare;
+pub mod measure;
+pub mod record;
+pub mod suite;

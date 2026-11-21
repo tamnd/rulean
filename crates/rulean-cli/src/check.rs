@@ -2,13 +2,13 @@
 //!
 //! The command reads an export, selects the semantics profile and checks each declaration with engine R. It stops at the first declaration that is not accepted. The exit code follows spec 09.3, and `--report` writes the JSON report of spec 09.4.
 
-use std::io::Read;
+use std::io::{BufRead, BufReader};
 use std::time::Instant;
 
 use rulean_core::profile::{self, Profile};
-use rulean_core::sha256::sha256;
+use rulean_core::sha256::Hasher;
 use rulean_core::tc::{Checker, ErrorKind as CheckError};
-use rulean_format::ErrorKind;
+use rulean_format::{ErrorKind, Stream};
 use rulean_store::Store;
 
 use crate::exit::Code;
@@ -87,22 +87,26 @@ pub fn run(args: &[String]) -> Code {
         }
     };
     let path = o.input.clone().unwrap_or_default();
-    let input = match read_input(&path) {
-        Ok(b) => b,
+    let reader = match open_input(&path) {
+        Ok(r) => r,
         Err(e) => {
             eprintln!("rulean: cannot read {path}: {e}");
             return Code::Input;
         }
     };
     if o.parse_only {
-        return parse_only(&path, &input);
+        return parse_only(&path, reader);
     }
     let h = std::thread::Builder::new()
         .stack_size(STACK_BYTES)
-        .spawn(move || check(&o, &input));
+        .spawn(move || check_reader(&o, reader));
     let r = match h {
         Ok(h) => match h.join() {
-            Ok(r) => r,
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => {
+                eprintln!("rulean: cannot read {path}: {e}");
+                return Code::Input;
+            }
             Err(_) => {
                 eprintln!("rulean: internal error: the checker thread stopped");
                 return Code::Resource;
@@ -140,21 +144,22 @@ pub struct Run {
     pub json: bool,
 }
 
-/// Checks the bytes of an export. This runs on the checker thread.
-pub fn check(o: &Options, input: &[u8]) -> Run {
+/// Checks an export that `input` gives. The parse reads one line at a time, so the input is not in memory as a whole. This runs on the checker thread.
+pub fn check_reader<R: BufRead>(o: &Options, input: R) -> std::io::Result<Run> {
     let start = Instant::now();
+    let mut store = Store::new();
+    let (parsed, digest) = read_export(&mut store, input)?;
     let mut rep = Report {
         input_path: o.input.clone().unwrap_or_default(),
-        sha256: hex(&sha256(input)),
+        sha256: hex(&digest),
         ..Report::default()
     };
-    let mut store = Store::new();
-    let export = match rulean_format::parse_export(&mut store, input) {
+    let export = match parsed {
         Ok(x) => x,
         Err(e) => {
             rep.code = code_of(e.kind);
             rep.error = Some(format!("line {}: {}", e.line, e.kind.text()));
-            return done(o, rep, start);
+            return Ok(done(o, rep, start));
         }
     };
     rep.lean_version = String::from_utf8_lossy(&export.lean_version).into_owned();
@@ -164,7 +169,7 @@ pub fn check(o: &Options, input: &[u8]) -> Run {
         Err(e) => {
             rep.code = Code::Decline;
             rep.error = Some(e);
-            return done(o, rep, start);
+            return Ok(done(o, rep, start));
         }
     };
     rep.profile = Some(prof.id());
@@ -199,7 +204,7 @@ pub fn check(o: &Options, input: &[u8]) -> Run {
     if !rep.pin_mismatch.is_empty() && !o.trust_primitives {
         rep.deviations.push("D1");
     }
-    done(o, rep, start)
+    Ok(done(o, rep, start))
 }
 
 fn done(o: &Options, mut rep: Report, start: Instant) -> Run {
@@ -243,16 +248,23 @@ fn hex(b: &[u8]) -> String {
 }
 
 /// `--parse-only`: parses the export and reports the counts.
-fn parse_only(path: &str, input: &[u8]) -> Code {
+fn parse_only<R: BufRead>(path: &str, input: R) -> Code {
     let start = Instant::now();
     let mut store = Store::new();
-    match rulean_format::parse(&mut store, input) {
-        Ok(decls) => {
+    let parsed = match read_export(&mut store, input) {
+        Ok((p, _)) => p,
+        Err(e) => {
+            eprintln!("rulean: cannot read {path}: {e}");
+            return Code::Input;
+        }
+    };
+    match parsed {
+        Ok(x) => {
             let ms = start.elapsed().as_millis();
             let mem = store.memory();
             println!(
                 "parsed {path}: {} declarations, {} expression nodes, {} names, {} levels, {} bytes of store, {ms} ms",
-                decls.len(),
+                x.decls.len(),
                 store.expr_total(),
                 store.name_count(),
                 store.level_count(),
@@ -285,14 +297,48 @@ pub fn code_of_check(kind: CheckError) -> Code {
     }
 }
 
-fn read_input(path: &str) -> std::io::Result<Vec<u8>> {
+/// The size of the read buffer.
+const READ_BYTES: usize = 1 << 20;
+
+/// Opens the input file, or standard input for `-`.
+fn open_input(path: &str) -> std::io::Result<Box<dyn BufRead + Send>> {
     if path == "-" {
-        let mut b = Vec::new();
-        std::io::stdin().lock().read_to_end(&mut b)?;
-        Ok(b)
+        Ok(Box::new(BufReader::with_capacity(
+            READ_BYTES,
+            std::io::stdin(),
+        )))
     } else {
-        std::fs::read(path)
+        let f = std::fs::File::open(path)?;
+        Ok(Box::new(BufReader::with_capacity(READ_BYTES, f)))
     }
+}
+
+/// Parses the export that `input` gives, one line at a time, and computes the SHA-256 digest of all of the input. After a parse error, the function reads the rest of the input for the digest only.
+fn read_export<R: BufRead>(
+    store: &mut Store,
+    mut input: R,
+) -> std::io::Result<(
+    Result<rulean_format::Export, rulean_format::Error>,
+    [u8; 32],
+)> {
+    let mut s = Stream::new();
+    let mut hasher = Hasher::new();
+    let mut tail = false;
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let n = input.read_until(b'\n', &mut line)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&line);
+        if line.last() == Some(&b'\n') {
+            s.line(store, &line[..line.len() - 1]);
+        } else {
+            tail = true;
+        }
+    }
+    Ok((s.end(tail), hasher.finish()))
 }
 
 #[cfg(test)]
@@ -348,7 +394,9 @@ mod tests {
     const META: &str = r#"{"meta":{"exporter":{"name":"lean4export","version":"3.1.0"},"format":{"version":"3.1.0"},"lean":{"githash":"0","version":"4.36.0"}}}"#;
 
     fn run_on(text: &str, o: &Options) -> Report {
-        check(o, text.as_bytes()).report
+        check_reader(o, text.as_bytes())
+            .expect("no read error")
+            .report
     }
 
     #[test]

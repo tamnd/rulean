@@ -901,51 +901,98 @@ pub fn parse(store: &mut Store, input: &[u8]) -> Result<Vec<Decl>, Error> {
 
 /// Parses a whole NDJSON export into `store`, as `parse` does, and also gives the facts of the meta line.
 pub fn parse_export(store: &mut Store, input: &[u8]) -> Result<Export, Error> {
-    let mut p = Parser::new();
-    let mut decls = Vec::new();
-    let mut err = Error {
-        line: 0,
-        kind: ErrorKind::EmptyLine,
-    };
-    let mut failed = false;
+    let mut s = Stream::new();
+    let mut tail = false;
     let mut start = 0;
-    while !failed && start < input.len() {
+    while s.ok() && start < input.len() {
         let mut j = start;
         while j < input.len() && input[j] != b'\n' {
             j += 1;
         }
         if j == input.len() {
-            failed = true;
-            err = Error {
-                line: p.lines() + 1,
-                kind: ErrorKind::TruncatedLine,
-            };
+            tail = true;
         } else {
-            match p.line(store, &input[start..j]) {
-                Ok(Some(d)) => decls.push(d),
-                Ok(None) => {}
-                Err(e) => {
-                    failed = true;
-                    err = e;
-                }
-            }
+            s.line(store, &input[start..j]);
         }
         start = j + 1;
     }
-    if !failed && p.lines() == 0 {
-        failed = true;
-        err = Error {
-            line: 1,
-            kind: ErrorKind::NoMeta,
-        };
+    s.end(tail)
+}
+
+/// An export parse that takes the input one line at a time. The caller does not need to keep the whole input in memory. `parse_export` uses this type, so the two give the same result.
+#[derive(Debug)]
+pub struct Stream {
+    p: Parser,
+    decls: Vec<Decl>,
+    failed: bool,
+    err: Error,
+}
+
+impl Default for Stream {
+    fn default() -> Stream {
+        Stream::new()
     }
-    if failed {
-        Err(err)
-    } else {
-        Ok(Export {
-            decls,
-            lean_version: p.lean_version,
-            format_version: p.format_version,
-        })
+}
+
+impl Stream {
+    /// A parse with no input.
+    pub fn new() -> Stream {
+        Stream {
+            p: Parser::new(),
+            decls: Vec::new(),
+            failed: false,
+            err: Error {
+                line: 0,
+                kind: ErrorKind::EmptyLine,
+            },
+        }
+    }
+
+    /// False after the first error. The parse ignores the lines after an error.
+    pub fn ok(&self) -> bool {
+        !self.failed
+    }
+
+    /// Reads one line, without its newline.
+    pub fn line(&mut self, store: &mut Store, b: &[u8]) {
+        if !self.failed {
+            match self.p.line(store, b) {
+                Ok(Some(d)) => self.decls.push(d),
+                Ok(None) => {}
+                Err(e) => {
+                    self.failed = true;
+                    self.err = e;
+                }
+            }
+        }
+    }
+
+    /// Ends the parse. `tail` is true if the input has bytes after its last newline, which is a truncated line.
+    pub fn end(self, tail: bool) -> Result<Export, Error> {
+        let mut failed = self.failed;
+        let mut err = self.err;
+        if !failed && tail {
+            failed = true;
+            err = Error {
+                line: self.p.lines() + 1,
+                kind: ErrorKind::TruncatedLine,
+            };
+        }
+        if !failed && self.p.lines() == 0 {
+            failed = true;
+            err = Error {
+                line: 1,
+                kind: ErrorKind::NoMeta,
+            };
+        }
+        if failed {
+            Err(err)
+        } else {
+            Ok(Export {
+                decls: self.decls,
+                lean_version: self.p.lean_version,
+                format_version: self.p.format_version,
+            })
+        }
     }
 }

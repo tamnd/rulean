@@ -88,36 +88,90 @@ fn compress(h: &mut [u32; 8], m: &[u8], off: usize) {
 /// The SHA-256 digest of `msg`.
 #[cfg_attr(rulean_extract, charon::opaque)]
 pub fn sha256(msg: &[u8]) -> [u8; 32] {
-    let mut m: Vec<u8> = Vec::with_capacity(msg.len() + 72);
-    let mut i = 0;
-    while i < msg.len() {
-        m.push(msg[i]);
-        i += 1;
+    let mut x = Hasher::new();
+    x.update(msg);
+    x.finish()
+}
+
+/// A SHA-256 digest that takes its input in parts. The digest of the parts is the digest of their concatenation, so a caller can hash an input that it does not keep in memory.
+#[derive(Clone, Debug)]
+pub struct Hasher {
+    h: [u32; 8],
+    /// The bytes after the last full block. There are fewer than 64.
+    buf: Vec<u8>,
+    /// The number of input bytes.
+    len: u64,
+}
+
+impl Default for Hasher {
+    fn default() -> Hasher {
+        Hasher::new()
     }
-    m.push(0x80);
-    while m.len() % 64 != 56 {
-        m.push(0);
+}
+
+impl Hasher {
+    /// A hasher with no input.
+    #[cfg_attr(rulean_extract, charon::opaque)]
+    pub fn new() -> Hasher {
+        Hasher {
+            h: H0,
+            buf: Vec::with_capacity(64),
+            len: 0,
+        }
     }
-    let bits = (msg.len() as u64) * 8;
-    let mut k = 0;
-    while k < 8 {
-        m.push(((bits >> (56 - 8 * k)) & 0xff) as u8);
-        k += 1;
+
+    /// Adds the bytes of `b` to the input.
+    #[cfg_attr(rulean_extract, charon::opaque)]
+    pub fn update(&mut self, b: &[u8]) {
+        let mut i = 0;
+        while i < b.len() && self.buf.len() > 0 {
+            self.buf.push(b[i]);
+            i += 1;
+            if self.buf.len() == 64 {
+                compress(&mut self.h, &self.buf, 0);
+                self.buf.truncate(0);
+            }
+        }
+        while i + 64 <= b.len() {
+            compress(&mut self.h, b, i);
+            i += 64;
+        }
+        while i < b.len() {
+            self.buf.push(b[i]);
+            i += 1;
+        }
+        self.len += b.len() as u64;
     }
-    let mut h = H0;
-    let mut off = 0;
-    while off < m.len() {
-        compress(&mut h, &m, off);
-        off += 64;
+
+    /// The digest of the input.
+    #[cfg_attr(rulean_extract, charon::opaque)]
+    pub fn finish(&self) -> [u8; 32] {
+        let mut m = self.buf.clone();
+        m.push(0x80);
+        while m.len() % 64 != 56 {
+            m.push(0);
+        }
+        let bits = self.len * 8;
+        let mut k = 0;
+        while k < 8 {
+            m.push(((bits >> (56 - 8 * k)) & 0xff) as u8);
+            k += 1;
+        }
+        let mut h = self.h;
+        let mut off = 0;
+        while off < m.len() {
+            compress(&mut h, &m, off);
+            off += 64;
+        }
+        let mut out = [0u8; 32];
+        let mut j = 0;
+        while j < 8 {
+            out[4 * j] = (h[j] >> 24) as u8;
+            out[4 * j + 1] = (h[j] >> 16) as u8;
+            out[4 * j + 2] = (h[j] >> 8) as u8;
+            out[4 * j + 3] = h[j] as u8;
+            j += 1;
+        }
+        out
     }
-    let mut out = [0u8; 32];
-    let mut j = 0;
-    while j < 8 {
-        out[4 * j] = (h[j] >> 24) as u8;
-        out[4 * j + 1] = (h[j] >> 16) as u8;
-        out[4 * j + 2] = (h[j] >> 8) as u8;
-        out[4 * j + 3] = h[j] as u8;
-        j += 1;
-    }
-    out
 }

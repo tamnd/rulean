@@ -1,6 +1,6 @@
 //! Tests of primitive pinning (spec 05.8, deviation D1).
 
-use rulean_core::sha256::sha256;
+use rulean_core::sha256::{Hasher, sha256};
 use rulean_core::tc::Checker;
 use rulean_format::{Axiom, Decl, Safety};
 use rulean_nat::Nat;
@@ -67,6 +67,28 @@ fn sha256_gives_the_standard_digests() {
         hex(&sha256(long)),
         "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
     );
+}
+
+#[test]
+fn hasher_parts_give_the_digest_of_the_whole() {
+    let mut msg = Vec::new();
+    let mut i: u32 = 0;
+    while i < 1000 {
+        msg.push((i * 7 % 251) as u8);
+        i += 1;
+    }
+    let want = sha256(&msg);
+    for cut in [0usize, 1, 55, 63, 64, 65, 127, 128, 500, 999, 1000] {
+        let mut x = Hasher::new();
+        x.update(&msg[..cut]);
+        x.update(&msg[cut..]);
+        assert_eq!(x.finish(), want, "cut at {cut}");
+    }
+    let mut x = Hasher::new();
+    for b in &msg {
+        x.update(&[*b]);
+    }
+    assert_eq!(x.finish(), want);
 }
 
 #[test]

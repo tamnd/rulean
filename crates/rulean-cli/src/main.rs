@@ -19,6 +19,8 @@ commands:
                     --report <file>: write the JSON report
                     --format text|json: the format of standard output
                     --trust-primitives-by-name: keep the extensions on a pin mismatch
+                    --engine F|R: engine F first, or engine R only (R by default for now)
+                    --confirm default|all: the queries where engine R confirms engine F
                     --parse-only: parse the export and check nothing
   version           print the version and the build facts
   help              print this text

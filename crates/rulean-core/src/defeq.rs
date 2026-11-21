@@ -57,7 +57,7 @@ impl Checker {
     // Levels.
 
     /// `is_def_eq` on two level lists: the same length and equivalent items.
-    fn is_def_eq_levels(&mut self, a: LevelListId, b: LevelListId) -> bool {
+    pub(crate) fn is_def_eq_levels(&mut self, a: LevelListId, b: LevelListId) -> bool {
         let la = self.st.level_list_vec(a);
         let lb = self.st.level_list_vec(b);
         level::is_equivalent_list(&mut self.st, &mut self.lc, &la, &lb)
@@ -660,9 +660,9 @@ impl Checker {
         self.is_def_eq_unit_like(t_n, s_n)
     }
 
-    /// `is_def_eq`: definitional equality. A true result goes into the success cache.
+    /// `is_def_eq`: definitional equality. With `Engine::F`, engine F tries the query first (spec 05.1). A true result goes into the success cache.
     pub fn is_def_eq(&mut self, t: ExprId, s: ExprId) -> bool {
-        let r = self.is_def_eq_core(t, s);
+        let r = self.is_def_eq_shared(t, s);
         if r {
             self.pair_put(true, t, s);
         }

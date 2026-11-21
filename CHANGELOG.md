@@ -15,6 +15,10 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `rulean-bench run` runs a checker on each test of a corpus and records the instructions, the wall time, the CPU time and the peak memory in the format of the Arena. It counts instructions with `perf`, valgrind cachegrind or the macOS `time -l`.
 - `rulean-bench compare` compares the instruction counts of two runs, or of a run and the Arena `results.json`.
 
+### Changed
+
+- The `extract` CI job keeps the Nix store in the Actions cache, so it does not build the Aeneas tools again on each run.
+
 ## [0.0.1] - 2026-11-21
 
 ### Added

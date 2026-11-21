@@ -206,6 +206,16 @@ impl Env {
         }
     }
 
+    /// Removes the constants after the first `n`, so the environment is as it was when it had `n` constants. A check that fails after it added constants uses this.
+    pub fn truncate(&mut self, n: usize) {
+        while self.consts.len() > n {
+            let i = self.consts.len() - 1;
+            let k = self.consts[i].name.0 as usize;
+            self.slot[k] = 0;
+            self.consts.pop();
+        }
+    }
+
     /// True if the quotient constants were added (`is_quot_initialized`).
     pub fn quot_initialized(&self) -> bool {
         self.quot_init

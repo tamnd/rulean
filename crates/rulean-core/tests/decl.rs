@@ -369,6 +369,35 @@ fn unsafe_and_partial_separation() {
     assert_eq!(t.add(&d), None);
     let d = t.axiom("sa", &[], ut, Safety::Safe);
     assert_eq!(t.add(&d), Some(ErrorKind::UnsafeUse));
+    // A theorem may not refer to an unsafe constant or to a partial constant.
+    let prop = t.sort(0);
+    let d = t.axiom("uq", &[], prop, Safety::Unsafe);
+    assert_eq!(t.add(&d), None);
+    let uq = t.k("uq");
+    let d = t.axiom("q", &[], prop, Safety::Safe);
+    assert_eq!(t.add(&d), None);
+    let q = t.k("q");
+    let d = t.axiom("hq", &[], q, Safety::Safe);
+    assert_eq!(t.add(&d), None);
+    let hq = t.k("hq");
+    let d = t.defn("pq", prop, q, Safety::Partial);
+    assert_eq!(t.add(&Decl::Defn(d)), None);
+    let pq = t.k("pq");
+    for (n, ty, want) in [
+        ("th1", uq, ErrorKind::UnsafeUse),
+        ("th2", pq, ErrorKind::PartialUse),
+    ] {
+        let name = t.name(n);
+        let thm = Decl::Thm(Thm {
+            name,
+            lparams: Vec::new(),
+            ty,
+            value: hq,
+            all: vec![name],
+        });
+        assert_eq!(t.add(&thm), Some(want), "{n}");
+        assert!(!t.has(n));
+    }
 }
 
 /// The partial block `f n := g n` and `g n := f n` of type `Nat → Nat`.

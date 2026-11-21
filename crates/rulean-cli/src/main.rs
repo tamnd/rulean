@@ -5,6 +5,7 @@
 use std::process::ExitCode;
 
 mod check;
+mod diff;
 mod exit;
 mod report;
 
@@ -22,6 +23,9 @@ commands:
                     --engine F|R: engine F first, or engine R only (R by default for now)
                     --confirm default|all: the queries where engine R confirms engine F
                     --parse-only: parse the export and check nothing
+  diff <INPUT> --against <CMD>
+                    check an export with rulean and with the command CMD, and
+                    compare the verdicts (exit 0 if they are the same, 1 if not)
   version           print the version and the build facts
   help              print this text
 
@@ -49,7 +53,7 @@ fn run(args: &[String]) -> Code {
         "check" => check::run(&args[1..]),
         "olean" => not_written("olean", "M4"),
         "pack" => not_written("pack", "M4"),
-        "diff" => not_written("diff", "M3"),
+        "diff" => diff::run(&args[1..]),
         "explain" => not_written("explain", "M3"),
         other => {
             eprintln!("rulean: unknown command `{other}`\n\n{USAGE}");
@@ -104,7 +108,7 @@ mod tests {
     fn commands_that_are_not_written_decline() {
         assert_eq!(run_strs(&["check"]), Code::Usage);
         assert_eq!(run_strs(&["check", "no-such-file.ndjson"]), Code::Input);
-        for command in ["olean", "pack", "diff", "explain"] {
+        for command in ["olean", "pack", "explain"] {
             assert_eq!(run_strs(&[command]), Code::Decline, "{command}");
         }
     }

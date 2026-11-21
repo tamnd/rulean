@@ -106,38 +106,53 @@ pub fn run(args: &[String]) -> Code {
             return Code::Usage;
         }
     };
+    if o.parse_only {
+        let path = o.input.clone().unwrap_or_default();
+        return match open_input(&path) {
+            Ok(r) => parse_only(&path, r),
+            Err(e) => {
+                eprintln!("rulean: cannot read {path}: {e}");
+                Code::Input
+            }
+        };
+    }
+    let r = match check_options(o) {
+        Ok(r) => r,
+        Err(code) => return code,
+    };
+    finish(&r)
+}
+
+/// Checks the input of the options on the checker thread. An error gives the exit code, after a message on standard error.
+pub fn check_options(o: Options) -> Result<Run, Code> {
     let path = o.input.clone().unwrap_or_default();
     let reader = match open_input(&path) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("rulean: cannot read {path}: {e}");
-            return Code::Input;
+            return Err(Code::Input);
         }
     };
-    if o.parse_only {
-        return parse_only(&path, reader);
-    }
     let h = std::thread::Builder::new()
         .stack_size(STACK_BYTES)
         .spawn(move || check_reader(&o, reader));
-    let r = match h {
+    match h {
         Ok(h) => match h.join() {
-            Ok(Ok(r)) => r,
+            Ok(Ok(r)) => Ok(r),
             Ok(Err(e)) => {
                 eprintln!("rulean: cannot read {path}: {e}");
-                return Code::Input;
+                Err(Code::Input)
             }
             Err(_) => {
                 eprintln!("rulean: internal error: the checker thread stopped");
-                return Code::Resource;
+                Err(Code::Resource)
             }
         },
         Err(e) => {
             eprintln!("rulean: cannot start the checker thread: {e}");
-            return Code::Resource;
+            Err(Code::Resource)
         }
-    };
-    finish(&r)
+    }
 }
 
 /// Prints the result, writes the report and gives the exit code.

@@ -119,6 +119,25 @@ jobs:
           target/debug/rulean frobnicate || code=$?
           test "$code" = 64
 
+  # Every test of the Lean Kernel Arena must parse (milestone M1). The job downloads the Arena, so it depends on arena.lean-lang.org and is not a required check.
+  arena:
+    name: arena parse
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: false
+      - run: cargo build --locked --release --bin rulean
+      - run: scripts/arena-fetch.sh _tmp/arena
+      - run: scripts/arena-parse.sh _tmp/arena/tests
+      - name: the parser tests on the Arena
+        run: RULEAN_ARENA="$PWD/_tmp/arena/tests" cargo test --locked --release -p rulean-format --test arena
+
   # The repository rules of the spec: the dependency rule (03.3), the no-C policy (13.3) and the Aeneas subset (10.6). `cargo xtask all` also scans the vendored source of each dependency.
   policy:
     name: policy

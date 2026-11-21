@@ -4,6 +4,7 @@
 
 use std::process::ExitCode;
 
+mod check;
 mod exit;
 
 use exit::Code;
@@ -13,6 +14,7 @@ usage: rulean <command> [options]
 
 commands:
   check <INPUT>     check an export (.ndjson or \"-\" for standard input)
+                    --parse-only: parse the export and check nothing
   version           print the version and the build facts
   help              print this text
 
@@ -37,7 +39,7 @@ fn run(args: &[String]) -> Code {
             println!("{}", version_text());
             Code::Accept
         }
-        "check" => not_written("check", "M2"),
+        "check" => check::run(&args[1..]),
         "olean" => not_written("olean", "M4"),
         "pack" => not_written("pack", "M4"),
         "diff" => not_written("diff", "M3"),
@@ -88,7 +90,9 @@ mod tests {
 
     #[test]
     fn commands_that_are_not_written_decline() {
-        for command in ["check", "olean", "pack", "diff", "explain"] {
+        assert_eq!(run_strs(&["check", "x.ndjson"]), Code::Decline);
+        assert_eq!(run_strs(&["check"]), Code::Usage);
+        for command in ["olean", "pack", "diff", "explain"] {
             assert_eq!(run_strs(&[command]), Code::Decline, "{command}");
         }
     }

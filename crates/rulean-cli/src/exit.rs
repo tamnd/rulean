@@ -15,10 +15,8 @@ pub enum Code {
     /// rulean does not support this input.
     Decline,
     /// A resource limit was reached and no declaration was rejected.
-    #[allow(dead_code, reason = "used from milestone M1")]
     Resource,
     /// The input is malformed.
-    #[allow(dead_code, reason = "used from milestone M1")]
     Input,
     /// Every declaration was accepted, but a theorem uses an axiom outside the allowed list.
     #[allow(dead_code, reason = "used from milestone M2")]

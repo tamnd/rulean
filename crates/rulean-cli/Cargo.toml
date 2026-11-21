@@ -17,5 +17,9 @@ layer = "hardened"
 name = "rulean"
 path = "src/main.rs"
 
+[dependencies]
+rulean-format = { path = "../rulean-format" }
+rulean-store = { path = "../rulean-store" }
+
 [lints]
 workspace = true

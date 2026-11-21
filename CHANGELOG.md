@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- `rulean-nat` has the `Nat` type of spec 04.6 with the 15 kernel operations, `log2` and decimal conversion. Multiplication uses Karatsuba from 32 limbs, and division uses algorithm D of Knuth. The tests compare each operation with `num-bigint`.
+
 ### Fixed
 
 - `cargo xtask all` runs the subset check too. Before this change, the `policy` CI job did not check the Aeneas subset.

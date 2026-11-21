@@ -15,3 +15,7 @@ layer = "core"
 
 [lints]
 workspace = true
+
+# The test oracle of spec 04.6. Dev dependencies do not go into the checker.
+[dev-dependencies]
+num-bigint = "0.5"

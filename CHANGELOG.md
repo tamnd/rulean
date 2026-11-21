@@ -17,6 +17,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ### Changed
 
+- Engine R checks axioms, definitions, theorems and opaque constants in the scratch tier of spec 04.8. The terms that the checker makes for one declaration go into a separate node array, and the checker clears that array after the declaration. Inductive and quotient declarations use the frozen tier. On the full Init prelude, the check now takes 54 s and 964 MB, and before this change it took 93 s and 3.45 GB. On Std, it now takes 60 s and 1.6 GB, and before this change it took 192 s and 4.55 GB.
 - `rulean check` without `--parse-only` checks the export with engine R. Before this change, it declined.
 - The `arena parse` CI job is now the `arena` job. It also checks the verdicts of the Arena tests.
 

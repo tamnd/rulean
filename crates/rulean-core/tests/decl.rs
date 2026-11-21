@@ -539,3 +539,34 @@ fn quotient_needs_eq() {
     assert_eq!(t.add(&d), Some(ErrorKind::AlreadyDeclared));
     assert!(!t.has("Quot"));
 }
+
+#[test]
+fn definitions_use_the_scratch_tier() {
+    use rulean_store::Tier;
+    let mut t = T::new();
+    let (nat, zero) = t.nat();
+    // `fun (f : Nat → Nat) (n : Nat) => f (f n)`: the check makes free variables and the inferred type.
+    let nn = t.pi("n", nat, nat);
+    let (b0, b1) = (t.bv(0), t.bv(1));
+    let inner = t.app(b1, &[b0]);
+    let body = t.app(b1, &[inner]);
+    let lam_n = t.lam("n", nat, body);
+    let value = t.lam("f", nn, lam_n);
+    let ty = t.pi("f", nn, nn);
+    let d = t.defn("twice", ty, value, Safety::Safe);
+    let before = t.c.st.expr_total();
+    assert_eq!(t.add(&Decl::Defn(d)), None);
+    assert!(t.has("twice"));
+    // The terms of the check are gone, and the frozen tier did not grow.
+    assert_eq!(t.c.st.scratch_total(), 0);
+    assert!(!t.c.st.uses_scratch());
+    assert_eq!(t.c.st.expr_total(), before);
+    // A fault at a scratch term points to a frozen term after the call.
+    let twice = t.k("twice");
+    let bad_value = t.app(twice, &[zero]);
+    let d = t.defn("bad", nat, bad_value, Safety::Safe);
+    let f = t.c.add_decl(&Decl::Defn(d)).expect("the check fails");
+    assert_eq!(f.kind, ErrorKind::AppTypeMismatch);
+    assert_eq!(f.at.tier(), Tier::Frozen);
+    assert_eq!(t.c.st.scratch_total(), 0);
+}

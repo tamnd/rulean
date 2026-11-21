@@ -4,6 +4,11 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- `flake.nix` pins Aeneas, Charon and the Rust nightly of Charon with one Aeneas commit.
+- `scripts/extract.sh` translates the four crates of the verified core to Lean with Charon and Aeneas, and the `extract` CI job runs it on each PR.
+
 ## [0.0.1] - 2026-11-21
 
 ### Added

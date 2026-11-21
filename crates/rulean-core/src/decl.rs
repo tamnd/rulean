@@ -30,6 +30,15 @@ fn names_eq(a: &[NameId], b: &[NameId]) -> bool {
     ok
 }
 
+/// The position of the first definition with the name `n` in `ds`, or the length of `ds`.
+fn defn_index(ds: &[Defn], n: NameId) -> usize {
+    let mut i = 0;
+    while i < ds.len() && ds[i].name != n {
+        i += 1;
+    }
+    i
+}
+
 /// The position of `n` in `ns`, or the length of `ns`.
 fn index_of(ns: &[NameId], n: NameId) -> usize {
     let mut i = 0;
@@ -221,21 +230,17 @@ impl Checker {
 
     /// The header checks of `add_mutual` for one member.
     fn check_mutual_header(&mut self, ds: &[Defn], i: usize) {
-        let d = &ds[i];
-        let safety = ds[0].safety;
-        if d.safety != safety || !names_eq(&d.lparams, &ds[0].lparams) {
-            self.fail(ErrorKind::BadMutual, d.ty);
+        let name = ds[i].name;
+        let ty = ds[i].ty;
+        let lparams = ds[i].lparams.clone();
+        if ds[i].safety != ds[0].safety || !names_eq(&lparams, &ds[0].lparams) {
+            self.fail(ErrorKind::BadMutual, ty);
             return;
         }
-        let mut j = 0;
-        while j < i && !self.bad() {
-            if ds[j].name == d.name {
-                self.fail(ErrorKind::BadMutual, d.ty);
-            }
-            j += 1;
+        if defn_index(ds, name) < i {
+            self.fail(ErrorKind::BadMutual, ty);
+            return;
         }
-        let (name, ty) = (d.name, d.ty);
-        let lparams = d.lparams.clone();
         self.check_constant_val(name, &lparams, ty);
     }
 

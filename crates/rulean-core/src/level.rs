@@ -29,7 +29,9 @@ impl LevelCache {
         while self.norm.len() <= i {
             self.norm.push(0);
         }
-        self.norm[i] = r.0 + 1;
+        // The sum is a separate statement, because Charon cannot remove the overflow check of a sum that is followed by an `IndexMut` call.
+        let v = r.0 + 1;
+        self.norm[i] = v;
     }
 }
 
@@ -317,19 +319,38 @@ fn mk_max_list(st: &mut Store, args: &[LevelId]) -> LevelId {
     r
 }
 
-/// Sorts the levels by `is_norm_lt` with an insertion sort. Equal levels have equal handles, so the result does not depend on the sort algorithm.
-fn sort_levels(st: &Store, v: &mut [LevelId]) {
+/// Sorts the levels by `is_norm_lt` with an insertion sort. Equal levels have equal handles, so the result does not depend on the sort algorithm. Each loop is in its own function and the vector moves by value, because Aeneas cannot translate a nested loop that changes a borrowed slice.
+fn sort_levels(st: &Store, v: Vec<LevelId>) -> Vec<LevelId> {
+    let mut v = v;
     let mut i = 1;
     while i < v.len() {
-        let x = v[i];
-        let mut j = i;
-        while j > 0 && is_norm_lt(st, x, v[j - 1]) {
-            v[j] = v[j - 1];
-            j -= 1;
-        }
-        v[j] = x;
+        v = sift_down(st, v, i);
         i += 1;
     }
+    v
+}
+
+/// Moves `v[i]` down to its place in the sorted prefix `v[0..i]`.
+fn sift_down(st: &Store, v: Vec<LevelId>, i: usize) -> Vec<LevelId> {
+    let mut v = v;
+    let x = v[i];
+    let mut j = i;
+    while sift_more(st, &v, j, x) {
+        let k = j - 1;
+        let y = v[k];
+        v[j] = y;
+        j = k;
+    }
+    v[j] = x;
+    v
+}
+
+/// True if `x` must go before `v[j - 1]`.
+fn sift_more(st: &Store, v: &[LevelId], j: usize, x: LevelId) -> bool {
+    if j == 0 {
+        return false;
+    }
+    is_norm_lt(st, x, v[j - 1])
 }
 
 /// The normal form of a level (`normalize`). The result is cached.
@@ -370,7 +391,7 @@ fn normalize_max(st: &mut Store, cache: &mut LevelCache, r: LevelId, k: u32) -> 
         push_max_args(st, n, &mut args);
         t += 1;
     }
-    sort_levels(st, &mut args);
+    let args = sort_levels(st, args);
     let len = args.len();
     let mut i = 0;
     if is_explicit(st, args[0]) {

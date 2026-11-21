@@ -1,0 +1,16 @@
+# The draft entry of rulean for the Lean Kernel Arena (spec 09.5 and 14). The submission copies this file to checkers/rulean.yaml in the Arena repository and sets `rev` to the release commit.
+name: rulean
+version: "0.0"
+description: |
+  rulean is a kernel for Lean 4, written in Rust. Engine R is a transcription of the type checker of the official kernel v4.35.0, with the same reduction order and the same declaration checks.
+
+  rulean pins the primitives: when the export declares `Nat`, a `Nat` operation, `String` or `eagerReduce` with a declaration that is not the reference declaration, the literal extension of that name is off. The proofs of soundness are not done yet, so this build is unverified.
+language: rust
+url: https://github.com/tamnd/rulean
+ref: main
+rev: COMMIT
+build: cargo build --release --locked --bin rulean
+run: scripts/arena-run.sh "$IN"
+threads: 1
+declines: |
+  rulean declines an export that uses a declaration kind that it does not check yet. It exits with 2 when a resource limit is reached.

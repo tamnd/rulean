@@ -128,11 +128,11 @@ jobs:
           test "$code" = 1
           jq -e '.verdict == "reject" and .failed_decl == "B"' _tmp/reject.json
 
-  # Every test of the Lean Kernel Arena must parse (milestone M1). The job downloads the Arena, so it depends on arena.lean-lang.org and is not a required check.
+  # Every test of the Lean Kernel Arena must parse (milestone M1) and give the expected verdict (milestone M2). The job downloads the Arena, so it depends on arena.lean-lang.org and is not a required check.
   arena:
-    name: arena parse
+    name: arena
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -153,6 +153,8 @@ jobs:
         run: |
           a=_tmp/arena/tests/good
           python3 scripts/pin-digests.py "$a/init-prelude.ndjson" "$a/perf/gf3-matrix-product.ndjson" "$a/perf/short-circuit-and.ndjson" "$a/perf/grind-ring-5.ndjson" | diff - crates/rulean-core/src/pin_ref_v4_35.in
+      - name: the verdicts of the Arena entry
+        run: scripts/arena-check.sh _tmp/arena/tests
 
   # The repository rules of the spec: the dependency rule (03.3), the no-C policy (13.3) and the Aeneas subset (10.6). `cargo xtask all` also scans the vendored source of each dependency.
   policy:

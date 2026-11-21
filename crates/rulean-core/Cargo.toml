@@ -17,5 +17,6 @@ layer = "core"
 workspace = true
 
 [dependencies]
+rulean-format = { path = "../rulean-format" }
 rulean-nat = { path = "../rulean-nat" }
 rulean-store = { path = "../rulean-store" }

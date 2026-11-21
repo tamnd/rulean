@@ -155,7 +155,7 @@ jobs:
           if-no-files-found: error
 
   # The Lean proof package in proof/ (spec 10). The job checks the source rules of spec 10.9, builds the package, checks it with the official kernel and audits the axioms. Only propext, Classical.choice and Quot.sound are allowed.
-  # leanchecker of Lean v4.36.0 crashes with exit code 139 when the module list includes the root module RuleanProof, so the list names the other modules (issue #15). The root module only imports them.
+  # leanchecker crashes on some runs when it replays two or more modules in parallel (issue #15), so scripts/leanchecker.sh runs it once with --fresh on the root module.
   proof:
     name: proof
     runs-on: ubuntu-latest
@@ -172,10 +172,9 @@ jobs:
           test: false
           lint: false
           use-mathlib-cache: false
-          leanchecker: true
-          leanchecker-args: RuleanProof.Basic
           axiom-audit: true
           axiom-audit-root: RuleanProof
+      - run: scripts/leanchecker.sh
 
   # cargo-deny checks the advisories, the licences, the sources and the banned crates of deny.toml.
   deny:

@@ -34,55 +34,55 @@ dependencies = [
 
 [[package]]
 name = "rulean-bench"
-version = "0.0.0"
+version = "0.0.1"
 
 [[package]]
 name = "rulean-cli"
-version = "0.0.0"
+version = "0.0.1"
 
 [[package]]
 name = "rulean-core"
-version = "0.0.0"
+version = "0.0.1"
 
 [[package]]
 name = "rulean-diff"
-version = "0.0.0"
+version = "0.0.1"
 
 [[package]]
 name = "rulean-ffi"
-version = "0.0.0"
+version = "0.0.1"
 
 [[package]]
 name = "rulean-format"
-version = "0.0.0"
+version = "0.0.1"
 
 [[package]]
 name = "rulean-io"
-version = "0.0.0"
+version = "0.0.1"
 
 [[package]]
 name = "rulean-nat"
-version = "0.0.0"
+version = "0.0.1"
 
 [[package]]
 name = "rulean-olean"
-version = "0.0.0"
+version = "0.0.1"
 
 [[package]]
 name = "rulean-pack"
-version = "0.0.0"
+version = "0.0.1"
 
 [[package]]
 name = "rulean-pool"
-version = "0.0.0"
+version = "0.0.1"
 
 [[package]]
 name = "rulean-simd"
-version = "0.0.0"
+version = "0.0.1"
 
 [[package]]
 name = "rulean-store"
-version = "0.0.0"
+version = "0.0.1"
 
 [[package]]
 name = "serde"
@@ -156,7 +156,7 @@ checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
 
 [[package]]
 name = "xtask"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "proc-macro2",
  "serde_json",

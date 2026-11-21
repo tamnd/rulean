@@ -100,12 +100,13 @@ jobs:
       - name: notes from the changelog
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
-        # The notes are the section of CHANGELOG.md for the tag. The section starts at "## [x.y.z]" and stops at the next "## [".
+        # The notes are the section of CHANGELOG.md for the tag. The section starts at "## [x.y.z]" and stops at the next "## [" or at the link references at the end of the file.
         run: |
           version="${TAG#v}"
           awk -v v="$version" '
             $0 ~ "^## \\[" v "\\]" { on = 1; next }
             on && /^## \[/ { exit }
+            on && /^\[[^]]*\]: / { exit }
             on { print }
           ' CHANGELOG.md > notes.md
           if [ ! -s notes.md ]; then

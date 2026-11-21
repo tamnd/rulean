@@ -11,6 +11,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ### Fixed
 
+- The `extract` job failed on `rulean-nat`, because Aeneas binds its `Fuel` type to the Lean name `Nat`. The type now has the Lean name `BigNat` in the extracted code. The Rust name does not change.
 - `cargo xtask all` runs the subset check too. Before this change, the `policy` CI job did not check the Aeneas subset.
 
 ## [0.0.2] - 2026-11-21

@@ -89,6 +89,8 @@ pub enum ErrorKind {
     BadRecRule,
     /// A declaration uses the reserved prefix `_nested`.
     NestedPrefix,
+    /// One of the "invalid nested inductive datatype" or "failed to restore nested inductive types" messages of `elim_nested_inductive_fn`.
+    BadNested,
     /// An exported field that rulean recomputes does not match the recomputed value (spec 06.1).
     ExportMismatch,
 }
@@ -359,15 +361,20 @@ impl Checker {
         self.lctx_info.truncate(0);
         self.lctx_ty.truncate(0);
         self.lctx_val.truncate(0);
+        self.clear_caches();
+        self.eager = false;
+        self.depth = 0;
+        self.fault = None;
+    }
+
+    /// Clears the caches of inference, reduction and definitional equality. The local context stays.
+    pub(crate) fn clear_caches(&mut self) {
         self.c_infer.clear();
         self.c_whnf_core.clear();
         self.c_whnf.clear();
         self.c_unfold.clear();
         self.c_success.clear();
         self.c_failure.clear();
-        self.eager = false;
-        self.depth = 0;
-        self.fault = None;
     }
 
     /// The first error since `begin`, if any.

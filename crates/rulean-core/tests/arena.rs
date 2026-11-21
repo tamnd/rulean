@@ -76,7 +76,7 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The Init prelude has many inductives. All declarations before the first nested inductive must be accepted.
+/// The Init prelude has many inductive types, nested inductive types too. All declarations must be accepted.
 #[test]
 fn init_prelude() {
     let path = root().join("good/init-prelude.ndjson");
@@ -84,7 +84,11 @@ fn init_prelude() {
         return;
     }
     let r = check_big_stack(&path);
-    assert!(r.verdict != REJECT, "the prelude is rejected: {}", r.text);
+    assert!(
+        r.verdict == ACCEPT,
+        "the prelude is not accepted: {}",
+        r.text
+    );
 }
 
 /// All Arena tests. This test is slow, so it runs only with `--ignored`.

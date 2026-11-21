@@ -27,5 +27,6 @@ pub mod inductive;
 pub mod level;
 pub mod memo;
 pub mod names;
+pub mod nested;
 pub mod tc;
 pub mod whnf;

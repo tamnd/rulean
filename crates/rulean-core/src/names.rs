@@ -87,6 +87,21 @@ pub fn is_prefix_of(st: &Store, p: NameId, n: NameId) -> bool {
     }
 }
 
+/// `a + b`: the parts of `b` after the parts of `a`.
+pub fn concat(st: &mut Store, a: NameId, b: NameId) -> NameId {
+    match st.name(b) {
+        Name::Anon => a,
+        Name::Str(pre, part) => {
+            let p = concat(st, a, pre);
+            st.name_str(p, part)
+        }
+        Name::Num(pre, k) => {
+            let p = concat(st, a, pre);
+            st.name_num(p, k)
+        }
+    }
+}
+
 /// `I.rec`, the name of the recursor of `I` (`mk_rec_name`).
 pub fn rec_name(st: &mut Store, n: NameId) -> NameId {
     st.name_str_bytes(n, b"rec")

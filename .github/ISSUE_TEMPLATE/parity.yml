@@ -1,0 +1,35 @@
+name: Verdict difference
+description: rulean and the official kernel give different verdicts on the same export.
+labels: ["parity"]
+body:
+  - type: markdown
+    attributes:
+      value: "If rulean accepts and the official kernel rejects, and the input is a proof of a false statement, follow SECURITY.md instead of this form."
+  - type: input
+    id: version
+    attributes:
+      label: rulean version
+      description: The output of `rulean version`.
+    validations:
+      required: true
+  - type: input
+    id: lean
+    attributes:
+      label: Lean version
+      description: The Lean release that made the export, and the version of `leanchecker` that you compared with.
+    validations:
+      required: true
+  - type: textarea
+    id: input
+    attributes:
+      label: Input
+      description: The export, or a link to it. A small input is best.
+    validations:
+      required: true
+  - type: textarea
+    id: verdicts
+    attributes:
+      label: Verdicts
+      description: The verdict of each kernel and the name of the first declaration where they differ.
+    validations:
+      required: true

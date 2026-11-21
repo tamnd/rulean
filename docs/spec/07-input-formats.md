@@ -1,0 +1,161 @@
+# 07. Input formats
+
+rulean reads three formats:
+
+- the lean4export NDJSON stream, which is the reference input;
+- the rulean binary format, which is fast;
+- the `.olean` module files, which are needed for checking without a separate export step.
+
+All three decode to one declaration stream (04.7). The type checker never sees the file format.
+
+Sources: research/A-lean-kernel.md section 4, research/D-runtime-formats-rust.md sections 3, 5, 6 and 7.
+
+Parsing is a large part of the budget. The official parser alone takes about 1.66 T instructions on Mathlib, which is 14% of the official run (A§5.4). That is more than the whole P1.a budget of 1.21 T. So the parser target is strict (07.1.4).
+
+## 07.1 lean4export NDJSON 3.x
+
+### 07.1.1 Grammar
+
+The format is version 3.1.0 (A§4.1). It has one JSON object on each line.
+
+- **Line 1, meta:** `{"meta":{"exporter":{"name":…,"version":…},"lean":{"githash":…,"version":…},"format":{"version":"3.1.0"}}}`. rulean accepts major version 3, and any minor version up to the newest it knows. An unknown major version is a decline.
+- **Names** (`"in"` index; index 0 is the anonymous name and is implicit): `{"str":{"pre":i,"str":s},"in":k}` and `{"num":{"pre":i,"i":n},"in":k}`.
+- **Levels** (`"il"` index; index 0 is zero and is implicit): `succ`, `max`, `imax`, `param`.
+- **Expressions** (`"ie"` index): `bvar`, `sort`, `const`, `app`, `lam`, `forallE`, `letE` (with `nondep`), `proj`, `natVal` (a decimal string), `strVal`, `mdata`.
+- **Declarations:** `axiom`, `def`, `opaque`, `thm`, `quot`, `inductive`, with the fields of A§4.1.
+
+### 07.1.2 Rules
+
+- An index must be defined before it is used. A line that refers to an undefined index is a reject. Indices may have gaps and may be out of order (Arena tests `sparse-name-index` and `level-index-out-of-order`). The parser uses a growable table with a "defined" bit.
+- An index that is defined twice is a reject.
+- `natVal` is an unbounded decimal string. Leading zeros are allowed only for "0". A value above the literal bound (05.8) is a reject, and the parser checks this from the string length before any conversion.
+- `strVal` must be valid UTF-8 with Unicode scalar values only. A JSON escape `\uD800` to `\uDFFF` without a pair is a reject.
+- `mdata` is stripped. Its data is not parsed beyond JSON well-formedness.
+- `nondep` is read but has no effect on checking. The exporter normalises it to false (A§4.1).
+- Duplicate JSON keys, numbers with exponents or fractions where an integer is expected, and integers above 2^64 − 1 are rejects.
+- A truncated last line is a reject. An empty line is a reject.
+- Fields that rulean recomputes (06.1) are parsed and then compared, never trusted.
+
+### 07.1.3 Scanner design
+
+The scanner is hand-written for this grammar. It is not a general JSON library: the grammar is small and fixed, and a small scanner is easier to verify (D§9.5).
+
+- The input is read in large blocks through `rulean-io` (10.7, K2), or mapped read-only with `memmap2`.
+- Each line is dispatched on its first key. The scanner reads only the keys of that record kind, in any order.
+- Numbers are parsed with a u64 fast path and an overflow check.
+- Strings without escapes are borrowed from the input buffer and interned once. Strings with escapes are decoded into a scratch buffer.
+- The scanner writes directly into the term store (04.2). It does not build an intermediate tree. Hash-consing happens at insertion.
+- Optional SIMD line splitting is island K4 (10.7). The verified scalar scanner is the reference, and `--no-simd` turns the SIMD path off.
+
+**Parallel parsing.** The first pass finds line boundaries and record kinds. Name, level and expression records form a dependency order by index, so they can be parsed in parallel by ranges into per-thread tables, then merged by index. Kontroli found that channel overhead cancelled the gain of parallel parsing (B§8.4). rulean parses ranges in place and merges tables, with no per-record messages. Parallel parsing is a performance option. It is outside the verified core (it uses island K1), and its output is compared with the scalar parser in CI.
+
+### 07.1.4 Targets
+
+| Measure | Target | Reference |
+|---|---|---|
+| instructions per input byte, scalar path | at most 25 | official parser about 300; nano-lean whole pipeline about 68 (B§10.2) |
+| Mathlib parse, instructions | at most 0.16 T (13% of the P1.a budget) | official 1.66 T |
+| Mathlib parse, wall time, 8 threads | at most 6 s | |
+| peak memory during parse | at most the size of the final store plus 10% | |
+
+## 07.2 The rulean binary format (`.rlb`)
+
+### 07.2.1 Purpose
+
+A binary format removes most of the parse cost. MM0 and gruszka show this (B§8.7, B§10.2). The FRO also asked for "binary export formats" (A§2.4, VK).
+
+The binary format is a **cache, not a new source of truth**. It is made from an NDJSON export or from `.olean` files with `rulean pack` (09.2). The checker checks what it decodes. So a wrong encoder can cause a reject, but it cannot cause a wrong accept (10.5).
+
+### 07.2.2 Layout
+
+All integers are little-endian. All sections are 8-byte aligned.
+
+```
+header      : magic "RULEANB\0", format version u32, flags u32,
+              lean version (32 bytes), lean githash (40 bytes),
+              profile id u32, section count u32, SHA-256 of the source export (32 bytes)
+section dir : per section: kind u32, offset u64, length u64, item count u64, CRC-32C u32
+sections    : STRINGS   (lengths + UTF-8 bytes, validated once)
+              NAMES     (tag u8 + prefix index u32 + payload index u32)
+              LEVELS    (tag u8 + two operands u32)
+              EXPRS     (one array per constructor kind, as in the store, 04.2)
+              NATS      (big literals as length-prefixed u64 limbs)
+              DECLS     (declaration records with operand indices)
+              DEPS      (optional: per-declaration dependency lists, for the scheduler, 08.3)
+```
+
+- Every index refers to an earlier item in its table, so decoding is one forward pass with bounds checks.
+- The EXPRS arrays have the same layout as the frozen store tier. Decoding is a bounds-checked copy plus hash recomputation. Hashes and flags are never read from the file.
+- The DEPS section is a hint. The scheduler recomputes dependencies when the hint is missing. A wrong hint can only cause a reject (unknown constant), never an accept.
+
+### 07.2.3 Targets and proof
+
+- Decode at most 3 instructions per byte, so Mathlib decodes in at most 0.03 T.
+- Decoder correctness is lemma 10.5: `Spec.parseBinary b = Spec.parseStream (ndjson_of b)`. The decoder is in the verified core.
+- Other binary formats (Susz from gruszka, BLean from olean-export) are not read by rulean 1.0. A converter is a later option (15.3).
+
+## 07.3 `.olean` files
+
+### 07.3.1 Why rulean reads oleans
+
+`lake check` runs an export step inside a sandbox before any external kernel runs (A§4.3). For Mathlib the export takes a long time: olean-export reports 1,526 s for lean4export against 18 s for its own reader (D§6). An olean reader lets rulean check a built project directly, and in in-process mode (09.6) the environment is loaded from oleans anyway.
+
+### 07.3.2 The format
+
+An `.olean` is a compacted heap image of Lean runtime objects (D§5, A§4.4).
+
+- Header, 88 bytes: `"olean"`, version byte, flags (bit 0: GMP number encoding), `lean_version[33]`, `githash[40]`, `base_addr`.
+- Version 2 (v4.36): data at offset 88, and the first word is the root pointer.
+- Version 3 (v4.36, with closures): `data_size` at 88, data at 96, then the closure offsets and the library table.
+- Version 4 (v4.37.0-rc1, PR#16214): one layout, `[header][data_size][root][objects][0 closures][0 libs]`.
+- Objects have `m_rc = 0` and their size in `m_cs_sz`, so the region can be walked linearly.
+- Pointers are absolute addresses that assume the region is mapped at `base_addr`.
+- The module system writes three parts: `X.olean`, `X.olean.server`, `X.olean.private`. Later parts point into earlier parts. **In `X.olean`, theorems are stored as axioms (statement only).** A checker that reads only `X.olean` checks no proofs. rulean must read all three parts.
+
+### 07.3.3 Reader rules
+
+The official loader does no structural validation (I#16542). The rulean reader treats every byte as hostile input (12).
+
+- The file is read, or mapped read-only, at any address. It is never mapped at `base_addr`, and never with `MAP_FIXED`.
+- Pointers are translated as offsets from `base_addr`. A pointer that is outside the regions of the module and its loaded parts is a decline with `malformed-olean`.
+- Every object header is checked: tag, field count, scalar size and total size, against the expected constructor of the Lean type at that position. The reader is typed: it knows that position p must hold an `Expr`, so a `Name` at that position is an error.
+- The object graph must be acyclic. The reader decodes in post-order with an explicit stack and a visited table. A back edge is an error.
+- Cached data is ignored and recomputed: `Expr.Data` (hash, flags, loose bound variable range, depth), `Level.Data` and `Name.hash` (D§3). The 32-bit hash changed in v4.37.0-rc1 (#16107), so cached data cannot even be compared across versions.
+- Big numbers are decoded from the GMP or native encoding by the flag bit. Limbs are checked for a canonical form (no leading zero limb).
+- Strings are checked for UTF-8 and for their stored length and character count.
+- The reader takes only `ModuleData.constants` and `constNames` (D§5.4). Environment extensions are not read.
+- The reader version table has one row per supported `(OLEAN_VERSION, profile)`. An unknown version is a decline.
+
+### 07.3.4 Module order and parts
+
+- The reader loads the import closure in topological order, from `ModuleData.imports`.
+- For each module it loads `.olean`, then `.olean.server`, then `.olean.private`, as the official loader does.
+- Where a theorem appears as an axiom in `.olean` and as a theorem in `.olean.private`, the private version is the declaration that is checked, and the axiom form must have the same name, level parameters and type.
+- A module that is not a `module` file has a single `.olean`. That file holds full declarations.
+
+### 07.3.5 Trust
+
+The `.olean` reader is not in theorem T1 for release 1.0 (10.1). It is in the "hardened, tested" class:
+
+- It is written in safe Rust, with `#![forbid(unsafe_code)]` except for the mapping call in `rulean-io`.
+- It is fuzzed (11.5) and runs under the resource limits of 12.3.
+- It is cross-validated (07.3.6).
+
+### 07.3.6 Cross-validation
+
+For each corpus project and each profile, CI runs:
+
+1. lean4export to NDJSON, then rulean on the NDJSON;
+2. rulean directly on the oleans;
+3. a comparison of the two decoded declaration streams, constant by constant, by structural hash.
+
+Any difference is a release blocker. This is the evidence for the reader until it has a specification.
+
+## 07.4 Formats rulean does not read
+
+| Format | Reason |
+|---|---|
+| `.ilean`, `.ir`, `.c` | not kernel input |
+| Lean 3 `.olean` | out of scope (02.5) |
+| `.olean` from releases before v4.35.0 | out of scope (02.5) |
+| Dedukti, Lean4Less output | different logic; a later research option |

@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a soundness bug privately
+    url: https://github.com/tamnd/rulean/security/advisories/new
+    about: Use this if rulean accepts a proof of a false statement.

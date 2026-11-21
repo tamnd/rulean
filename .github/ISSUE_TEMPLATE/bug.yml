@@ -1,0 +1,35 @@
+name: Bug
+description: rulean gives a wrong result, crashes or is slow on an input.
+labels: ["type/fix"]
+body:
+  - type: markdown
+    attributes:
+      value: "If rulean accepts a proof of a false statement, do not open a public issue. Follow SECURITY.md instead."
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `rulean version`.
+    validations:
+      required: true
+  - type: textarea
+    id: input
+    attributes:
+      label: Input
+      description: The export or the Lean file, or a link to it. Give the Lean version that made the export.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+      description: The verdict of the official kernel (`leanchecker --from-export`), if you know it.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: The verdict, the exit code and the messages of rulean.
+    validations:
+      required: true

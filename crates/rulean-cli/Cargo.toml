@@ -1,0 +1,17 @@
+[package]
+name = "rulean-cli"
+description = "The rulean command line: check Lean 4 exports with the rulean kernel."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "rulean"
+path = "src/main.rs"
+
+[lints]
+workspace = true

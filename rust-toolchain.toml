@@ -1,0 +1,5 @@
+# The stable toolchain for normal builds. The extraction job uses the nightly that Charon pins (see flake.nix, from milestone M0).
+[toolchain]
+channel = "1.100.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

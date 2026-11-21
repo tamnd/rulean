@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.0.1] - 2026-11-21
+
 ### Added
 
 - The `rulean` command line with `help` and `version`. The other commands of the spec exit with code 2 and name the milestone that adds them.
@@ -17,3 +19,6 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `deny.toml` and a `cargo-deny` CI job for advisories, licences, sources and banned crates.
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
+
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.1...HEAD
+[0.0.1]: https://github.com/tamnd/rulean/releases/tag/v0.0.1

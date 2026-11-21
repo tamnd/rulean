@@ -81,6 +81,7 @@ version = "0.0.2"
 name = "rulean-core"
 version = "0.0.2"
 dependencies = [
+ "rulean-format",
  "rulean-nat",
  "rulean-store",
 ]

@@ -9,6 +9,8 @@
 #![allow(clippy::len_zero)]
 // `Option` combinators and `?` are outside the subset, so the code matches by hand.
 #![allow(clippy::collapsible_if)]
+#![allow(clippy::collapsible_match)]
+#![allow(clippy::question_mark)]
 #![allow(clippy::comparison_chain)]
 // `Vec::clear`, `slice::swap` and `checked_sub` are outside the modelled functions too.
 #![allow(clippy::manual_clear)]
@@ -17,6 +19,10 @@
 
 extern crate alloc;
 
+pub mod defeq;
+pub mod env;
 pub mod expr;
 pub mod level;
 pub mod memo;
+pub mod tc;
+pub mod whnf;

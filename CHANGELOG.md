@@ -14,6 +14,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `scripts/arena-fetch.sh` downloads the Arena tests and results and keeps only the tests whose export has the hash of the results.
 - The `bench` workflow runs the official kernel of Lean v4.35.0 on the Arena tests each week and compares its instruction counts with the Arena numbers.
 - `docs/bench/baseline.md` records the first baseline run. The verdicts match the Arena on all 225 tests. The cachegrind counts are not within 2% of the Arena counts, so the 2% limit applies only to `perf`.
+- `rulean-core` has the environment and the type checker of engine R, as a transcription of `type_checker.cpp`, `inductive_reduce_rec` and `quot_reduce_rec` of the official kernel v4.35.0. The checker infers types in the infer-only mode and in the check mode, reduces terms to weak head normal form in the official order (beta, zeta, projections, recursors, quotients, the `Nat` extension and delta), and decides definitional equality with lazy delta reduction, eta, structure eta, proof irrelevance, unit-like types and the `Nat` and `String` literal extensions. An error is a sticky fault, and a depth bound stops deep recursion. The `Nat` operations check the size bound of 128 MiB.
 
 ### Changed
 

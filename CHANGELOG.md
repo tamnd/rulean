@@ -13,3 +13,5 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - The specification in `docs/spec/`.
 - The crates of spec section 03.3 as empty libraries. The four crates of the verified core are `no_std`.
 - `cargo xtask deps`, which checks the dependency rule of spec section 03.3, and the `policy` CI job that runs it.
+- `cargo xtask nonc`, which checks the no-C policy of spec section 13.3: no banned crate and no `links` key in the dependency graph, and no C, C++, assembly or prebuilt native file in the tree or in the vendored source of any dependency.
+- `deny.toml` and a `cargo-deny` CI job for advisories, licences, sources and banned crates.

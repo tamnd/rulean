@@ -109,7 +109,7 @@ jobs:
           target/debug/rulean frobnicate || code=$?
           test "$code" = 64
 
-  # The repository rules of the spec: the dependency rule (03.3). Later pull requests add the no-C policy (13.3) and the Aeneas subset (10.6).
+  # The repository rules of the spec: the dependency rule (03.3) and the no-C policy (13.3). `cargo xtask all` also scans the vendored source of each dependency. A later pull request adds the Aeneas subset (10.6).
   policy:
     name: policy
     runs-on: ubuntu-latest
@@ -123,6 +123,20 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo xtask all
+
+  # cargo-deny checks the advisories, the licences, the sources and the banned crates of deny.toml.
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@17aeb3c839e42274e2b8adf721c8c65edfdc74dd # v2.1.3
+        with:
+          command: check
+          arguments: --all-features
 
   # zizmor finds unsafe patterns in the workflows, for example template injection and credentials that persist in the checkout.
   workflows:

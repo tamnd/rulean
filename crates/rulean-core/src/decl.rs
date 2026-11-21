@@ -513,15 +513,19 @@ impl Checker {
         None
     }
 
-    /// Checks one declaration of the stream and adds it to the environment.
+    /// Checks one declaration of the stream and adds it to the environment. Then it compares the new primitives with their references (spec 05.8).
     pub fn add_decl(&mut self, d: &Decl) -> Option<Fault> {
-        match d {
+        let r = match d {
             Decl::Axiom(a) => self.add_axiom(a),
             Decl::Defn(x) => self.add_definition(x),
             Decl::Thm(t) => self.add_theorem(t),
             Decl::Opaque(o) => self.add_opaque(o),
             Decl::Quot(q) => self.add_quot(q),
             Decl::Induct(i) => self.add_inductive(i),
+        };
+        if r.is_none() {
+            self.check_pins();
         }
+        r
     }
 }

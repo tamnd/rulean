@@ -8,6 +8,7 @@ use rulean_store::{Expr, ExprId, LevelListId, Literal, NameId};
 use crate::env::{ConstKind, compare_hints};
 use crate::expr;
 use crate::level;
+use crate::pin::{PIN_NAT, PIN_STRING};
 use crate::tc::{Checker, LBool, to_lbool};
 use rulean_format::Hints;
 
@@ -392,6 +393,9 @@ impl Checker {
 
     /// `is_def_eq_offset`.
     fn is_def_eq_offset(&mut self, t: ExprId, s: ExprId) -> LBool {
+        if !self.pin_on(PIN_NAT) {
+            return LBool::Undef;
+        }
         if self.is_nat_zero(t) && self.is_nat_zero(s) {
             return LBool::True;
         }
@@ -510,6 +514,9 @@ impl Checker {
     }
 
     fn try_string_lit_expansion(&mut self, t: ExprId, s: ExprId) -> LBool {
+        if !self.pin_on(PIN_STRING) {
+            return LBool::Undef;
+        }
         let r = self.try_string_lit_expansion_core(t, s);
         if r != LBool::Undef {
             return r;

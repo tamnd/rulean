@@ -49,9 +49,18 @@ fn check_file(path: &Path) -> Run {
             };
         }
     }
+    let mut text = String::new();
+    for n in &c.pin_mismatch {
+        text.push_str(if text.is_empty() {
+            "pin mismatch: "
+        } else {
+            ", "
+        });
+        text.push_str(&String::from_utf8_lossy(&c.st.name_text(*n)));
+    }
     Run {
         verdict: ACCEPT,
-        text: String::new(),
+        text,
     }
 }
 
@@ -76,7 +85,7 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The Init prelude has many inductive types, nested inductive types too. All declarations must be accepted.
+/// The Init prelude has many inductive types, nested inductive types too. All declarations must be accepted, and each pinned primitive of the prelude must be equal to its reference.
 #[test]
 fn init_prelude() {
     let path = root().join("good/init-prelude.ndjson");
@@ -89,6 +98,7 @@ fn init_prelude() {
         "the prelude is not accepted: {}",
         r.text
     );
+    assert!(r.text.is_empty(), "the prelude has a {}", r.text);
 }
 
 /// All Arena tests. This test is slow, so it runs only with `--ignored`.

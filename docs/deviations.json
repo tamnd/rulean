@@ -1,0 +1,60 @@
+{
+  "profile": "v4.35",
+  "spec": "docs/spec/05-type-checker.md#0512-deviation-register",
+  "deviations": [
+    {
+      "id": "D1",
+      "input": "an export that redefines a primitive (Nat.add, String.ofList and the other pinned names) with another value",
+      "official": "uses the built-in operation",
+      "rulean": "unfolds the definition of the export",
+      "option": "--trust-primitives-by-name",
+      "status": "implemented",
+      "tests": ["crates/rulean-core/tests/pin.rs"]
+    },
+    {
+      "id": "D2",
+      "input": "a declaration where the official kernel hits a resource limit and rulean does not",
+      "official": "resource error",
+      "rulean": "accept, with a flag",
+      "option": "--limits=official",
+      "status": "planned",
+      "tests": []
+    },
+    {
+      "id": "D3",
+      "input": "Arena tests with the outcome either",
+      "official": "profile-specific",
+      "rulean": "the verdict of the profile",
+      "option": null,
+      "status": "planned",
+      "tests": []
+    },
+    {
+      "id": "D4",
+      "input": "rules that con-leche has and the official kernel does not",
+      "official": "reject",
+      "rulean": "reject",
+      "option": "--rules=con-leche",
+      "status": "planned",
+      "tests": []
+    },
+    {
+      "id": "D5",
+      "input": ".olean input whose cached hashes or flags disagree with recomputed ones",
+      "official": "uses the cached data without a check",
+      "rulean": "recomputes, and declines with malformed-olean if the structure is not valid",
+      "option": null,
+      "status": "planned",
+      "tests": []
+    },
+    {
+      "id": "D6",
+      "input": "trust level above 1024 in in-process mode",
+      "official": "adds the declaration without a check",
+      "rulean": "adds the declaration without a check and marks the constant unchecked in the report",
+      "option": "--check-all",
+      "status": "planned",
+      "tests": []
+    }
+  ]
+}

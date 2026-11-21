@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- `cargo xtask all` runs the subset check too. Before this change, the `policy` CI job did not check the Aeneas subset.
+
 ## [0.0.2] - 2026-11-21
 
 ### Added

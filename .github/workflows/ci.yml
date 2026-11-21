@@ -119,7 +119,7 @@ jobs:
           target/debug/rulean frobnicate || code=$?
           test "$code" = 64
 
-  # The repository rules of the spec: the dependency rule (03.3) and the no-C policy (13.3). `cargo xtask all` also scans the vendored source of each dependency. A later pull request adds the Aeneas subset (10.6).
+  # The repository rules of the spec: the dependency rule (03.3), the no-C policy (13.3) and the Aeneas subset (10.6). `cargo xtask all` also scans the vendored source of each dependency.
   policy:
     name: policy
     runs-on: ubuntu-latest

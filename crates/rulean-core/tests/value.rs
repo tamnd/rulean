@@ -15,9 +15,12 @@ fn values_keep_their_contents() {
         env: EnvId::NIL,
         body: ExprId(7),
     };
-    let l = a.alloc(Value::Lam(BinderInfo::Implicit, s, clo));
+    let l = a.alloc(Value::Lam(NameId(3), BinderInfo::Implicit, s, clo));
     assert_eq!(a.get(s), Value::Sort(LevelId(0)));
-    assert_eq!(a.get(l), Value::Lam(BinderInfo::Implicit, s, clo));
+    assert_eq!(
+        a.get(l),
+        Value::Lam(NameId(3), BinderInfo::Implicit, s, clo)
+    );
 }
 
 #[test]

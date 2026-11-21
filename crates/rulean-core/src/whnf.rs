@@ -593,7 +593,7 @@ impl Checker {
     }
 
     /// `unfold_definition_core`. The cache is used only for a constant with levels.
-    fn unfold_definition_core(&mut self, e: ExprId) -> Option<ExprId> {
+    pub(crate) fn unfold_definition_core(&mut self, e: ExprId) -> Option<ExprId> {
         let list = match self.st.node(e) {
             Expr::Const(_, list) => list,
             _ => return None,

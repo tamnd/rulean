@@ -17,6 +17,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `rulean-format` has `Stream`, a parse that takes the export one line at a time. `parse_export` uses it.
 - `rulean-core` has `sha256::Hasher`, a SHA-256 digest that takes its input in parts.
 - `rulean-core` has the value arena of engine F (spec 04.5), in the module `value`. It holds values, closures, environments, spines and unfolding slots in typed arrays with `u32` handles. Environments and spines are persistent lists, so a push copies nothing. `reset` clears the arena at the end of a declaration. Engine F does not use it yet.
+- `rulean-core` has `eval`, `apply`, `force` and `quote` of engine F (spec 05.4.2 and 05.4.3), in the module `nbe`. `eval` does beta and zeta and makes a glued value for each definition. `force` unfolds a glued value once and keeps the result in its slot. `quote` reads a glued value back in folded form. Iota, the quotient rules and the literal extensions are not in this version. The checker does not use engine F yet.
+- The checker error `ArenaFull` is a resource failure, with exit code 3.
 
 ### Changed
 

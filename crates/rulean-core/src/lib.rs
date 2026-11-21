@@ -30,6 +30,7 @@ pub mod inductive;
 pub mod level;
 pub mod memo;
 pub mod names;
+pub mod nbe;
 pub mod nested;
 pub mod pin;
 pub mod profile;

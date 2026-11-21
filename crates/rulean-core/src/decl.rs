@@ -50,20 +50,20 @@ fn index_of(ns: &[NameId], n: NameId) -> usize {
 
 impl Checker {
     /// Records a fault at `at` and gives it back.
-    fn reject(&mut self, kind: ErrorKind, at: ExprId) -> Option<Fault> {
+    pub(crate) fn reject(&mut self, kind: ErrorKind, at: ExprId) -> Option<Fault> {
         self.fail(kind, at);
         self.fault()
     }
 
     /// `check_name`: the name is not declared.
-    fn check_name(&mut self, n: NameId, at: ExprId) {
+    pub(crate) fn check_name(&mut self, n: NameId, at: ExprId) {
         if self.env.contains(n) {
             self.fail(ErrorKind::AlreadyDeclared, at);
         }
     }
 
     /// `check_duplicated_univ_params`.
-    fn check_duplicated_univ_params(&mut self, ls: &[NameId], at: ExprId) {
+    pub(crate) fn check_duplicated_univ_params(&mut self, ls: &[NameId], at: ExprId) {
         let mut i = 0;
         while i < ls.len() && !self.bad() {
             if index_of(&ls[i + 1..], ls[i]) < ls.len() - i - 1 {
@@ -74,7 +74,7 @@ impl Checker {
     }
 
     /// `check_no_metavar_no_fvar`. The store has no metavariables.
-    fn check_no_fvar(&mut self, e: ExprId) {
+    pub(crate) fn check_no_fvar(&mut self, e: ExprId) {
         if !self.bad() && expr::has_fvar(&self.st, e) {
             self.fail(ErrorKind::FreeVar, e);
         }
@@ -107,7 +107,7 @@ impl Checker {
         }
     }
 
-    fn add_const(
+    pub(crate) fn add_const(
         &mut self,
         name: NameId,
         lparams: Vec<NameId>,
@@ -521,11 +521,7 @@ impl Checker {
             Decl::Thm(t) => self.add_theorem(t),
             Decl::Opaque(o) => self.add_opaque(o),
             Decl::Quot(q) => self.add_quot(q),
-            Decl::Induct(_) => {
-                self.begin(Vec::new(), Safety::Safe);
-                let at = self.dummy;
-                self.reject(ErrorKind::Unsupported, at)
-            }
+            Decl::Induct(i) => self.add_inductive(i),
         }
     }
 }

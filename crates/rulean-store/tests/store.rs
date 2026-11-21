@@ -234,3 +234,54 @@ fn many_nodes() {
         m.exprs + m.names + m.strings + m.levels + m.nats + m.tables
     );
 }
+
+#[test]
+fn scratch_tier() {
+    let mut s = Store::new();
+    let nat = name(&mut s, "Nat");
+    let empty = s.level_list_empty();
+    let c = s.mk_const(nat, empty);
+    let x = s.anon();
+    let b0 = s.mk_bvar(0);
+    let lam = s.mk_lam(x, BinderInfo::Default, c, b0);
+    let frozen = s.expr_total();
+    s.set_scratch(true);
+    assert!(s.uses_scratch());
+    // A node that is in the frozen tier keeps its frozen handle.
+    assert_eq!(s.mk_lam(x, BinderInfo::Default, c, b0), lam);
+    // A new node with frozen fields goes to the scratch tier.
+    let a = s.mk_app(lam, c);
+    assert_eq!(a.tier(), Tier::Scratch);
+    assert_eq!(s.mk_app(lam, c), a);
+    assert_eq!(s.node(a), Expr::App(lam, c));
+    // A node with a scratch field also goes to the scratch tier, and its side record covers the field.
+    let f = s.mk_fvar(0, c);
+    assert_eq!(f.tier(), Tier::Scratch);
+    let af = s.mk_app(a, f);
+    assert_eq!(af.tier(), Tier::Scratch);
+    assert!(s.flags(af).has(Flags::HAS_FVAR));
+    assert_eq!(s.hash(a), {
+        let mut t = Store::new();
+        let nat = name(&mut t, "Nat");
+        let empty = t.level_list_empty();
+        let c = t.mk_const(nat, empty);
+        let x = t.anon();
+        let b0 = t.mk_bvar(0);
+        let lam = t.mk_lam(x, BinderInfo::Default, c, b0);
+        let a = t.mk_app(lam, c);
+        t.hash(a)
+    });
+    assert_eq!(s.expr_total(), frozen);
+    assert_eq!(s.scratch_total(), 3);
+    s.clear_scratch();
+    assert!(!s.uses_scratch());
+    assert_eq!(s.scratch_total(), 0);
+    // After the clear, the same term is made again in the frozen tier.
+    let a2 = s.mk_app(lam, c);
+    assert_eq!(a2.tier(), Tier::Frozen);
+    assert_eq!(s.expr_total(), frozen + 1);
+    // A second declaration with scratch on finds the frozen node.
+    s.set_scratch(true);
+    assert_eq!(s.mk_app(lam, c), a2);
+    s.clear_scratch();
+}

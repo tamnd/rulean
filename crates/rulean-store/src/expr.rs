@@ -125,7 +125,8 @@ pub(crate) struct Nodes {
 }
 
 impl Nodes {
-    pub(crate) fn new() -> Nodes {
+    /// New empty node arrays. The scratch tier uses a table with epochs, so `clear` is O(1) for the table.
+    pub(crate) fn new(use_epochs: bool) -> Nodes {
         Nodes {
             bvar: Vec::new(),
             sort: Vec::new(),
@@ -149,8 +150,28 @@ impl Nodes {
                 Vec::new(),
                 Vec::new(),
             ],
-            table: Table::new(false),
+            table: Table::new(use_epochs),
         }
+    }
+
+    /// Removes every node. The arrays keep their capacity, so the next declaration does not allocate again.
+    pub(crate) fn clear(&mut self) {
+        self.bvar.truncate(0);
+        self.sort.truncate(0);
+        self.cnst.truncate(0);
+        self.app.truncate(0);
+        self.lam.truncate(0);
+        self.pi.truncate(0);
+        self.let_.truncate(0);
+        self.lit.truncate(0);
+        self.proj.truncate(0);
+        self.fvar.truncate(0);
+        let mut k = 0;
+        while k < KIND_COUNT {
+            self.sides[k].truncate(0);
+            k += 1;
+        }
+        self.table.clear();
     }
 
     fn get(&self, kind: Kind, i: usize) -> Expr {
@@ -245,15 +266,112 @@ fn pack(range: u32, flags: u8) -> u32 {
     range | (flags as u32) << 24
 }
 
+/// True if a field of the node is a scratch handle.
+fn has_scratch_field(node: Expr) -> bool {
+    match node {
+        Expr::App(f, a) => f.tier() == Tier::Scratch || a.tier() == Tier::Scratch,
+        Expr::Lam(b) => b.dom.tier() == Tier::Scratch || b.body.tier() == Tier::Scratch,
+        Expr::Pi(b) => b.dom.tier() == Tier::Scratch || b.body.tier() == Tier::Scratch,
+        Expr::Let(l) => {
+            l.ty.tier() == Tier::Scratch
+                || l.value.tier() == Tier::Scratch
+                || l.body.tier() == Tier::Scratch
+        }
+        Expr::Proj(p) => p.expr.tier() == Tier::Scratch,
+        Expr::FVar(_, t) => t.tier() == Tier::Scratch,
+        _ => false,
+    }
+}
+
+/// The walk for a node in the table of one tier. The result is (found, value, position): the value is the handle if found is true, and the position is the free slot where the walk stopped if found is false.
+fn probe(nodes: &Nodes, node: Expr, h: u32) -> (bool, u32, usize) {
+    let kind = node.kind();
+    let mut pos = nodes.table.start(h);
+    // `ExprId(0)` is a valid handle (bound variable node 0), so a flag says if the walk found the node.
+    let mut hit = false;
+    let mut found: u32 = 0;
+    let mut walking = true;
+    while walking {
+        match nodes.table.get(pos) {
+            Probe::Free => walking = false,
+            Probe::Full(hh, v) => {
+                let id = ExprId(v);
+                if hh == h && id.kind() == kind && nodes.get(kind, id.index()) == node {
+                    hit = true;
+                    found = v;
+                    walking = false;
+                } else {
+                    pos = nodes.table.next(pos);
+                }
+            }
+        }
+    }
+    (hit, found, pos)
+}
+
+/// Adds a node that is not in the table to the arrays of one tier, at the free slot `pos` of the walk. The result is None if the array of the kind is full.
+fn push_node(
+    nodes: &mut Nodes,
+    tier: Tier,
+    node: Expr,
+    h: u32,
+    info: u32,
+    pos: usize,
+) -> Option<ExprId> {
+    let kind = node.kind();
+    if nodes.count(kind) >= MAX_INDEX as usize {
+        None
+    } else {
+        let id = ExprId::new(tier, kind, nodes.count(kind) as u32);
+        nodes.push(node);
+        nodes.sides[kind as usize].push(Side { hash: h, info });
+        nodes.table.put(pos, h, id.0);
+        Some(id)
+    }
+}
+
 impl Store {
     /// The node of an expression.
     pub fn node(&self, e: ExprId) -> Expr {
-        self.exprs.get(e.kind(), e.index())
+        match e.tier() {
+            Tier::Frozen => self.exprs.get(e.kind(), e.index()),
+            Tier::Scratch => self.scratch.get(e.kind(), e.index()),
+        }
     }
 
     /// The side record of an expression.
     pub fn side(&self, e: ExprId) -> Side {
-        self.exprs.sides[e.kind() as usize][e.index()]
+        match e.tier() {
+            Tier::Frozen => self.exprs.sides[e.kind() as usize][e.index()],
+            Tier::Scratch => self.scratch.sides[e.kind() as usize][e.index()],
+        }
+    }
+
+    /// Puts the nodes that the next `mk_*` calls make in the scratch tier if `on` is true (spec 04.8). A node that is already in the frozen tier keeps its frozen handle. So a term has one handle while the frozen tier does not change.
+    pub fn set_scratch(&mut self, on: bool) {
+        self.use_scratch = on;
+    }
+
+    /// True if new nodes go to the scratch tier.
+    pub fn uses_scratch(&self) -> bool {
+        self.use_scratch
+    }
+
+    /// Removes every scratch node and puts new nodes in the frozen tier again. After this call a scratch handle is not valid. The caller must not keep one.
+    pub fn clear_scratch(&mut self) {
+        self.scratch.clear();
+        self.use_scratch = false;
+    }
+
+    /// The number of scratch nodes of all kinds.
+    pub fn scratch_total(&self) -> usize {
+        let mut n = 0;
+        let mut k = 0;
+        while k < KIND_COUNT {
+            n += self.scratch.sides[k].len();
+            k += 1;
+        }
+        n
     }
 
     /// The structural hash of an expression.
@@ -293,38 +411,31 @@ impl Store {
     }
 
     fn intern_expr(&mut self, node: Expr, h: u32, info: u32) -> ExprId {
-        let kind = node.kind();
-        let mut pos = self.exprs.table.start(h);
-        // `ExprId(0)` is a valid handle (bound variable node 0), so a flag says if the walk found the node.
-        let mut hit = false;
-        let mut found: u32 = 0;
-        let mut walking = true;
-        while walking {
-            match self.exprs.table.get(pos) {
-                Probe::Free => walking = false,
-                Probe::Full(hh, v) => {
-                    let id = ExprId(v);
-                    if hh == h && id.kind() == kind && self.exprs.get(kind, id.index()) == node {
-                        hit = true;
-                        found = v;
-                        walking = false;
-                    } else {
-                        pos = self.exprs.table.next(pos);
-                    }
-                }
+        // A frozen node has only frozen fields, so a node with a scratch field is not in the frozen tier.
+        let scratch_field = has_scratch_field(node);
+        let mut fpos: usize = 0;
+        if !scratch_field {
+            let (hit, found, pos) = probe(&self.exprs, node, h);
+            if hit {
+                return ExprId(found);
             }
+            fpos = pos;
         }
-        if hit {
-            ExprId(found)
-        } else if self.exprs.count(kind) >= MAX_INDEX as usize {
-            self.full = true;
-            ExprId::new(Tier::Frozen, kind, 0)
+        let r = if !self.use_scratch {
+            push_node(&mut self.exprs, Tier::Frozen, node, h, info, fpos)
         } else {
-            let id = ExprId::new(Tier::Frozen, kind, self.exprs.count(kind) as u32);
-            self.exprs.push(node);
-            self.exprs.sides[kind as usize].push(Side { hash: h, info });
-            self.exprs.table.put(pos, h, id.0);
-            id
+            let (hit, found, pos) = probe(&self.scratch, node, h);
+            if hit {
+                return ExprId(found);
+            }
+            push_node(&mut self.scratch, Tier::Scratch, node, h, info, pos)
+        };
+        match r {
+            Some(id) => id,
+            None => {
+                self.full = true;
+                ExprId::new(Tier::Frozen, node.kind(), 0)
+            }
         }
     }
 

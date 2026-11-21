@@ -12,6 +12,8 @@
 #![allow(clippy::vec_init_then_push)]
 // `is_empty` is outside the modelled `Vec` functions too.
 #![allow(clippy::len_zero)]
+// `Vec::clear` is outside the modelled functions too.
+#![allow(clippy::manual_clear)]
 
 extern crate alloc;
 
@@ -76,6 +78,9 @@ pub struct Store {
     pub(crate) nat_table: Table,
     // Expressions of the frozen tier.
     pub(crate) exprs: expr::Nodes,
+    // Expressions of the scratch tier, and true if new nodes go there (spec 04.8).
+    pub(crate) scratch: expr::Nodes,
+    pub(crate) use_scratch: bool,
     pub(crate) full: bool,
 }
 
@@ -108,7 +113,9 @@ impl Store {
             nats: Vec::new(),
             nat_hash: Vec::new(),
             nat_table: Table::new(false),
-            exprs: expr::Nodes::new(),
+            exprs: expr::Nodes::new(false),
+            scratch: expr::Nodes::new(true),
+            use_scratch: false,
             full: false,
         };
         s.init_names();
@@ -128,7 +135,8 @@ impl Store {
             + self.level_table.bytes()
             + self.list_table.bytes()
             + self.nat_table.bytes()
-            + self.exprs.table.bytes();
+            + self.exprs.table.bytes()
+            + self.scratch.table.bytes();
         let mut nat_bytes = self.nats.capacity() * core::mem::size_of::<Nat>();
         let mut i = 0;
         while i < self.nats.len() {
@@ -138,7 +146,7 @@ impl Store {
             i += 1;
         }
         Memory {
-            exprs: self.exprs.bytes(),
+            exprs: self.exprs.bytes() + self.scratch.bytes(),
             names: self.names.capacity() * core::mem::size_of::<Name>()
                 + self.name_hash.capacity() * 4,
             strings: self.str_bytes.capacity()

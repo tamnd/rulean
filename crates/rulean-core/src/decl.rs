@@ -4,7 +4,7 @@
 
 use alloc::vec::Vec;
 use rulean_format::{Axiom, Decl, Defn, Opaque, Quot, QuotKind, Safety, Thm};
-use rulean_store::{BinderInfo, ExprId, LevelId, NameId};
+use rulean_store::{BinderInfo, ExprId, LevelId, NameId, Tier};
 
 use crate::env::{ConstInfo, ConstKind};
 use crate::expr;
@@ -115,6 +115,17 @@ impl Checker {
         safety: Safety,
         kind: ConstKind,
     ) {
+        // A scratch term is removed at the end of the declaration, so the environment must not keep one. The kinds that use the scratch tier keep only input terms, so this is a check of that rule.
+        let value = match &kind {
+            ConstKind::Defn { value, hints: _ } => *value,
+            ConstKind::Thm { value } => *value,
+            ConstKind::Opaque { value } => *value,
+            _ => ty,
+        };
+        if ty.tier() == Tier::Scratch || value.tier() == Tier::Scratch {
+            self.fail(ErrorKind::Unsupported, ty);
+            return;
+        }
         self.env.add(ConstInfo {
             name,
             lparams,
@@ -514,18 +525,46 @@ impl Checker {
     }
 
     /// Checks one declaration of the stream and adds it to the environment. Then it compares the new primitives with their references (spec 05.8).
+    ///
+    /// The terms that the check of an axiom, a definition, a theorem or an opaque constant makes go to the scratch tier of the store, and the call removes them at the end (spec 04.8). These constants keep only input terms in the environment, so no scratch handle stays. An inductive or a quotient declaration adds terms that the checker makes, such as the recursor rules, so it uses the frozen tier. If the fault is at a scratch term, `Fault::at` is the dummy term after the call.
     pub fn add_decl(&mut self, d: &Decl) -> Option<Fault> {
-        let r = match d {
-            Decl::Axiom(a) => self.add_axiom(a),
-            Decl::Defn(x) => self.add_definition(x),
-            Decl::Thm(t) => self.add_theorem(t),
-            Decl::Opaque(o) => self.add_opaque(o),
+        let r0 = match d {
+            Decl::Axiom(a) => {
+                self.st.set_scratch(true);
+                self.add_axiom(a)
+            }
+            Decl::Defn(x) => {
+                self.st.set_scratch(true);
+                self.add_definition(x)
+            }
+            Decl::Thm(t) => {
+                self.st.set_scratch(true);
+                self.add_theorem(t)
+            }
+            Decl::Opaque(o) => {
+                self.st.set_scratch(true);
+                self.add_opaque(o)
+            }
             Decl::Quot(q) => self.add_quot(q),
             Decl::Induct(i) => self.add_inductive(i),
         };
+        let r = if r0.is_none() { self.fault() } else { r0 };
         if r.is_none() {
             self.check_pins();
         }
-        r
+        self.st.clear_scratch();
+        match r {
+            Some(f) => {
+                if f.at.tier() == Tier::Scratch {
+                    Some(Fault {
+                        kind: f.kind,
+                        at: self.dummy,
+                    })
+                } else {
+                    Some(f)
+                }
+            }
+            None => None,
+        }
     }
 }

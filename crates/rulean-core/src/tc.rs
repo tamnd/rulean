@@ -159,7 +159,7 @@ pub struct Builtins {
     pub e_list_nil_char: ExprId,
     /// The binary operations of `reduce_nat` as constants with no levels, in the order of the `NAT_*` indices.
     pub nat_ops: Vec<ExprId>,
-    /// The names of the pinned primitives, in the order of `pin::TARGET_NAMES`.
+    /// The names of the pinned primitives, in the order of `pin::TARGET_REF`.
     pub pin_names: Vec<NameId>,
 }
 
@@ -181,7 +181,7 @@ fn nat_op(st: &mut Store, out: &mut Vec<ExprId>, op: &[u8]) {
 }
 
 /// The name with the parts of `b`, separated by a dot.
-fn dotted_name(st: &mut Store, b: &[u8]) -> NameId {
+pub(crate) fn dotted_name(st: &mut Store, b: &[u8]) -> NameId {
     let mut n = st.anon();
     let mut part: Vec<u8> = Vec::new();
     let mut i = 0;
@@ -256,13 +256,7 @@ impl Builtins {
         nat_op(st, &mut nat_ops, b"xor");
         nat_op(st, &mut nat_ops, b"shiftLeft");
         nat_op(st, &mut nat_ops, b"shiftRight");
-        let mut pin_names = Vec::with_capacity(pin::TARGET_COUNT);
-        let mut k = 0;
-        while k < pin::TARGET_COUNT {
-            let n = dotted_name(st, pin::TARGET_NAMES[k]);
-            pin_names.push(n);
-            k += 1;
-        }
+        let pin_names = pin::target_names(st);
         Builtins {
             nat,
             nat_zero,

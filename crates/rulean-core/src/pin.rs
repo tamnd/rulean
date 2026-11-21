@@ -11,7 +11,7 @@ use rulean_store::{Expr, ExprId, Level, LevelId, LevelListId, Literal, Name, Nam
 use crate::env::ConstKind;
 use crate::memo::Memo;
 use crate::sha256::sha256;
-use crate::tc::Checker;
+use crate::tc::{Checker, dotted_name};
 
 /// The bit of the `Nat` group: the literal to constructor conversion, the offset rule and all `Nat` operations. Bits 0 to 13 are the binary operations, in the order of the `nat_ops` table.
 pub const PIN_NAT: u32 = 1 << 14;
@@ -23,30 +23,53 @@ pub const PIN_EAGER: u32 = 1 << 16;
 /// The number of pinned declarations.
 pub const TARGET_COUNT: usize = 21;
 
-/// The target names, in the order of `TARGET_REF`. A name is a list of parts, separated by a dot.
-pub const TARGET_NAMES: [&[u8]; TARGET_COUNT] = [
-    b"Nat",
-    b"Nat.add",
-    b"Nat.sub",
-    b"Nat.mul",
-    b"Nat.pow",
-    b"Nat.gcd",
-    b"Nat.mod",
-    b"Nat.div",
-    b"Nat.beq",
-    b"Nat.ble",
-    b"Nat.land",
-    b"Nat.lor",
-    b"Nat.xor",
-    b"Nat.shiftLeft",
-    b"Nat.shiftRight",
-    b"String",
-    b"String.ofList",
-    b"Char",
-    b"Char.ofNat",
-    b"List",
-    b"eagerReduce",
-];
+/// The handles of the target names, in the order of `TARGET_REF`. A name is a list of parts, separated by a dot. The names are literals in the calls and not a global array, because Aeneas does not translate a global array of byte strings.
+pub(crate) fn target_names(st: &mut Store) -> Vec<NameId> {
+    let mut v = Vec::with_capacity(TARGET_COUNT);
+    let n = dotted_name(st, b"Nat");
+    v.push(n);
+    let n = dotted_name(st, b"Nat.add");
+    v.push(n);
+    let n = dotted_name(st, b"Nat.sub");
+    v.push(n);
+    let n = dotted_name(st, b"Nat.mul");
+    v.push(n);
+    let n = dotted_name(st, b"Nat.pow");
+    v.push(n);
+    let n = dotted_name(st, b"Nat.gcd");
+    v.push(n);
+    let n = dotted_name(st, b"Nat.mod");
+    v.push(n);
+    let n = dotted_name(st, b"Nat.div");
+    v.push(n);
+    let n = dotted_name(st, b"Nat.beq");
+    v.push(n);
+    let n = dotted_name(st, b"Nat.ble");
+    v.push(n);
+    let n = dotted_name(st, b"Nat.land");
+    v.push(n);
+    let n = dotted_name(st, b"Nat.lor");
+    v.push(n);
+    let n = dotted_name(st, b"Nat.xor");
+    v.push(n);
+    let n = dotted_name(st, b"Nat.shiftLeft");
+    v.push(n);
+    let n = dotted_name(st, b"Nat.shiftRight");
+    v.push(n);
+    let n = dotted_name(st, b"String");
+    v.push(n);
+    let n = dotted_name(st, b"String.ofList");
+    v.push(n);
+    let n = dotted_name(st, b"Char");
+    v.push(n);
+    let n = dotted_name(st, b"Char.ofNat");
+    v.push(n);
+    let n = dotted_name(st, b"List");
+    v.push(n);
+    let n = dotted_name(st, b"eagerReduce");
+    v.push(n);
+    v
+}
 
 /// The reference digests of the `v4.35` profile, from the exports of the Lean v4.36.0 prelude. `scripts/pin-digests.py` gives these values.
 pub const TARGET_REF: [[u8; 32]; TARGET_COUNT] = include!("pin_ref_v4_35.in");

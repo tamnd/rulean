@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-11-21
+
 ### Added
 
 - `flake.nix` pins Aeneas, Charon and the Rust nightly of Charon with one Aeneas commit.
@@ -35,5 +37,6 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.1...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.2...HEAD
+[0.0.2]: https://github.com/tamnd/rulean/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/tamnd/rulean/releases/tag/v0.0.1

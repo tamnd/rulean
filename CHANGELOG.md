@@ -12,6 +12,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `scripts/proof-rules.sh` checks the source rules of spec 10.9 on the Lean files.
 - A draft of `proof/RuleanProof/Statements.lean` with the theorems T1 to T6 of spec 10.1, stated over an interface of the objects that later milestones add.
 - `scripts/leanchecker.sh` checks the proof package and all of its imports with the official kernel.
+- `rulean-bench run` runs a checker on each test of a corpus and records the instructions, the wall time, the CPU time and the peak memory in the format of the Arena. It counts instructions with `perf`, valgrind cachegrind or the macOS `time -l`.
+- `rulean-bench compare` compares the instruction counts of two runs, or of a run and the Arena `results.json`.
 
 ## [0.0.1] - 2026-11-21
 

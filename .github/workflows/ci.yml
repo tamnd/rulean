@@ -98,7 +98,17 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: false
-      - run: cargo build --locked --bin rulean
+      - run: cargo build --locked --bin rulean --bin rulean-bench
+      # The bench harness runs `true` and `false` as the checker on one good test and one bad test. GitHub-hosted runners have no hardware counters, so the counter is none.
+      - name: bench harness
+        run: |
+          mkdir -p _tmp/bench/good _tmp/bench/bad
+          touch _tmp/bench/good/a.ndjson _tmp/bench/bad/b.ndjson
+          target/debug/rulean-bench run --counter none --out _tmp/bench/true.json _tmp/bench -- true {}
+          target/debug/rulean-bench run --counter none --out _tmp/bench/false.json _tmp/bench -- false {}
+          jq -e '[.results[].correctness] == ["correct", "incorrect"]' _tmp/bench/true.json
+          jq -e '[.results[].correctness] == ["incorrect", "correct"]' _tmp/bench/false.json
+          jq -e '.results[0].max_rss > 0' _tmp/bench/true.json
       - name: help and version
         run: |
           target/debug/rulean help

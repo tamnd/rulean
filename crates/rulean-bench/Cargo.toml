@@ -13,5 +13,12 @@ publish = false
 # The layer of spec section 03.2. xtask checks the dependency rule of 03.3 from this value.
 layer = "tool"
 
+[[bin]]
+name = "rulean-bench"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"
+
 [lints]
 workspace = true

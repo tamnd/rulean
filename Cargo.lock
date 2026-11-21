@@ -35,6 +35,9 @@ dependencies = [
 [[package]]
 name = "rulean-bench"
 version = "0.0.1"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "rulean-cli"

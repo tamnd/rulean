@@ -23,6 +23,9 @@
 // `RangeInclusive::contains` and `Option::is_none` are outside the modelled functions too, so the code compares and matches by hand.
 #![allow(clippy::manual_range_contains)]
 #![allow(clippy::redundant_pattern_matching)]
+// scripts/extract.sh sets `--cfg rulean_extract`. Then Charon reads the `charon::opaque` attribute on functions that give message texts only.
+#![cfg_attr(rulean_extract, feature(register_tool))]
+#![cfg_attr(rulean_extract, register_tool(charon))]
 
 extern crate alloc;
 

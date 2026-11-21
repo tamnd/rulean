@@ -333,6 +333,8 @@ impl Scanner {
     }
 
     /// Skips one JSON value that starts at `start`, and checks that it is well-formed. The result is the position after the value. The nesting is kept on a stack, so a deep value uses no call stack.
+    ///
+    /// The loop body is in two functions, `skip_open` and `skip_close`. Each step gives the new position and the new value of `want_value`. This keeps the loop state small for Aeneas.
     pub fn skip_value(&mut self, b: &[u8], start: usize) -> usize {
         self.stack.clear();
         let mut i = start;
@@ -342,68 +344,71 @@ impl Scanner {
             if !want_value && self.stack.len() == 0 {
                 done = true;
             } else if want_value {
-                i = skip_ws(b, i);
-                match at(b, i) {
-                    b'{' => {
-                        i = skip_ws(b, i + 1);
-                        if at(b, i) == b'}' {
-                            i += 1;
-                            want_value = false;
-                        } else {
-                            self.stack.push(b'{');
-                            i = self.skip_key(b, i);
-                        }
-                    }
-                    b'[' => {
-                        i = skip_ws(b, i + 1);
-                        if at(b, i) == b']' {
-                            i += 1;
-                            want_value = false;
-                        } else {
-                            self.stack.push(b'[');
-                        }
-                    }
-                    b'"' => {
-                        i = self.skip_string(b, i);
-                        want_value = false;
-                    }
-                    b'-' | b'0'..=b'9' => {
-                        i = self.skip_number(b, i);
-                        want_value = false;
-                    }
-                    b't' => {
-                        i = self.skip_literal(b, i, b"true");
-                        want_value = false;
-                    }
-                    b'f' => {
-                        i = self.skip_literal(b, i, b"false");
-                        want_value = false;
-                    }
-                    b'n' => {
-                        i = self.skip_literal(b, i, b"null");
-                        want_value = false;
-                    }
-                    _ => self.fail(ErrorKind::BadJson),
-                }
+                let (j, w) = self.skip_open(b, i);
+                i = j;
+                want_value = w;
             } else {
-                i = skip_ws(b, i);
-                let top = self.stack[self.stack.len() - 1];
-                let c = at(b, i);
-                if c == b',' {
-                    i = skip_ws(b, i + 1);
-                    if top == b'{' {
-                        i = self.skip_key(b, i);
-                    }
-                    want_value = true;
-                } else if (c == b'}' && top == b'{') || (c == b']' && top == b'[') {
-                    self.stack.pop();
-                    i += 1;
-                } else {
-                    self.fail(ErrorKind::BadJson);
-                }
+                let (j, w) = self.skip_close(b, i);
+                i = j;
+                want_value = w;
             }
         }
         i
+    }
+
+    /// One step of `skip_value` where a value must come next. It skips a scalar value, or it opens an array or an object.
+    fn skip_open(&mut self, b: &[u8], start: usize) -> (usize, bool) {
+        let mut i = skip_ws(b, start);
+        let mut want_value = false;
+        match at(b, i) {
+            b'{' => {
+                i = skip_ws(b, i + 1);
+                if at(b, i) == b'}' {
+                    i += 1;
+                } else {
+                    self.stack.push(b'{');
+                    i = self.skip_key(b, i);
+                    want_value = true;
+                }
+            }
+            b'[' => {
+                i = skip_ws(b, i + 1);
+                if at(b, i) == b']' {
+                    i += 1;
+                } else {
+                    self.stack.push(b'[');
+                    want_value = true;
+                }
+            }
+            b'"' => i = self.skip_string(b, i),
+            b'-' | b'0'..=b'9' => i = self.skip_number(b, i),
+            b't' => i = self.skip_literal(b, i, b"true"),
+            b'f' => i = self.skip_literal(b, i, b"false"),
+            b'n' => i = self.skip_literal(b, i, b"null"),
+            _ => self.fail(ErrorKind::BadJson),
+        }
+        (i, want_value)
+    }
+
+    /// One step of `skip_value` after a value inside an array or an object. It reads a comma or the closing bracket.
+    fn skip_close(&mut self, b: &[u8], start: usize) -> (usize, bool) {
+        let mut i = skip_ws(b, start);
+        let mut want_value = false;
+        let top = self.stack[self.stack.len() - 1];
+        let c = at(b, i);
+        if c == b',' {
+            i = skip_ws(b, i + 1);
+            if top == b'{' {
+                i = self.skip_key(b, i);
+            }
+            want_value = true;
+        } else if (c == b'}' && top == b'{') || (c == b']' && top == b'[') {
+            self.stack.pop();
+            i += 1;
+        } else {
+            self.fail(ErrorKind::BadJson);
+        }
+        (i, want_value)
     }
 
     /// Decodes the string between the quotes `start..end` into `self.buf` (`to_key` false) or `self.kbuf` (`to_key` true).

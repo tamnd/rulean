@@ -59,6 +59,9 @@ impl ErrorKind {
     }
 
     /// A short text for messages.
+    ///
+    /// Aeneas does not translate a `match` that gives string constants. The text is not part of the verified behavior, so the extract keeps this function opaque.
+    #[cfg_attr(rulean_extract, charon::opaque)]
     pub fn text(self) -> &'static str {
         match self {
             ErrorKind::EmptyLine => "empty line",

@@ -24,7 +24,7 @@ The exit code of the checker gives the status: 0 is `accepted`, 1 is `rejected`,
 | `rusage` | macOS | `instructions retired` of `/usr/bin/time -l`; includes the system calls |
 | `none` | all | no count |
 
-`--counter auto` (the default) selects `perf` if it gives a count, then `cachegrind`, then `rusage` on macOS. GitHub-hosted runners do not expose the hardware counters, so `perf` does not work on them. Compare only the numbers of the same counter on the same kind of machine. Only `perf` numbers can be compared with the Arena numbers.
+`--counter auto` (the default) selects `perf` if it gives a count, then `cachegrind`, then `rusage` on macOS. GitHub-hosted runners do not expose the hardware counters, so `perf` does not work on them. With `cachegrind`, `--cachegrind-max SECONDS` counts only the tests whose first run took at most that time, so that the large tests do not take hours. Compare only the numbers of the same counter on the same kind of machine. Only `perf` numbers can be compared with the Arena numbers.
 
 The CPU time and the peak memory come from `/usr/bin/time`. On a machine without it, they are 0.
 

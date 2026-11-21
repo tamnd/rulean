@@ -97,6 +97,8 @@ pub struct Limits {
     pub timeout: Option<Duration>,
     /// Keep at most this many bytes of the standard output and of the standard error.
     pub output_cap: usize,
+    /// With the `cachegrind` counter, count a test only if its first run took at most this time. The valgrind run is about 50 times slower than the first run.
+    pub cachegrind_max: Option<Duration>,
 }
 
 /// The measures of one run.
@@ -175,7 +177,10 @@ fn measure_in(
             .as_deref()
             .and_then(parse_perf);
     }
-    if counter == Counter::Cachegrind && !sample.timed_out {
+    let short = limits
+        .cachegrind_max
+        .is_none_or(|max| sample.wall_time <= max.as_secs_f64());
+    if counter == Counter::Cachegrind && !sample.timed_out && short {
         sample.instructions = cachegrind(argv, input, limits, work)?;
     }
     Ok(sample)
@@ -202,7 +207,7 @@ fn cachegrind(
     // The valgrind run is slow, so it gets no timeout of its own. The first run already passed the timeout.
     let slow = Limits {
         timeout: None,
-        output_cap: limits.output_cap,
+        ..*limits
     };
     run_bounded(&full, input, &slow)?;
     let mut total: Option<u64> = None;
@@ -543,6 +548,7 @@ mod tests {
         let limits = Limits {
             timeout: None,
             output_cap: 4,
+            cachegrind_max: None,
         };
         let sample = measure(
             &sh("echo \"$IN\"; exit 3"),
@@ -562,6 +568,7 @@ mod tests {
         let limits = Limits {
             timeout: Some(Duration::from_millis(200)),
             output_cap: 64,
+            cachegrind_max: None,
         };
         let sample = measure(&sh("sleep 30"), Path::new("x"), Counter::None, &limits).expect("run");
         assert!(sample.timed_out);

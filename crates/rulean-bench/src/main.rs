@@ -20,6 +20,9 @@ commands:
       --checker NAME      the checker name in the results (default: the program name)
       --counter KIND      auto, perf, cachegrind, rusage or none (default: auto)
       --timeout SECONDS   stop a test after this time
+      --cachegrind-max SECONDS
+                          with the cachegrind counter, count only the tests
+                          whose first run took at most this time
       --filter TEXT       run only the tests whose name contains TEXT
       --out FILE          write the results to FILE (default: standard output)
 
@@ -82,6 +85,7 @@ struct RunArgs {
     checker: Option<String>,
     counter: Option<Counter>,
     timeout: Option<Duration>,
+    cachegrind_max: Option<Duration>,
     filter: Option<String>,
     out: Option<PathBuf>,
     tests: Vec<PathBuf>,
@@ -98,6 +102,7 @@ fn parse_run(args: &[String]) -> Result<RunArgs, Failure> {
         checker: None,
         counter: None,
         timeout: None,
+        cachegrind_max: None,
         filter: None,
         out: None,
         tests: Vec::new(),
@@ -119,15 +124,8 @@ fn parse_run(args: &[String]) -> Result<RunArgs, Failure> {
                         .ok_or_else(|| Failure::Usage(format!("unknown counter `{text}`")))?,
                 );
             }
-            "--timeout" => {
-                let text = value()?;
-                let seconds: f64 = text
-                    .parse()
-                    .ok()
-                    .filter(|s: &f64| s.is_finite() && *s > 0.0)
-                    .ok_or_else(|| Failure::Usage(format!("bad timeout `{text}`")))?;
-                parsed.timeout = Some(Duration::from_secs_f64(seconds));
-            }
+            "--timeout" => parsed.timeout = Some(seconds(arg, &value()?)?),
+            "--cachegrind-max" => parsed.cachegrind_max = Some(seconds(arg, &value()?)?),
             "--filter" => parsed.filter = Some(value()?),
             "--out" => parsed.out = Some(PathBuf::from(value()?)),
             flag if flag.starts_with("--") => {
@@ -145,6 +143,14 @@ fn parse_run(args: &[String]) -> Result<RunArgs, Failure> {
     Ok(parsed)
 }
 
+fn seconds(option: &str, text: &str) -> Result<Duration, Failure> {
+    text.parse()
+        .ok()
+        .filter(|s: &f64| s.is_finite() && *s > 0.0)
+        .map(Duration::from_secs_f64)
+        .ok_or_else(|| Failure::Usage(format!("bad value `{text}` for `{option}`")))
+}
+
 fn run(args: &[String]) -> Result<u8, Failure> {
     let args = parse_run(args)?;
     let counter = args.counter.unwrap_or_else(Counter::detect);
@@ -159,6 +165,7 @@ fn run(args: &[String]) -> Result<u8, Failure> {
     let limits = Limits {
         timeout: args.timeout,
         output_cap: 16 * 1024,
+        cachegrind_max: args.cachegrind_max,
     };
     let started = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -362,6 +369,8 @@ mod tests {
             "none",
             "--timeout",
             "1.5",
+            "--cachegrind-max",
+            "2",
             "tests",
             "--",
             "leanchecker",
@@ -371,6 +380,7 @@ mod tests {
         .expect("parse");
         assert_eq!(args.counter, Some(Counter::None));
         assert_eq!(args.timeout, Some(Duration::from_millis(1500)));
+        assert_eq!(args.cachegrind_max, Some(Duration::from_secs(2)));
         assert_eq!(args.tests, [PathBuf::from("tests")]);
         assert_eq!(args.command, ["leanchecker", "--from-export", "{}"]);
     }

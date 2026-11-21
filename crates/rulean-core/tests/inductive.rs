@@ -272,3 +272,198 @@ fn type_that_is_not_a_sort_is_rejected() {
     let ity = t.ind_type("S", lam_ty, 0, &[]);
     assert!(t.add(vec![ity], Vec::new(), Vec::new()).is_some());
 }
+
+// Nested inductive types.
+
+/// The universe parameter `u` and the sort `Sort u`.
+fn sort_u(t: &mut T) -> (NameId, ExprId) {
+    let u = t.name("u");
+    let lu = t.c.st.level_param(u);
+    (u, t.c.st.mk_sort(lu))
+}
+
+/// A constant with the level `u`.
+fn const_u(t: &mut T, s: &str, u: NameId) -> ExprId {
+    let n = t.name(s);
+    let lu = t.c.st.level_param(u);
+    let ls = t.c.st.level_list(&[lu]);
+    t.c.st.mk_const(n, ls)
+}
+
+/// `inductive Bx (a : Type) : Type | mk : a -> Bx a`, with its recursor.
+fn add_box(t: &mut T) {
+    let ty = t.sort(1);
+    let bx = t.k("Bx");
+    let bx_ty = t.pi("a", ty, ty);
+    let ity = t.ind_type("Bx", bx_ty, 1, &["Bx.mk"]);
+    let v0 = t.bv(0);
+    let v1 = t.bv(1);
+    let v2 = t.bv(2);
+    let bx_v1 = t.app(bx, &[v1]);
+    let mk_body = t.pi("x", v0, bx_v1);
+    let mk_ty = t.pi("a", ty, mk_body);
+    let c = t.ctor("Bx.mk", mk_ty, "Bx", 0, 1, 1);
+    // Bx.rec.{u} : {a : Type} -> {motive : Bx a -> Sort u} -> ((x : a) -> motive (Bx.mk a x)) -> (t : Bx a) -> motive t
+    let (u, su) = sort_u(t);
+    let bx_v0 = t.app(bx, &[v0]);
+    let motive_ty = t.pi("t", bx_v0, su);
+    let bmk = t.k("Bx.mk");
+    let mk_app = t.app(bmk, &[v2, v0]);
+    let m_mk = t.app(v1, &[mk_app]);
+    let minor = t.pi("x", v1, m_mk);
+    let bx_v2 = t.app(bx, &[v2]);
+    let m_t = t.app(v2, &[v0]);
+    let r = t.pi("t", bx_v2, m_t);
+    let r = t.pi("mk", minor, r);
+    let r = t.ipi("motive", motive_ty, r);
+    let rec_ty = t.ipi("a", ty, r);
+    let body = t.app(v1, &[v0]);
+    let rhs = t.lam("x", v2, body);
+    let rhs = t.lam("mk", minor, rhs);
+    let rhs = t.lam("motive", motive_ty, rhs);
+    let rhs = t.lam("a", ty, rhs);
+    let rec = Rec {
+        name: t.name("Bx.rec"),
+        lparams: vec![u],
+        ty: rec_ty,
+        all: vec![t.name("Bx")],
+        num_params: 1,
+        num_indices: 0,
+        num_motives: 1,
+        num_minors: 1,
+        k: false,
+        rules: vec![RecRule {
+            ctor: t.name("Bx.mk"),
+            nfields: 1,
+            rhs,
+        }],
+        safety: Safety::Safe,
+    };
+    assert_eq!(t.add(vec![ity], vec![c], vec![rec]), None);
+}
+
+/// `inductive N : Type | mk : Bx N -> N`, with `N.rec` and the auxiliary recursor `N.rec_1`.
+fn nested_block(t: &mut T) -> (Vec<InductType>, Vec<Ctor>, Vec<Rec>) {
+    let ty = t.sort(1);
+    let n = t.k("N");
+    let bx = t.k("Bx");
+    let bxn = t.app(bx, &[n]);
+    let mk_ty = t.pi("x", bxn, n);
+    let mut ity = t.ind_type("N", ty, 0, &["N.mk"]);
+    ity.num_nested = 1;
+    ity.is_rec = true;
+    let c = t.ctor("N.mk", mk_ty, "N", 0, 0, 1);
+    let (u, su) = sort_u(t);
+    let v: Vec<ExprId> = (0..5).map(|i| t.bv(i)).collect();
+    let m1_ty = t.pi("t", n, su);
+    let m2_ty = t.pi("t", bxn, su);
+    // mk : (x : Bx N) -> motive_2 x -> motive_1 (N.mk x), under motive_1 and motive_2.
+    let nmk = t.k("N.mk");
+    let nmk_x = t.app(nmk, &[v[1]]);
+    let m1_nmk = t.app(v[3], &[nmk_x]);
+    let ih1 = t.app(v[1], &[v[0]]);
+    let minor1 = t.pi("x_ih", ih1, m1_nmk);
+    let minor1 = t.pi("x", bxn, minor1);
+    // mk : (x : N) -> motive_1 x -> motive_2 (Bx.mk N x), under motive_1, motive_2 and the first minor.
+    let bmk = t.k("Bx.mk");
+    let bmk_x = t.app(bmk, &[n, v[1]]);
+    let m2_bmk = t.app(v[3], &[bmk_x]);
+    let ih2 = t.app(v[3], &[v[0]]);
+    let minor2 = t.pi("x_ih", ih2, m2_bmk);
+    let minor2 = t.pi("x", n, minor2);
+    let mut recs = Vec::new();
+    let names = ["N.rec", "N.rec_1"];
+    let majors = [n, bxn];
+    let motive_vars = [4u32, 3u32];
+    let ctors = ["N.mk", "Bx.mk"];
+    for j in 0..2 {
+        let mv = t.bv(motive_vars[j]);
+        let body = t.app(mv, &[v[0]]);
+        let r = t.pi("t", majors[j], body);
+        let r = t.pi("mk", minor2, r);
+        let r = t.pi("mk", minor1, r);
+        let r = t.ipi("motive_2", m2_ty, r);
+        let rec_ty = t.ipi("motive_1", m1_ty, r);
+        // The rule: fun motive_1 motive_2 mk mk x => mk x (other_rec motive_1 motive_2 mk mk x).
+        let other = const_u(t, names[1 - j], u);
+        let call = t.app(other, &[v[4], v[3], v[2], v[1], v[0]]);
+        let minor = if j == 0 { v[2] } else { v[1] };
+        let body = t.app(minor, &[v[0], call]);
+        let field_ty = if j == 0 { bxn } else { n };
+        let rhs = t.lam("x", field_ty, body);
+        let rhs = t.lam("mk", minor2, rhs);
+        let rhs = t.lam("mk", minor1, rhs);
+        let rhs = t.lam("motive_2", m2_ty, rhs);
+        let rhs = t.lam("motive_1", m1_ty, rhs);
+        recs.push(Rec {
+            name: t.name(names[j]),
+            lparams: vec![u],
+            ty: rec_ty,
+            all: vec![t.name("N")],
+            num_params: 0,
+            num_indices: 0,
+            num_motives: 2,
+            num_minors: 2,
+            k: false,
+            rules: vec![RecRule {
+                ctor: t.name(ctors[j]),
+                nfields: 1,
+                rhs,
+            }],
+            safety: Safety::Safe,
+        });
+    }
+    (vec![ity], vec![c], recs)
+}
+
+#[test]
+fn nested_type_is_accepted() {
+    let mut t = T::new();
+    add_box(&mut t);
+    let (types, ctors, recs) = nested_block(&mut t);
+    assert_eq!(t.add(types, ctors, recs), None);
+    // The environment has the restored declarations and no auxiliary declaration.
+    let rec1 = t.name("N.rec_1");
+    let aux = t.name("_nested.Bx_1");
+    assert!(t.c.env.contains(rec1));
+    assert!(!t.c.env.contains(aux));
+}
+
+#[test]
+fn wrong_nested_count_is_rejected() {
+    let mut t = T::new();
+    add_box(&mut t);
+    let (mut types, ctors, recs) = nested_block(&mut t);
+    types[0].num_nested = 0;
+    assert_eq!(t.add(types, ctors, recs), Some(ErrorKind::ExportMismatch));
+}
+
+#[test]
+fn missing_auxiliary_recursor_is_rejected() {
+    let mut t = T::new();
+    add_box(&mut t);
+    let (types, ctors, mut recs) = nested_block(&mut t);
+    recs.pop();
+    assert_eq!(t.add(types, ctors, recs), Some(ErrorKind::ExportMismatch));
+}
+
+#[test]
+fn nested_parameter_with_a_local_is_rejected() {
+    // inductive L : Type | mk : (a : Type) -> Bx (a -> L) -> L
+    let mut t = T::new();
+    add_box(&mut t);
+    let ty = t.sort(1);
+    let l = t.k("L");
+    let ity = t.ind_type("L", ty, 0, &["L.mk"]);
+    let v0 = t.bv(0);
+    let f = t.pi("y", v0, l);
+    let bx = t.k("Bx");
+    let bxf = t.app(bx, &[f]);
+    let body = t.pi("x", bxf, l);
+    let cty = t.pi("a", ty, body);
+    let c = t.ctor("L.mk", cty, "L", 0, 0, 2);
+    assert_eq!(
+        t.add(vec![ity], vec![c], Vec::new()),
+        Some(ErrorKind::BadNested)
+    );
+}

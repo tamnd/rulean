@@ -1,6 +1,6 @@
 //! Inductive declarations: `environment::add_inductive` and `add_inductive_fn` of `inductive.cpp` of the official kernel v4.35.0 (spec 06.2, 06.4 and 06.6).
 //!
-//! The checker makes the inductive types, the constructors and the recursors of a block from the types and the constructor types of the export. Then it compares the other fields of the export with the values that it made (spec 06.1). The environment gets the values that the checker made. A block with a nested occurrence gives `Unsupported` in this version.
+//! The checker makes the inductive types, the constructors and the recursors of a block from the types and the constructor types of the export. Then it compares the other fields of the export with the values that it made (spec 06.1). The environment gets the values that the checker made. A block with a nested occurrence goes through `nested.rs` first.
 
 use alloc::vec::Vec;
 use rulean_format::{Induct, Safety};
@@ -16,53 +16,65 @@ use crate::tc::{Checker, ErrorKind, Fault};
 /// The kinds of search of `find`. Each kind has its own second key in the `occ` cache.
 const FIND_IND: u32 = 0;
 const FIND_AUX: u32 = 1;
-const FIND_NESTED: u32 = 2;
 
 /// The state of `add_inductive_fn` for one block.
 #[derive(Debug)]
 pub struct Ind {
-    lparams: Vec<NameId>,
+    pub(crate) lparams: Vec<NameId>,
     /// The level parameters as levels (`m_levels`).
-    levels: LevelListId,
-    nparams: u32,
-    safety: Safety,
-    is_unsafe: bool,
+    pub(crate) levels: LevelListId,
+    pub(crate) nparams: u32,
+    pub(crate) safety: Safety,
+    pub(crate) is_unsafe: bool,
     /// The names and the types of the inductive types, in block order.
-    names: Vec<NameId>,
-    types: Vec<ExprId>,
+    pub(crate) names: Vec<NameId>,
+    pub(crate) types: Vec<ExprId>,
     /// The constructors of all types, in block order. The constructors of type `k` are at `cstart[k]` to `cstart[k + 1]`.
-    cnames: Vec<NameId>,
-    ctypes: Vec<ExprId>,
-    cstart: Vec<usize>,
+    pub(crate) cnames: Vec<NameId>,
+    pub(crate) ctypes: Vec<ExprId>,
+    pub(crate) cstart: Vec<usize>,
     /// The type of each constructor, and its position in the `ctors` array of the export.
-    cowner: Vec<usize>,
-    cexport: Vec<usize>,
-    nfields: Vec<u32>,
-    nindices: Vec<u32>,
-    result_level: LevelId,
-    is_not_zero: bool,
+    pub(crate) cowner: Vec<usize>,
+    pub(crate) cexport: Vec<usize>,
+    pub(crate) nfields: Vec<u32>,
+    pub(crate) nindices: Vec<u32>,
+    pub(crate) result_level: LevelId,
+    pub(crate) is_not_zero: bool,
     /// A free variable for each parameter (`m_params`).
-    params: Vec<ExprId>,
+    pub(crate) params: Vec<ExprId>,
     /// A constant for each inductive type (`m_ind_cnsts`).
-    consts: Vec<ExprId>,
-    elim_level: LevelId,
+    pub(crate) consts: Vec<ExprId>,
+    pub(crate) elim_level: LevelId,
     /// The name of the level parameter of the motives, if the recursor has one.
-    elim_param: Option<NameId>,
-    k_target: bool,
-    is_rec: bool,
-    is_reflexive: bool,
+    pub(crate) elim_param: Option<NameId>,
+    pub(crate) k_target: bool,
+    pub(crate) is_rec: bool,
+    pub(crate) is_reflexive: bool,
     /// The fields of `m_rec_infos`. The index variables of type `k` are at `istart[k]` to `istart[k + 1]`. The minor premises are in constructor order.
-    motives: Vec<ExprId>,
-    majors: Vec<ExprId>,
-    idx: Vec<ExprId>,
-    istart: Vec<usize>,
-    minors: Vec<ExprId>,
+    pub(crate) motives: Vec<ExprId>,
+    pub(crate) majors: Vec<ExprId>,
+    pub(crate) idx: Vec<ExprId>,
+    pub(crate) istart: Vec<usize>,
+    pub(crate) minors: Vec<ExprId>,
     /// The reserved prefix `_nested`.
-    nested: NameId,
+    pub(crate) nested: NameId,
     /// The results of `find`, keyed by the term and the kind of search.
-    occ: Memo,
+    pub(crate) occ: Memo,
     /// The terms and binder offsets that `check_uniform_ind_occs` visited.
-    seen: Memo,
+    pub(crate) seen: Memo,
+    /// The number of types and of constructors of the export. The auxiliary types of `elim_nested_inductive_fn` come after them.
+    pub(crate) norig: usize,
+    pub(crate) nctors: usize,
+    /// The parameters of `elim_nested_inductive_fn` (`m_params`).
+    pub(crate) eparams: Vec<ExprId>,
+    /// The nested occurrence `I Ds` of each auxiliary type, with the free variables of `eparams` (`m_nested_aux`).
+    pub(crate) aux_nested: Vec<ExprId>,
+    /// The next index of `mk_unique_name`.
+    pub(crate) next_idx: u64,
+    /// The parameter locals of the term that `replace_all_nested` or `restore_nested` changes.
+    pub(crate) cur: Vec<ExprId>,
+    /// The results of `replace_all_nested` and `restore_nested` for the current term.
+    pub(crate) rep: Memo,
 }
 
 /// The position of `n` in `ns`, or the length of `ns`.
@@ -166,7 +178,7 @@ fn pi_arity(st: &Store, t0: ExprId) -> u32 {
 }
 
 impl Checker {
-    /// `environment::add_inductive` for a block without nested occurrences.
+    /// `environment::add_inductive`.
     pub fn add_inductive(&mut self, d: &Induct) -> Option<Fault> {
         let saved = self.env.len();
         let mut s = self.new_ind(d);
@@ -184,6 +196,9 @@ impl Checker {
             self.read_block(&mut s, d);
         }
         self.inductive_core(&mut s);
+        if !self.bad() && s.aux_nested.len() > 0 {
+            self.restore_block(&mut s, saved);
+        }
         if !self.bad() {
             self.compare_export(&mut s, d);
         }
@@ -238,6 +253,13 @@ impl Checker {
             nested,
             occ: Memo::new(),
             seen: Memo::new(),
+            norig: 0,
+            nctors: 0,
+            eparams: Vec::new(),
+            aux_nested: Vec::new(),
+            next_idx: 1,
+            cur: Vec::new(),
+            rep: Memo::new(),
         }
     }
 
@@ -315,7 +337,7 @@ impl Checker {
             self.check_uniform_ind_occs(s);
         }
         if !self.bad() {
-            self.check_no_nested(s);
+            self.elim_nested(s);
         }
         if !self.bad() {
             let ls = s.lparams.clone();
@@ -392,10 +414,8 @@ impl Checker {
     fn find_here(&mut self, s: &mut Ind, e: ExprId, what: u32) -> bool {
         if what == FIND_IND {
             self.is_ind_occ(s, e)
-        } else if what == FIND_AUX {
-            self.is_aux_ref(s, e)
         } else {
-            self.is_nested_app(s, e)
+            self.is_aux_ref(s, e)
         }
     }
 
@@ -416,37 +436,8 @@ impl Checker {
         }
     }
 
-    /// `is_nested_inductive_app` without the check of loose bound variables: `e` is `I Ds is` where `I` is an inductive type of the environment and the parameters `Ds` contain a type of the block.
-    fn is_nested_app(&mut self, s: &mut Ind, e: ExprId) -> bool {
-        if !self.is_app(e) {
-            return false;
-        }
-        let f = expr::app_fn(&self.st, e);
-        let n = self.const_name(f);
-        let slot = self.env.find(n);
-        if !self.is_constant(f) || slot == 0 {
-            return false;
-        }
-        let np = match self.induct_shape(slot) {
-            Some((np, _, _, _)) => np as usize,
-            None => return false,
-        };
-        let mut args = Vec::new();
-        expr::app_args(&self.st, e, &mut args);
-        np <= args.len() && self.any_ind_occ(s, &args, np)
-    }
-
-    /// True if one of the first `n` terms of `args` has a constant of the block.
-    fn any_ind_occ(&mut self, s: &mut Ind, args: &[ExprId], n: usize) -> bool {
-        let mut i = 0;
-        while i < n && !self.find(s, args[i], FIND_IND) {
-            i += 1;
-        }
-        i < n
-    }
-
     /// `has_ind_occ`.
-    fn has_ind_occ(&mut self, s: &mut Ind, e: ExprId) -> bool {
+    pub(crate) fn has_ind_occ(&mut self, s: &mut Ind, e: ExprId) -> bool {
         self.find(s, e, FIND_IND)
     }
 
@@ -551,35 +542,6 @@ impl Checker {
             self.fail(ErrorKind::NonUniformOcc, e);
         }
         false
-    }
-
-    /// The parameter checks of `elim_nested_inductive_fn::get_params`, and the search for a nested occurrence. A nested occurrence gives `Unsupported`.
-    fn check_no_nested(&mut self, s: &mut Ind) {
-        let t0 = s.types[0];
-        self.skip_params(s, t0);
-        let mut c = 0;
-        while c < s.ctypes.len() && !self.bad() {
-            let t = s.ctypes[c];
-            let body = self.skip_params(s, t);
-            if !self.bad() && self.find(s, body, FIND_NESTED) {
-                self.fail(ErrorKind::Unsupported, t);
-            }
-            c += 1;
-        }
-    }
-
-    /// The body of `t0` after the `pi` binders of the parameters, with no reduction. Fewer binders give a fault.
-    fn skip_params(&mut self, s: &Ind, t0: ExprId) -> ExprId {
-        let mut t = t0;
-        let mut i = 0;
-        while i < s.nparams && self.is_pi(t) {
-            t = self.binding(t).1;
-            i += 1;
-        }
-        if i < s.nparams {
-            self.fail(ErrorKind::BadInductive, t0);
-        }
-        t
     }
 
     // Local declarations.
@@ -797,7 +759,7 @@ impl Checker {
             nindices: s.nindices[k],
             all: s.names.clone(),
             ctors: copy_names(&s.cnames, s.cstart[k], s.cstart[k + 1]),
-            nnested: 0,
+            nnested: s.aux_nested.len() as u32,
             is_rec: s.is_rec,
             is_reflexive: s.is_reflexive,
         };
@@ -1485,14 +1447,15 @@ impl Checker {
 
     // The comparison with the export (spec 06.1).
 
+    /// The comparison of the export with the declarations in the environment. The export must have the types and the constructors of the block, and a recursor for each type and each auxiliary type.
     fn compare_export(&mut self, s: &mut Ind, d: &Induct) {
         let mut k = 0;
-        while k < s.names.len() && !self.bad() {
+        while k < s.norig && !self.bad() {
             self.compare_type(s, d, k);
             k += 1;
         }
         let mut c = 0;
-        while c < s.cnames.len() && !self.bad() {
+        while c < s.nctors && !self.bad() {
             self.compare_ctor(s, d, c);
             c += 1;
         }
@@ -1502,15 +1465,25 @@ impl Checker {
         }
         let mut j = 0;
         while j < s.names.len() && !self.bad() {
-            self.compare_rec(s, d, j);
+            let rn = self.block_rec_name(s, j);
+            self.compare_rec(s, d, j, rn);
             j += 1;
         }
     }
 
+    /// The name of recursor `j` of the block: `I.rec` for a type `I`, and `main.rec_i` for auxiliary type `i`.
+    fn block_rec_name(&mut self, s: &Ind, j: usize) -> NameId {
+        if j < s.norig {
+            return names::rec_name(&mut self.st, s.names[j]);
+        }
+        let main = names::rec_name(&mut self.st, s.names[0]);
+        names::append_index(&mut self.st, main, (j - s.norig + 1) as u64)
+    }
+
     fn compare_type(&mut self, s: &Ind, d: &Induct, k: usize) {
         let ok = d.types[k].num_indices == s.nindices[k]
-            && names_eq(&d.types[k].all, &s.names)
-            && d.types[k].num_nested == 0
+            && names_eq(&d.types[k].all, &s.names[..s.norig])
+            && d.types[k].num_nested as usize == s.aux_nested.len()
             && d.types[k].is_rec == s.is_rec
             && d.types[k].is_reflexive == s.is_reflexive;
         if !ok {
@@ -1522,18 +1495,25 @@ impl Checker {
     fn compare_ctor(&mut self, s: &Ind, d: &Induct, c: usize) {
         let i = s.cexport[c];
         let k = s.cowner[c];
+        let slot = self.env.find(s.cnames[c]);
+        let ours = if slot == 0 {
+            self.dummy
+        } else {
+            self.env.at(slot).ty
+        };
         let ok = d.ctors[i].induct == s.names[k]
             && d.ctors[i].cidx == (c - s.cstart[k]) as u32
             && d.ctors[i].num_params == s.nparams
-            && d.ctors[i].num_fields == s.nfields[c];
+            && d.ctors[i].num_fields == s.nfields[c]
+            && slot != 0
+            && self.eq(d.ctors[i].ty, ours);
         if !ok {
-            let at = s.ctypes[c];
+            let at = d.ctors[i].ty;
             self.fail(ErrorKind::ExportMismatch, at);
         }
     }
 
-    fn compare_rec(&mut self, s: &Ind, d: &Induct, k: usize) {
-        let rn = names::rec_name(&mut self.st, s.names[k]);
+    fn compare_rec(&mut self, s: &Ind, d: &Induct, k: usize, rn: NameId) {
         let i = rec_position(&d.recs, rn);
         let slot = self.env.find(rn);
         if i == d.recs.len() || slot == 0 {

@@ -1,0 +1,90 @@
+name: bench
+
+# The baseline of spec 08.7.1: the official kernel of Lean v4.35.0 on the Arena tests, compared with the Arena numbers. The job runs each week, by hand, and on a pull request that changes the harness.
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      counter:
+        description: The instruction counter (perf needs a runner with hardware counters)
+        type: choice
+        options: [cachegrind, perf, auto]
+        default: cachegrind
+      cachegrind-max:
+        description: With cachegrind, count only the tests whose first run took at most this many seconds
+        default: "5"
+  pull_request:
+    paths:
+      - .github/workflows/bench.yml
+      - crates/rulean-bench/**
+      - scripts/arena-fetch.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# With shell: bash, a step also fails when a command before a pipe fails.
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  LEAN_VERSION: 4.35.0
+  # The digest of lean-4.35.0-linux.tar.zst on the release page of leanprover/lean4.
+  LEAN_SHA256: 7289597a44543246c9227b8cae501767e095ce17f6d448b95fc4a8dc97268f6d
+
+jobs:
+  baseline:
+    name: baseline (official v4.35.0)
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      COUNTER: ${{ inputs.counter || 'cachegrind' }}
+      CACHEGRIND_MAX: ${{ inputs.cachegrind-max || '5' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: false
+      - run: cargo build --locked --release -p rulean-bench
+      - name: install valgrind
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -q -y --no-install-recommends valgrind zstd
+          valgrind --version
+      - name: install Lean
+        run: |
+          curl -sSfL --retry 3 -o _lean.tar.zst "https://github.com/leanprover/lean4/releases/download/v${LEAN_VERSION}/lean-${LEAN_VERSION}-linux.tar.zst"
+          echo "${LEAN_SHA256}  _lean.tar.zst" | sha256sum -c -
+          mkdir -p _tmp/lean
+          tar --zstd -xf _lean.tar.zst -C _tmp/lean --strip-components=1
+          _tmp/lean/bin/lean --version
+      - run: scripts/arena-fetch.sh _tmp/arena
+      - name: run the official kernel
+        run: |
+          mkdir -p _tmp/bench
+          target/release/rulean-bench run --checker official --counter "$COUNTER" --cachegrind-max "$CACHEGRIND_MAX" --timeout 1200 --out _tmp/bench/official.json _tmp/arena/tests -- _tmp/lean/bin/leanchecker --from-export {}
+      # The step fails if a test gives a different status. Only perf counts the instructions in the same way as the Arena, so the 2% limit applies only to perf (docs/bench/baseline.md).
+      - name: compare with the Arena
+        run: |
+          limit=()
+          if [ "$COUNTER" = perf ]; then
+            limit=(--tolerance 2)
+          fi
+          target/release/rulean-bench compare --base-checker official "${limit[@]}" _tmp/arena/results.json _tmp/bench/official.json | tee _tmp/bench/compare.txt
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: baseline
+          path: |
+            _tmp/bench
+            _tmp/arena/sources.txt
+          if-no-files-found: ignore

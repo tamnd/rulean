@@ -17,12 +17,12 @@ use crate::tc::{
 
 /// The data of a recursor that `inductive_reduce_rec` needs.
 #[derive(Clone, Copy)]
-struct RecShape {
-    major_idx: u32,
+pub(crate) struct RecShape {
+    pub(crate) major_idx: u32,
     /// The number of parameters, motives and minor premises.
-    nprefix: u32,
-    nparams: u32,
-    k: bool,
+    pub(crate) nprefix: u32,
+    pub(crate) nparams: u32,
+    pub(crate) k: bool,
 }
 
 /// Decodes UTF-8 bytes into code points (`utf8_decode`). The parser has checked the bytes, so a bad sequence does not occur. A bad byte gives its own value.
@@ -200,7 +200,7 @@ impl Checker {
     }
 
     /// `to_cnstr_when_K` of the official kernel.
-    fn cnstr_when_k(
+    pub(crate) fn cnstr_when_k(
         &mut self,
         major_induct: NameId,
         nparams: u32,
@@ -229,7 +229,7 @@ impl Checker {
     }
 
     /// `to_cnstr_when_structure` of the official kernel.
-    fn cnstr_when_structure(
+    pub(crate) fn cnstr_when_structure(
         &mut self,
         induct: NameId,
         e: ExprId,
@@ -255,7 +255,7 @@ impl Checker {
     }
 
     /// `recursor_val::get_major_induct`: the head of the domain of the major premise in the type of the recursor.
-    fn major_induct(&self, slot: u32, major_idx: u32) -> NameId {
+    pub(crate) fn major_induct(&self, slot: u32, major_idx: u32) -> NameId {
         let mut t = self.env.at(slot).ty;
         let mut i = 0;
         while i < major_idx {
@@ -269,7 +269,7 @@ impl Checker {
     }
 
     /// The recursor data of a slot, if the constant is a recursor.
-    fn rec_shape(&self, slot: u32) -> Option<RecShape> {
+    pub(crate) fn rec_shape(&self, slot: u32) -> Option<RecShape> {
         match &self.env.at(slot).kind {
             ConstKind::Rec(r) => Some(RecShape {
                 major_idx: r.major_idx(),
@@ -645,7 +645,7 @@ impl Checker {
         }
     }
 
-    fn mk_nat(&mut self, v: Nat) -> ExprId {
+    pub(crate) fn mk_nat(&mut self, v: Nat) -> ExprId {
         let id = self.st.intern_nat(v);
         self.st.mk_nat_lit(id)
     }
@@ -754,7 +754,7 @@ impl Checker {
     }
 
     /// The index of the binary operation `f` in the `nat_ops` table, or the length of the table.
-    fn nat_op_index(&self, f: ExprId) -> usize {
+    pub(crate) fn nat_op_index(&self, f: ExprId) -> usize {
         let ops = &self.b.nat_ops;
         let mut i = 0;
         while i < ops.len() && ops[i] != f {
@@ -849,7 +849,7 @@ impl Checker {
 }
 
 /// The rule of the constructor `n` in `rules`, if there is one.
-fn find_rule(rules: &[RuleInfo], n: NameId) -> Option<RuleInfo> {
+pub(crate) fn find_rule(rules: &[RuleInfo], n: NameId) -> Option<RuleInfo> {
     let mut i = 0;
     while i < rules.len() && rules[i].ctor != n {
         i += 1;

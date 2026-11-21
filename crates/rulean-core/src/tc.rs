@@ -321,6 +321,8 @@ pub struct Checker {
     pub(crate) x: Scratch,
     /// The value arena of engine F. It is cleared at the start of each declaration.
     pub(crate) va: Arena,
+    /// The number of binders that `quote` of engine F has opened. Their free variables are not in the local context.
+    pub(crate) f_under: u32,
     /// The level parameters of the declaration (`m_lparams`). They are checked only if `check_lparams` is true.
     pub(crate) lparams: Vec<NameId>,
     pub(crate) check_lparams: bool,
@@ -370,6 +372,7 @@ impl Checker {
             lc: LevelCache::new(),
             x: Scratch::new(),
             va: Arena::new(),
+            f_under: 0,
             lparams: Vec::new(),
             check_lparams: false,
             safety: Safety::Safe,
@@ -407,6 +410,7 @@ impl Checker {
         self.lctx_val.truncate(0);
         self.clear_caches();
         self.va.reset();
+        self.f_under = 0;
         self.eager = false;
         self.depth = 0;
         self.fault = None;

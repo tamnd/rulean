@@ -1,10 +1,11 @@
 //! Tests of evaluation and read-back of engine F (spec 05.4.2 and 05.4.3). Each test builds a small environment by hand.
 
-use rulean_core::env::{ConstInfo, ConstKind, CtorInfo, InductInfo};
+use rulean_core::env::{ConstInfo, ConstKind, CtorInfo, InductInfo, RecInfo, RuleInfo};
 use rulean_core::tc::{Checker, ErrorKind};
 use rulean_core::value::EnvId;
 use rulean_format::{Hints, Safety};
-use rulean_store::{BinderInfo, ExprId, NameId, Store};
+use rulean_nat::Nat;
+use rulean_store::{BinderInfo, ExprId, LevelId, NameId, Store};
 
 struct T {
     c: Checker,
@@ -206,4 +207,180 @@ fn applying_a_sort_is_a_fault() {
         t.c.fault().map(|f| f.kind),
         Some(ErrorKind::FunctionExpected)
     );
+}
+
+impl T {
+    /// The weak head normal form of `e` in engine F, read back.
+    fn whnf_f(&mut self, e: ExprId) -> ExprId {
+        let v = self.c.eval(EnvId::NIL, e);
+        let w = self.c.force(v);
+        let r = self.c.quote(0, 0, w);
+        assert!(self.c.fault().is_none(), "fault: {:?}", self.c.fault());
+        r
+    }
+    fn nat(&mut self, v: u64) -> ExprId {
+        let id = self.c.st.intern_nat(Nat::from_u64(v));
+        self.c.st.mk_nat_lit(id)
+    }
+    fn kl(&mut self, s: &str, ls: &[LevelId]) -> ExprId {
+        let n = self.name(s);
+        let ls = self.c.st.level_list(ls);
+        self.c.st.mk_const(n, ls)
+    }
+}
+
+#[test]
+fn nat_literal_extension() {
+    let mut t = T::new();
+    let s1 = t.sort(1);
+    t.axiom("Nat", s1);
+    let (two, three, five) = (t.nat(2), t.nat(3), t.nat(5));
+    let add = t.k("Nat.add");
+    let e = t.app(add, &[two, three]);
+    assert_eq!(t.whnf_f(e), five);
+    let succ = t.k("Nat.succ");
+    let four = t.nat(4);
+    let e = t.app(succ, &[four]);
+    assert_eq!(t.whnf_f(e), five);
+    let ble = t.k("Nat.ble");
+    let e = t.app(ble, &[five, two]);
+    let f = t.k("Bool.false");
+    assert_eq!(t.whnf_f(e), f);
+    // The arguments are forced first: 2 + (2 + 3) is 7.
+    let inner = t.app(add, &[two, three]);
+    let e = t.app(add, &[two, inner]);
+    let seven = t.nat(7);
+    assert_eq!(t.whnf_f(e), seven);
+    // An argument that is not a literal stays.
+    let x = t.k("x");
+    let e = t.app(add, &[two, x]);
+    assert_eq!(t.whnf_f(e), e);
+}
+
+/// The type `B` with the constructors `B.t` and `B.f`, and `B.rec.{u}`.
+fn bool_type(t: &mut T) {
+    let s1 = t.sort(1);
+    let b_n = t.name("B");
+    let bt_n = t.name("B.t");
+    let bf_n = t.name("B.f");
+    let info = InductInfo {
+        nparams: 0,
+        nindices: 0,
+        all: vec![b_n],
+        ctors: vec![bt_n, bf_n],
+        nnested: 0,
+        is_rec: false,
+        is_reflexive: false,
+    };
+    t.add("B", s1, ConstKind::Induct(info));
+    let bty = t.k("B");
+    for (n, i) in [("B.t", 0), ("B.f", 1)] {
+        let ctor = CtorInfo {
+            induct: b_n,
+            cidx: i,
+            nparams: 0,
+            nfields: 0,
+        };
+        t.add(n, bty, ConstKind::Ctor(ctor));
+    }
+    let un = t.name("u");
+    let u = t.c.st.level_param(un);
+    let su = t.c.st.mk_sort(u);
+    let motive_ty = t.pi("b", bty, su);
+    let (b0, b1, b3) = (t.bv(0), t.bv(1), t.bv(3));
+    let btc = t.k("B.t");
+    let bfc = t.k("B.f");
+    let m_t = t.app(b0, &[btc]);
+    let m_f = t.app(b1, &[bfc]);
+    let m_b = t.app(b3, &[b0]);
+    let last = t.pi("b", bty, m_b);
+    let r3 = t.pi("f", m_f, last);
+    let r2 = t.pi("t", m_t, r3);
+    let rec_ty = t.pi("motive", motive_ty, r2);
+    let l3 = t.lam("f", m_f, b1);
+    let l2 = t.lam("t", m_t, l3);
+    let rt = t.lam("motive", motive_ty, l2);
+    let l3 = t.lam("f", m_f, b0);
+    let l2 = t.lam("t", m_t, l3);
+    let rf = t.lam("motive", motive_ty, l2);
+    let rec = RecInfo {
+        all: vec![b_n],
+        nparams: 0,
+        nindices: 0,
+        nmotives: 1,
+        nminors: 2,
+        rules: vec![
+            RuleInfo {
+                ctor: bt_n,
+                nfields: 0,
+                rhs: rt,
+            },
+            RuleInfo {
+                ctor: bf_n,
+                nfields: 0,
+                rhs: rf,
+            },
+        ],
+        k: false,
+    };
+    let rec_n = t.name("B.rec");
+    t.c.env.add(ConstInfo {
+        name: rec_n,
+        lparams: vec![un],
+        ty: rec_ty,
+        safety: Safety::Safe,
+        kind: ConstKind::Rec(rec),
+    });
+}
+
+#[test]
+fn recursor_iota() {
+    let mut t = T::new();
+    bool_type(&mut t);
+    let z = t.c.st.level_zero();
+    let one = t.c.st.level_succ(z);
+    let rec = t.kl("B.rec", &[one]);
+    let (m, x, y) = (t.k("M"), t.k("x"), t.k("y"));
+    let btc = t.k("B.t");
+    let bfc = t.k("B.f");
+    let e = t.app(rec, &[m, x, y, bfc]);
+    assert_eq!(t.whnf_f(e), y);
+    let e = t.app(rec, &[m, x, y, btc]);
+    assert_eq!(t.whnf_f(e), x);
+    // The major premise is forced: a definition that unfolds to B.t.
+    let bty = t.k("B");
+    let d = t.def("d", bty, btc);
+    let e = t.app(rec, &[m, x, y, d]);
+    assert_eq!(t.whnf_f(e), x);
+    // Extra arguments after the major premise are applied to the result.
+    let g = t.k("g");
+    let e = t.app(rec, &[m, g, y, btc, x]);
+    let want = t.app(g, &[x]);
+    assert_eq!(t.whnf_f(e), want);
+    // A major premise that is not a constructor stays.
+    let o = t.k("o");
+    let e = t.app(rec, &[m, x, y, o]);
+    assert_eq!(t.whnf_f(e), e);
+    // read_back does only beta and zeta, so the recursor application under the binder stays.
+    let b0 = t.bv(0);
+    let body = t.app(rec, &[m, b0, y, btc]);
+    let l = t.lam("z", bty, body);
+    assert_eq!(t.nf(l), l);
+}
+
+#[test]
+fn quotient_lift() {
+    let mut t = T::new();
+    t.c.env.mark_quot_initialized();
+    let s1 = t.sort(1);
+    t.axiom("Quot.lift", s1);
+    let z = t.c.st.level_zero();
+    let one = t.c.st.level_succ(z);
+    let lift = t.kl("Quot.lift", &[one, one]);
+    let mk = t.kl("Quot.mk", &[one]);
+    let (a, r, b, f, h, x) = (t.k("A"), t.k("r"), t.k("B"), t.k("f"), t.k("h"), t.k("x"));
+    let q = t.app(mk, &[a, r, x]);
+    let e = t.app(lift, &[a, r, b, f, h, q]);
+    let want = t.app(f, &[x]);
+    assert_eq!(t.whnf_f(e), want);
 }

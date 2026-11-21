@@ -118,6 +118,15 @@ jobs:
           code=0
           target/debug/rulean frobnicate || code=$?
           test "$code" = 64
+      - name: check accepts and rejects
+        run: |
+          mkdir -p _tmp
+          target/debug/rulean check --report _tmp/accept.json crates/rulean-cli/tests/data/axiom.ndjson
+          jq -e '.verdict == "accept" and .summary.accepted == 1 and .input.profile == "v4.35"' _tmp/accept.json
+          code=0
+          target/debug/rulean check --format json - < crates/rulean-cli/tests/data/loose-bvar.ndjson > _tmp/reject.json || code=$?
+          test "$code" = 1
+          jq -e '.verdict == "reject" and .failed_decl == "B"' _tmp/reject.json
 
   # Every test of the Lean Kernel Arena must parse (milestone M1). The job downloads the Arena, so it depends on arena.lean-lang.org and is not a required check.
   arena:

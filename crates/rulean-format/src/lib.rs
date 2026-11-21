@@ -40,4 +40,4 @@ pub use decl::{
     Safety, Thm,
 };
 pub use error::{Error, ErrorKind};
-pub use ndjson::{Parser, parse};
+pub use ndjson::{Export, Parser, parse, parse_export};

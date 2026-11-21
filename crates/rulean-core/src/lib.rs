@@ -32,6 +32,7 @@ pub mod memo;
 pub mod names;
 pub mod nested;
 pub mod pin;
+pub mod profile;
 pub mod sha256;
 pub mod tc;
 pub mod whnf;

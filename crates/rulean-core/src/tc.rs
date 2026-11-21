@@ -16,6 +16,7 @@ use crate::expr::{self, Scratch};
 use crate::level::{self, LevelCache};
 use crate::memo::Memo;
 use crate::pin;
+use crate::profile::{Flags, Profile};
 
 /// The upper bound in bytes of a `Nat` literal (`LEAN_NAT_MAX_SIZE_DEFAULT`). This is semantics and not a resource limit (spec 05.11).
 pub const NAT_MAX_BYTES: u64 = 128 * 1024 * 1024;
@@ -345,6 +346,8 @@ pub struct Checker {
     pub pin_mismatch: Vec<NameId>,
     /// `--trust-primitives-by-name`: keep the extensions on after a mismatch, as the official kernel does.
     pub trust_primitives: bool,
+    /// The flags of the semantics profile (spec 05.2).
+    pub flags: Flags,
     /// The value that a function returns after a fault.
     pub(crate) dummy: ExprId,
 }
@@ -382,6 +385,7 @@ impl Checker {
             pin_done: 0,
             pin_mismatch: Vec::new(),
             trust_primitives: false,
+            flags: Profile::V4_35.flags(),
             dummy,
         }
     }

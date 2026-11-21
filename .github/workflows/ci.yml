@@ -244,6 +244,11 @@ jobs:
           name: extract
           path: _tmp/extract/lean
           if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: flake-lock
+          path: flake.lock
 
   # The Lean proof package in proof/ (spec 10). The job checks the source rules of spec 10.9, builds the package, checks it with the official kernel and audits the axioms. Only propext, Classical.choice and Quot.sound are allowed.
   # leanchecker crashes on some runs when it replays two or more modules in parallel (issue #15), so scripts/leanchecker.sh runs it once with --fresh on the root module.

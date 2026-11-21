@@ -92,6 +92,10 @@ version = "0.0.2"
 [[package]]
 name = "rulean-format"
 version = "0.0.2"
+dependencies = [
+ "rulean-nat",
+ "rulean-store",
+]
 
 [[package]]
 name = "rulean-io"

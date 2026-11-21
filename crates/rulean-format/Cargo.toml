@@ -15,3 +15,7 @@ layer = "core"
 
 [lints]
 workspace = true
+
+[dependencies]
+rulean-nat = { path = "../rulean-nat" }
+rulean-store = { path = "../rulean-store" }

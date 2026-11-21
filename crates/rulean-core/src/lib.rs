@@ -16,6 +16,9 @@
 #![allow(clippy::manual_clear)]
 #![allow(clippy::manual_swap)]
 #![allow(clippy::implicit_saturating_sub)]
+// scripts/extract.sh sets `--cfg rulean_extract`. Then Charon reads the `charon::opaque` attribute on the SHA-256 functions, which the proofs do not use.
+#![cfg_attr(rulean_extract, feature(register_tool))]
+#![cfg_attr(rulean_extract, register_tool(charon))]
 
 extern crate alloc;
 

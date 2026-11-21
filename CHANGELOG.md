@@ -7,6 +7,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 ### Added
 
 - `rulean-nat` has the `Nat` type of spec 04.6 with the 15 kernel operations, `log2` and decimal conversion. Multiplication uses Karatsuba from 32 limbs, and division uses algorithm D of Knuth. The tests compare each operation with `num-bigint`.
+- `rulean-store` has the term store of spec 04: `u32` handles with the kind in the handle, one node array for each kind, side records with the hash, the loose bound variable range and the flags, and hash-consing with an open-addressing table. It also interns strings, names, levels, level lists and natural number literals.
 
 ### Fixed
 

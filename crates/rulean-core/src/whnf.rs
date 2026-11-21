@@ -844,13 +844,13 @@ impl Checker {
 
 /// The rule of the constructor `n` in `rules`, if there is one.
 fn find_rule(rules: &[RuleInfo], n: NameId) -> Option<RuleInfo> {
-    let mut found: Option<RuleInfo> = None;
     let mut i = 0;
-    while found.is_none() && i < rules.len() {
-        if rules[i].ctor == n {
-            found = Some(rules[i]);
-        }
+    while i < rules.len() && rules[i].ctor != n {
         i += 1;
     }
-    found
+    if i < rules.len() {
+        Some(rules[i])
+    } else {
+        None
+    }
 }

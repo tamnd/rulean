@@ -182,11 +182,13 @@ The verified core is `crates/rulean-core`, `crates/rulean-store`, `crates/rulean
 | No `?` operator. No early `return` inside loops. No `break` or `continue` to an outer loop. | Aeneas limits (F16). |
 | No `Option<&T>` or other nested borrows in types. | Aeneas limit. |
 | No borrow of a container held across a branch that mutates it. | Aeneas F1 (14 of 18 con-ron failures). |
-| A function has at most 300 lines and at most 8 `match` arms on one level. Large dispatch is split into functions. | Charon and Aeneas run out of memory on very large functions (F12, F18, F19). |
+| A function has at most 300 lines. An `if` and `else if` chain has at most 4 branches. Use a `match` for a longer dispatch, and split large dispatch into functions. | Charon and Aeneas run out of memory on very large functions (F12, F18). Long `else if` chains with `&&` conditions make the extraction slow (F19). A `match` on one enum is not a problem, so the rule does not limit the arms of a `match`. |
 | No trait impls in recursive groups. Traits only for `Hash`-like small interfaces, or not at all. | Aeneas F6. |
 | Strings are `Vec<u8>` with a validated UTF-8 flag. No `&'static str` in enums. | F7. |
 | Integer arithmetic is checked. `overflow-checks = true` in all profiles. | The proof treats overflow as a panic. |
 | Recursion only where the twin has the same recursion. Deep recursion uses explicit stacks in a `Vec` (05.11). | Stack overflow is not modelled. An explicit stack makes `deepRecursion` a normal error. |
+
+`cargo xtask subset` checks the rules on the syntax of the verified crates, with the rule IDs S1 to S14. It cannot see types or borrows, so it does not check the rule on a borrow held across a branch, and it reports the `Vec` method names on every receiver. The extraction job (13.4) is the final check. Code under `#[cfg(test)]` is not extracted, so the lint skips it.
 
 Unsafe or concurrent code lives only in the island crates `rulean-pool`, `rulean-io` and `rulean-simd` (03.3). The verified crates do not depend on them. The driver links the two worlds.
 

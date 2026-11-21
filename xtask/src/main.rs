@@ -5,6 +5,7 @@ use std::process::ExitCode;
 mod deps;
 mod metadata;
 mod nonc;
+mod subset;
 
 const USAGE: &str = "\
 usage: cargo xtask <command>
@@ -12,6 +13,7 @@ usage: cargo xtask <command>
 commands:
   deps      check the dependency rule of spec 03.3
   nonc      check the no-C policy of spec 13.3 (add --vendor to scan the vendored sources)
+  subset    check that the core crates stay in the Aeneas subset of spec 10.6
   all       run every check, with --vendor";
 
 /// Runs every check and joins the problems, so that one run shows all of them.
@@ -37,6 +39,7 @@ fn main() -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("deps") => deps::run(),
         Some("nonc") => nonc::run(vendor),
+        Some("subset") => subset::run(),
         Some("all") => all(),
         Some("help" | "-h" | "--help") => {
             println!("{USAGE}");

@@ -13,6 +13,8 @@ authors = ["The rulean authors"]
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_debug_implementations = "warn"
+# scripts/extract.sh sets this cfg for the Aeneas names of spec 10.3.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(rulean_extract)"] }
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

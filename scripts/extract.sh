@@ -23,6 +23,9 @@ for tool in cargo charon aeneas; do
   fi
 done
 
+# The cfg turns on the `aeneas::rename` attributes of the core crates. It goes to every crate of the build, so a crate and its users see the same names.
+export RUSTFLAGS="${RUSTFLAGS:-} --cfg rulean_extract"
+
 rm -rf "$work"
 mkdir -p "$work/llbc" "$work/lean"
 

@@ -8,6 +8,9 @@
 #![forbid(unsafe_code)]
 // The `vec!` macro is outside the modelled `Vec` functions of spec 10.6, so the code uses `with_capacity` and `push`.
 #![allow(clippy::vec_init_then_push)]
+// Aeneas binds its `Fuel` type to the Lean name `Nat`. scripts/extract.sh sets `--cfg rulean_extract`, and then the type below gets the Lean name `BigNat`. A normal build does not see these attributes.
+#![cfg_attr(rulean_extract, feature(register_tool))]
+#![cfg_attr(rulean_extract, register_tool(aeneas))]
 
 extern crate alloc;
 
@@ -20,6 +23,7 @@ use core::cmp::Ordering;
 ///
 /// The form is canonical: a value below 2^64 is always `Small`, and the limbs of a `Large` value have no leading zero limb. So two equal numbers have the same form, and the derived equality is the equality of numbers.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(rulean_extract, aeneas::rename("BigNat"))]
 pub enum Nat {
     /// A value below 2^64.
     Small(u64),

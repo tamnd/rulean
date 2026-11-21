@@ -57,6 +57,10 @@ pub struct Parser {
     levels: Index,
     exprs: Index,
     line: u64,
+    /// The `lean.version` string of the meta line, or empty if the meta line has none.
+    lean_version: Vec<u8>,
+    /// The `format.version` string of the meta line.
+    format_version: Vec<u8>,
 }
 
 impl Default for Parser {
@@ -84,10 +88,17 @@ impl Parser {
             levels: Index::new(),
             exprs: Index::new(),
             line: 0,
+            lean_version: Vec::new(),
+            format_version: Vec::new(),
         };
         p.names.slots.push(0);
         p.levels.slots.push(0);
         p
+    }
+
+    /// The `lean.version` string of the meta line (spec 05.2), or an empty string if the meta line has none.
+    pub fn lean_version(&self) -> &[u8] {
+        &self.lean_version
     }
 
     /// The number of lines that the parser has read.
@@ -358,9 +369,17 @@ impl Parser {
         let f = self.object(b, &m, keys::FORMAT);
         self.string(b, &f, keys::VERSION);
         if self.ok() {
+            self.format_version = self.scan.buf.clone();
             let (major, minor, good) = version(&self.scan.buf);
             if !good || major != 3 || minor > KNOWN_MINOR {
                 self.fail(ErrorKind::UnknownVersion);
+            }
+        }
+        if self.ok() && has(&m, keys::LEAN) {
+            let l = self.object(b, &m, keys::LEAN);
+            if self.ok() && has(&l, keys::VERSION) {
+                self.string(b, &l, keys::VERSION);
+                self.lean_version = self.scan.buf.clone();
             }
         }
     }
@@ -862,8 +881,26 @@ fn version(s: &[u8]) -> (u64, u64, bool) {
     (parts[0], parts[1], good)
 }
 
+/// A parsed export: the declarations in input order and the facts of the meta line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Export {
+    pub decls: Vec<Decl>,
+    /// The `lean.version` string of the meta line, or empty.
+    pub lean_version: Vec<u8>,
+    /// The `format.version` string of the meta line.
+    pub format_version: Vec<u8>,
+}
+
 /// Parses a whole NDJSON export into `store`. The result is the declarations in input order, or the first error.
 pub fn parse(store: &mut Store, input: &[u8]) -> Result<Vec<Decl>, Error> {
+    match parse_export(store, input) {
+        Ok(x) => Ok(x.decls),
+        Err(e) => Err(e),
+    }
+}
+
+/// Parses a whole NDJSON export into `store`, as `parse` does, and also gives the facts of the meta line.
+pub fn parse_export(store: &mut Store, input: &[u8]) -> Result<Export, Error> {
     let mut p = Parser::new();
     let mut decls = Vec::new();
     let mut err = Error {
@@ -902,5 +939,13 @@ pub fn parse(store: &mut Store, input: &[u8]) -> Result<Vec<Decl>, Error> {
             kind: ErrorKind::NoMeta,
         };
     }
-    if failed { Err(err) } else { Ok(decls) }
+    if failed {
+        Err(err)
+    } else {
+        Ok(Export {
+            decls,
+            lean_version: p.lean_version,
+            format_version: p.format_version,
+        })
+    }
 }

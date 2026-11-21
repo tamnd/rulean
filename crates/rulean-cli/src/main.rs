@@ -6,6 +6,7 @@ use std::process::ExitCode;
 
 mod check;
 mod exit;
+mod report;
 
 use exit::Code;
 
@@ -14,6 +15,10 @@ usage: rulean <command> [options]
 
 commands:
   check <INPUT>     check an export (.ndjson or \"-\" for standard input)
+                    --profile <id>: the semantics profile, from the input by default
+                    --report <file>: write the JSON report
+                    --format text|json: the format of standard output
+                    --trust-primitives-by-name: keep the extensions on a pin mismatch
                     --parse-only: parse the export and check nothing
   version           print the version and the build facts
   help              print this text
@@ -57,9 +62,14 @@ fn not_written(command: &str, milestone: &str) -> Code {
 }
 
 fn version_text() -> String {
+    let mut ids = Vec::new();
+    for p in rulean_core::profile::PROFILES {
+        ids.push(p.id());
+    }
     format!(
-        "rulean {}\nprofiles: none (milestone M2 adds the first profile)\nbuild: unverified",
-        env!("CARGO_PKG_VERSION")
+        "rulean {}\nprofiles: {}\nbuild: unverified",
+        env!("CARGO_PKG_VERSION"),
+        ids.join(", ")
     )
 }
 
@@ -90,8 +100,8 @@ mod tests {
 
     #[test]
     fn commands_that_are_not_written_decline() {
-        assert_eq!(run_strs(&["check", "x.ndjson"]), Code::Decline);
         assert_eq!(run_strs(&["check"]), Code::Usage);
+        assert_eq!(run_strs(&["check", "no-such-file.ndjson"]), Code::Input);
         for command in ["olean", "pack", "diff", "explain"] {
             assert_eq!(run_strs(&[command]), Code::Decline, "{command}");
         }
@@ -99,6 +109,8 @@ mod tests {
 
     #[test]
     fn version_names_the_package_version() {
-        assert!(version_text().starts_with(&format!("rulean {}", env!("CARGO_PKG_VERSION"))));
+        let t = version_text();
+        assert!(t.starts_with(&format!("rulean {}", env!("CARGO_PKG_VERSION"))));
+        assert!(t.contains("profiles: v4.35"));
     }
 }

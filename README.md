@@ -12,13 +12,13 @@ rulean contains no C or C++ code. It has its own big number type and uses no C a
 
 ## Status
 
-rulean is at an early stage. It does not check proofs yet. The table shows the plan from `docs/spec/14-milestones.md`.
+rulean is at an early stage. Engine R, the reference type checker, checks NDJSON exports. The proofs of soundness and the fast engine are not done yet. The table shows the plan from `docs/spec/14-milestones.md`.
 
 | Milestone | Content | State |
 |---|---|---|
 | M0 Foundations | repository, CI, the no-C checks, the Aeneas subset lint, the proof package, the bench harness | in progress |
-| M1 Store and parser | the term store, the Nat type, the NDJSON parser | planned |
-| M2 Engine R | the reference type checker, inductive types, quotients | planned |
+| M1 Store and parser | the term store, the Nat type, the NDJSON parser | in progress |
+| M2 Engine R | the reference type checker, inductive types, quotients | in progress |
 | M3 Engine F | the fast type checker and the confirm set | planned |
 | M4 Scale | sessions, parallel checking, the binary format, the `.olean` reader | planned |
 | M5 Capstone | the soundness theorem with no `sorry` | planned |
@@ -38,9 +38,11 @@ target/release/rulean version
 
 ```sh
 rulean check export.ndjson
+rulean check --report report.json export.ndjson
+rulean check --profile v4.35 export.ndjson
 ```
 
-The input is an export in the NDJSON format of [lean4export](https://github.com/leanprover/lean4export). The `check` command arrives in milestone M2. Until then it exits with code 2.
+The input is an export in the NDJSON format of [lean4export](https://github.com/leanprover/lean4export), or `-` for standard input. rulean selects the semantics profile from the Lean version of the export. Use `--profile` for an export from a Lean version that has no profile. The JSON report follows `docs/report.schema.json`.
 
 | Exit code | Meaning |
 |---|---|

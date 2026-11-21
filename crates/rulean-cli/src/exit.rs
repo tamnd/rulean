@@ -5,12 +5,12 @@
 use std::process::ExitCode;
 
 /// The exit code of a `rulean` run.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Code {
     /// Every declaration was accepted.
+    #[default]
     Accept,
     /// At least one declaration was rejected.
-    #[allow(dead_code, reason = "used from milestone M2")]
     Reject,
     /// rulean does not support this input.
     Decline,
@@ -26,6 +26,19 @@ pub enum Code {
 }
 
 impl Code {
+    /// The verdict word of the code, for the text output and the report.
+    pub const fn word(self) -> &'static str {
+        match self {
+            Code::Accept => "accept",
+            Code::Reject => "reject",
+            Code::Decline => "decline",
+            Code::Resource => "resource",
+            Code::Input => "input-error",
+            Code::AxiomPolicy => "axiom-policy",
+            Code::Usage => "usage",
+        }
+    }
+
     /// The numeric value of the code.
     pub const fn value(self) -> u8 {
         match self {

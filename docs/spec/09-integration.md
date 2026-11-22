@@ -38,6 +38,7 @@ Main options:
 | `--max-memory`, `--timeout` | 05.11 | resource limits |
 | `--engine F\|R` | F | engine R only, for debugging (05.5) |
 | `--confirm default\|all` | default | the confirm set (05.1) |
+| `--session on\|off` | on | keep the session caches across declarations (08.4); `off` clears all caches at each declaration, as the official kernel does |
 | `--rules official\|con-leche` | official | 05.12, D4 |
 | `--trust-primitives-by-name` | off | 05.12, D1 |
 | `--no-simd` | off | island K4 off (10.7) |

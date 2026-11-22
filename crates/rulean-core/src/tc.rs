@@ -18,6 +18,7 @@ use crate::level::{self, LevelCache};
 use crate::memo::Memo;
 use crate::pin;
 use crate::profile::{Flags, Profile};
+use crate::session::{S_INFER, Session};
 use crate::trace::Trace;
 use crate::value::Arena;
 
@@ -364,6 +365,8 @@ pub struct Checker {
     pub(crate) c_force: Memo,
     /// Engine F: `const_never_proof` of a constant at key (constant, 0), 1 for true and 2 for false.
     pub(crate) c_never_proof: Memo,
+    /// The session: judgments on frozen closed terms that stay across declarations (spec 08.4).
+    pub sess: Session,
     /// `m_eager_reduce`.
     pub(crate) eager: bool,
     pub(crate) depth: u32,
@@ -421,6 +424,7 @@ impl Checker {
             c_conv_success: Memo::new(),
             c_force: Memo::new(),
             c_never_proof: Memo::new(),
+            sess: Session::default(),
             eager: false,
             depth: 0,
             max_depth: MAX_DEPTH,
@@ -1114,11 +1118,29 @@ impl Checker {
         let r = match self.c_infer.get(e.0, mode) {
             Some(r) => ExprId(r),
             None => {
-                let r = self.infer_type_node(e, infer_only);
-                if !self.bad() {
-                    self.c_infer.put(e.0, mode, r.0);
+                // Only infer-only results go into the session: a check-mode result also depends on the level parameters and the safety of the declaration.
+                let key = infer_only && self.sess_key(e);
+                let hit = if key {
+                    self.sess_get(S_INFER, e.0, 0)
+                } else {
+                    None
+                };
+                match hit {
+                    Some(r) => {
+                        self.c_infer.put(e.0, mode, r);
+                        ExprId(r)
+                    }
+                    None => {
+                        let r = self.infer_type_node(e, infer_only);
+                        if !self.bad() {
+                            self.c_infer.put(e.0, mode, r.0);
+                            if key {
+                                self.sess.note(S_INFER, e.0, 0, r.0);
+                            }
+                        }
+                        r
+                    }
                 }
-                r
             }
         };
         self.leave();

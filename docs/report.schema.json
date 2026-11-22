@@ -57,6 +57,19 @@
         "r_confirmed": { "type": "integer", "minimum": 0, "description": "The equalities of engine F that engine R confirmed." },
         "r_disagree": { "type": "integer", "minimum": 0, "description": "The equalities of engine F that engine R did not confirm." }
       }
+    },
+    "session": {
+      "type": "object",
+      "description": "The session: the cached judgments on frozen closed terms that stay across declarations (spec 08.4).",
+      "properties": {
+        "on": { "type": "boolean", "description": "False with `--session off`." },
+        "entries": { "type": "integer", "minimum": 0, "description": "The entries in the session at the end of the run." },
+        "hits": { "type": "integer", "minimum": 0, "description": "The lookups that found a valid entry." },
+        "stores": { "type": "integer", "minimum": 0, "description": "The entries that went into the session." },
+        "drops": { "type": "integer", "minimum": 0, "description": "The entries that were not kept, because the promotion budget was used." },
+        "evictions": { "type": "integer", "minimum": 0, "description": "The entries that the CLOCK policy removed." },
+        "promoted": { "type": "integer", "minimum": 0, "description": "The scratch nodes that were copied into the frozen tier." }
+      }
     }
   }
 }

@@ -33,6 +33,8 @@ pub struct Options {
     pub engine_set: bool,
     /// `--confirm all`.
     pub confirm_all: bool,
+    /// `--session off`: clear all caches at each declaration, as the official kernel does.
+    pub no_session: bool,
 }
 
 /// The value of an option that takes one, from `--name=value` or from the next argument.
@@ -72,6 +74,12 @@ pub fn options(args: &[String]) -> Result<Options, String> {
                 "default" => o.confirm_all = false,
                 "all" => o.confirm_all = true,
                 v => return Err(format!("unknown confirm set `{v}`")),
+            }
+        } else if is_option(a, "--session") {
+            match value("--session", a, &mut it)?.as_str() {
+                "on" => o.no_session = false,
+                "off" => o.no_session = true,
+                v => return Err(format!("unknown session mode `{v}`")),
             }
         } else if is_option(a, "--profile") {
             o.profile = Some(value("--profile", a, &mut it)?);
@@ -214,6 +222,7 @@ pub fn check_reader<R: BufRead>(o: &Options, input: R) -> std::io::Result<Run> {
     c.trust_primitives = o.trust_primitives;
     c.engine = engine_of(o);
     c.confirm_all = o.confirm_all;
+    c.sess.on = !o.no_session;
     rep.engine = c.engine;
     rep.confirm_all = o.confirm_all;
     let mut seen = 0;
@@ -238,6 +247,9 @@ pub fn check_reader<R: BufRead>(o: &Options, input: R) -> std::io::Result<Run> {
         }
     }
     rep.f_stats = c.f_stats;
+    rep.session = !o.no_session;
+    rep.s_stats = c.sess.stats;
+    rep.s_entries = c.sess.len();
     for n in &c.pin_mismatch {
         rep.pin_mismatch.push(name_text(&c, *n));
     }
@@ -436,6 +448,17 @@ mod tests {
         assert_eq!(engine_of(&o), Engine::R);
         assert!(options(&strs(&["x", "--engine", "G"])).is_err());
         assert!(options(&strs(&["x", "--confirm", "some"])).is_err());
+        assert!(
+            options(&strs(&["x", "--session=off"]))
+                .expect("valid")
+                .no_session
+        );
+        assert!(
+            !options(&strs(&["x", "--session", "on"]))
+                .expect("valid")
+                .no_session
+        );
+        assert!(options(&strs(&["x", "--session", "maybe"])).is_err());
     }
 
     #[test]

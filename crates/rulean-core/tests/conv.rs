@@ -141,8 +141,9 @@ fn binders_and_function_eta() {
     // Pi types with equal domains and codomains.
     let p2 = t.pi("y", t.a_ty, t.a_ty);
     assert!(t.eq(fty, p2));
+    // The query `f =?= fun x => f x` finds the success of the query before it in the success cache, so engine F does not run on it.
     let s = t.c.f_stats;
-    assert_eq!((s.equal, s.fallback), (4, 0));
+    assert_eq!((s.queries, s.equal, s.fallback), (3, 3, 0));
 }
 
 #[test]

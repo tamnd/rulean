@@ -10,6 +10,7 @@ use rulean_store::{Expr, ExprId, Literal, NameId};
 use crate::env::{ConstKind, RuleInfo};
 use crate::expr;
 use crate::pin::{PIN_NAT, PIN_STRING};
+use crate::session::{S_UNFOLD, S_WHNF, S_WHNF_CORE};
 use crate::tc::{
     Checker, ErrorKind, NAT_ADD, NAT_BEQ, NAT_BLE, NAT_DIV, NAT_GCD, NAT_LAND, NAT_LOR, NAT_MOD,
     NAT_MUL, NAT_POW, NAT_SHL, NAT_SHR, NAT_SUB, NAT_XOR,
@@ -509,6 +510,13 @@ impl Checker {
         if let Some(r) = self.c_whnf_core.get(e.0, 0) {
             return ExprId(r);
         }
+        let key = !cheap_rec && !cheap_proj && self.sess_key(e);
+        if key {
+            if let Some(r) = self.sess_get(S_WHNF_CORE, e.0, 0) {
+                self.c_whnf_core.put(e.0, 0, r);
+                return ExprId(r);
+            }
+        }
         if !self.enter(e) {
             return self.dummy;
         }
@@ -516,6 +524,9 @@ impl Checker {
         self.leave();
         if cache && !cheap_rec && !cheap_proj && !self.bad() {
             self.c_whnf_core.put(e.0, 0, r.0);
+            if key {
+                self.sess.note(S_WHNF_CORE, e.0, 0, r.0);
+            }
         }
         r
     }
@@ -616,8 +627,18 @@ impl Checker {
             if let Some(r) = self.c_unfold.get(e.0, 0) {
                 return Some(ExprId(r));
             }
+            let key = self.sess_key(e);
+            if key {
+                if let Some(r) = self.sess_get(S_UNFOLD, e.0, 0) {
+                    self.c_unfold.put(e.0, 0, r);
+                    return Some(ExprId(r));
+                }
+            }
             let r = self.instantiate_value_lparams(d, &ls);
             self.c_unfold.put(e.0, 0, r.0);
+            if key && !self.bad() {
+                self.sess.note(S_UNFOLD, e.0, 0, r.0);
+            }
             Some(r)
         } else {
             Some(self.instantiate_value_lparams(d, &ls))
@@ -833,9 +854,19 @@ impl Checker {
         if let Some(r) = self.c_whnf.get(e.0, 0) {
             return ExprId(r);
         }
+        let key = self.sess_key(e);
+        if key {
+            if let Some(r) = self.sess_get(S_WHNF, e.0, 0) {
+                self.c_whnf.put(e.0, 0, r);
+                return ExprId(r);
+            }
+        }
         let r = self.whnf_loop(e);
         if !self.bad() {
             self.c_whnf.put(e.0, 0, r.0);
+            if key {
+                self.sess.note(S_WHNF, e.0, 0, r.0);
+            }
         }
         r
     }

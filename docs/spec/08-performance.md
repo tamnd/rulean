@@ -81,7 +81,7 @@ The official kernel clears its caches after each declaration. rulean keeps some 
 | level normalize | level handle | yes | levels do not depend on the environment |
 
 - **Closed terms only.** Session entries have keys without free variables. Entries with free variables live in the scratch tier and die with it.
-- **Stamp rule.** Each entry records the highest constant index used in its derivation. A worker uses an entry only if that index is below the current job's cut (08.3.2). Lemma 10.4.4 proves that this is safe.
+- **Stamp rule.** Each entry records the highest constant index used in its derivation. A worker uses an entry only if that index is below the current job's cut (08.3.2). An implementation may record a larger number, for example the length of the environment when the entry was made, and use the entry only if that number is not above the cut. This rule uses fewer entries. Lemma 10.4.4 proves that both rules are safe.
 - **Size.** Each session is bounded, by default 128 MiB per worker. Eviction is by a CLOCK policy over entries. Eviction is always safe.
 - **Order of jobs.** The scheduler gives a worker consecutive jobs from the same module where possible, so that session entries are reused. This is the "namespace grouping" of gruszka.
 

@@ -5,10 +5,12 @@
 use alloc::vec::Vec;
 use rulean_store::{Expr, ExprId, LevelListId, Literal, NameId};
 
+use crate::conv::Engine;
 use crate::env::{ConstKind, compare_hints};
 use crate::expr;
 use crate::level;
 use crate::pin::{PIN_NAT, PIN_STRING};
+use crate::session::S_SUCCESS;
 use crate::tc::{Checker, LBool, to_lbool};
 use crate::trace::Rule;
 use rulean_format::Hints;
@@ -42,6 +44,28 @@ impl Checker {
         }
     }
 
+    /// True if the session has the success of the pair. A hit also goes into the success cache of the declaration.
+    fn sess_seen(&mut self, t: ExprId, s: ExprId) -> bool {
+        if !self.sess_key(t) || !self.sess_key(s) {
+            return false;
+        }
+        let ht = self.st.hash(t);
+        let hs = self.st.hash(s);
+        let found = if ht < hs {
+            self.sess_get(S_SUCCESS, t.0, s.0).is_some()
+        } else if ht > hs {
+            self.sess_get(S_SUCCESS, s.0, t.0).is_some()
+        } else {
+            self.sess_get(S_SUCCESS, t.0, s.0).is_some()
+                || self.sess_get(S_SUCCESS, s.0, t.0).is_some()
+        };
+        if found {
+            let (a, b) = if ht <= hs { (t, s) } else { (s, t) };
+            self.c_success.put(a.0, b.0, 1);
+        }
+        found
+    }
+
     fn pair_put(&mut self, success: bool, t: ExprId, s: ExprId) {
         let (a, b) = if self.st.hash(t) <= self.st.hash(s) {
             (t, s)
@@ -50,6 +74,9 @@ impl Checker {
         };
         if success {
             self.c_success.put(a.0, b.0, 1);
+            if !self.bad() && self.sess_key(a) && self.sess_key(b) {
+                self.sess.note(S_SUCCESS, a.0, b.0, 1);
+            }
         } else {
             self.c_failure.put(a.0, b.0, 1);
         }
@@ -138,7 +165,7 @@ impl Checker {
 
     /// `quick_is_def_eq`.
     fn quick_is_def_eq(&mut self, t: ExprId, s: ExprId) -> LBool {
-        if self.eq(t, s) || self.pair_seen(true, t, s) {
+        if self.eq(t, s) || self.pair_seen(true, t, s) || self.sess_seen(t, s) {
             return LBool::True;
         }
         match (self.st.node(t), self.st.node(s)) {
@@ -686,6 +713,13 @@ impl Checker {
 
     /// `is_def_eq`: definitional equality. With `Engine::F`, engine F tries the query first (spec 05.1). A true result goes into the success cache.
     pub fn is_def_eq(&mut self, t: ExprId, s: ExprId) -> bool {
+        // Engine F does not read the success caches, so a known success is found here first. Engine R finds it in `quick_is_def_eq`.
+        if self.engine == Engine::F
+            && self.eq_depth == 0
+            && (self.pair_seen(true, t, s) || self.sess_seen(t, s))
+        {
+            return true;
+        }
         let r = self.is_def_eq_shared(t, s);
         if r {
             self.pair_put(true, t, s);

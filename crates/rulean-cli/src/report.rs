@@ -3,6 +3,7 @@
 //! The JSON text is written by hand, so the CLI has no JSON dependency. The schema is in `docs/report.schema.json`. Fields are only added, and a change of a field changes the schema version.
 
 use rulean_core::conv::{Engine, FStats};
+use rulean_core::session::SessionStats;
 
 use crate::exit::Code;
 
@@ -30,6 +31,12 @@ pub struct Report {
     pub engine: Engine,
     pub confirm_all: bool,
     pub f_stats: FStats,
+    /// True if the session was on (spec 08.4).
+    pub session: bool,
+    /// The counts of the session.
+    pub s_stats: SessionStats,
+    /// The entries in the session at the end.
+    pub s_entries: usize,
 }
 
 /// The one line of text for standard output.
@@ -105,7 +112,7 @@ pub fn json(r: &Report) -> String {
     s.push_str(&format!("  \"pin_mismatch\": {},\n", list(&r.pin_mismatch)));
     let f = &r.f_stats;
     s.push_str(&format!(
-        "  \"engine\": {{ \"engine\": {}, \"confirm\": {}, \"f_queries\": {}, \"f_equal\": {}, \"f_fallback\": {}, \"f_faults\": {}, \"r_confirmed\": {}, \"r_disagree\": {} }}\n",
+        "  \"engine\": {{ \"engine\": {}, \"confirm\": {}, \"f_queries\": {}, \"f_equal\": {}, \"f_fallback\": {}, \"f_faults\": {}, \"r_confirmed\": {}, \"r_disagree\": {} }},\n",
         quote(match r.engine {
             Engine::F => "F",
             Engine::R => "R",
@@ -117,6 +124,11 @@ pub fn json(r: &Report) -> String {
         f.faults,
         f.confirmed,
         f.disagree
+    ));
+    let t = &r.s_stats;
+    s.push_str(&format!(
+        "  \"session\": {{ \"on\": {}, \"entries\": {}, \"hits\": {}, \"stores\": {}, \"drops\": {}, \"evictions\": {}, \"promoted\": {} }}\n",
+        r.session, r.s_entries, t.hits, t.stores, t.drops, t.evictions, t.promoted
     ));
     s.push('}');
     s

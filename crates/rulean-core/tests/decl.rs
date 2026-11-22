@@ -570,3 +570,53 @@ fn definitions_use_the_scratch_tier() {
     assert_eq!(f.at.tier(), Tier::Frozen);
     assert_eq!(t.c.st.scratch_total(), 0);
 }
+
+/// `(fun (T : Type) => T) Nat`: a frozen closed type that is not in normal form.
+fn id_type_of(t: &mut T, nat: ExprId) -> ExprId {
+    let s1 = t.sort(1);
+    let b0 = t.bv(0);
+    let idt = t.lam("T", s1, b0);
+    t.app(idt, &[nat])
+}
+
+#[test]
+fn session_keeps_judgments_across_declarations() {
+    let mut t = T::new();
+    let (nat, zero) = t.nat();
+    let ty = id_type_of(&mut t, nat);
+    let d = t.defn("a", ty, zero, Safety::Safe);
+    assert_eq!(t.add(&Decl::Defn(d)), None);
+    assert!(!t.c.sess.is_empty());
+    let hits = t.c.sess.stats.hits;
+    // The second declaration asks the same question, and the session has the answer.
+    let d = t.defn("b", ty, zero, Safety::Safe);
+    assert_eq!(t.add(&Decl::Defn(d)), None);
+    assert!(t.c.sess.stats.hits > hits);
+}
+
+#[test]
+fn session_keeps_nothing_from_a_failed_declaration() {
+    let mut t = T::new();
+    let (nat, zero) = t.nat();
+    let ty = id_type_of(&mut t, nat);
+    // `zero` does not have the type `(fun T => T) Nat → Nat`.
+    let fty = t.pi("n", ty, nat);
+    let d = t.defn("bad", fty, zero, Safety::Safe);
+    assert_eq!(t.add(&Decl::Defn(d)), Some(ErrorKind::DefTypeMismatch));
+    assert!(t.c.sess.is_empty());
+    assert_eq!(t.c.sess.stats.stores, 0);
+}
+
+#[test]
+fn session_off_keeps_nothing() {
+    let mut t = T::new();
+    t.c.sess.on = false;
+    let (nat, zero) = t.nat();
+    let ty = id_type_of(&mut t, nat);
+    let d = t.defn("a", ty, zero, Safety::Safe);
+    assert_eq!(t.add(&Decl::Defn(d)), None);
+    let d = t.defn("b", ty, zero, Safety::Safe);
+    assert_eq!(t.add(&Decl::Defn(d)), None);
+    assert!(t.c.sess.is_empty());
+    assert_eq!(t.c.sess.stats.hits, 0);
+}

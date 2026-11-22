@@ -379,6 +379,8 @@ impl Checker {
                     self.pin_mismatch.push(n);
                     if !self.trust_primitives {
                         self.pin_off |= target_bit(i);
+                        // The extensions change, so the old judgments of the session are not valid.
+                        self.sess.clear();
                     }
                 }
             }

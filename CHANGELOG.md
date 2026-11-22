@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-11-22
+
 ### Added
 
 - `rulean-io` is the island of contract K2 (spec 10.7). It opens the input read-only and reads it in blocks of 1 MiB. `rulean check`, `rulean pack` and `rulean explain` read the input through it. After the run, `rulean check` and `rulean pack` read the file again and compare the SHA-256 digests. If the file changed, `rulean check` gives exit code 4 and no verdict, and `rulean pack` writes no file. The second read costs 1.5 s and 29 G instructions on the 584 MB export of Std, about 7% of the check. Standard input and a pipe cannot be read again, so the check does not apply to them.
@@ -119,7 +121,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.4...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.5...HEAD
+[0.0.5]: https://github.com/tamnd/rulean/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/tamnd/rulean/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/tamnd/rulean/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/tamnd/rulean/compare/v0.0.1...v0.0.2

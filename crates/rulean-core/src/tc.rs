@@ -358,6 +358,10 @@ pub struct Checker {
     pub(crate) c_failure: Memo,
     /// Engine F: the pairs of values that `conv` found not equal in the current top-level query.
     pub(crate) c_conv_failure: Memo,
+    /// Engine F: the pairs of values that `conv` found equal in the current top-level query (row O2 of spec 05.7.3).
+    pub(crate) c_conv_success: Memo,
+    /// Engine F: the result of `force` of a value at key (value, 0), and of `force_core` at key (value, 1). It is cleared together with the arena.
+    pub(crate) c_force: Memo,
     /// Engine F: `const_never_proof` of a constant at key (constant, 0), 1 for true and 2 for false.
     pub(crate) c_never_proof: Memo,
     /// `m_eager_reduce`.
@@ -414,6 +418,8 @@ impl Checker {
             c_success: Memo::new(),
             c_failure: Memo::new(),
             c_conv_failure: Memo::new(),
+            c_conv_success: Memo::new(),
+            c_force: Memo::new(),
             c_never_proof: Memo::new(),
             eager: false,
             depth: 0,
@@ -456,6 +462,8 @@ impl Checker {
         self.c_success.clear();
         self.c_failure.clear();
         self.c_conv_failure.clear();
+        self.c_conv_success.clear();
+        self.c_force.clear();
         self.c_never_proof.clear();
     }
 

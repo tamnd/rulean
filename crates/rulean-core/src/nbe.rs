@@ -188,7 +188,15 @@ impl Checker {
     }
 
     /// `force(v)`: reduces `v` until its head is not a redex: delta on glued heads, iota on recursors, the quotient rules and the `Nat` extension (spec 05.4.2). The result is in weak head normal form.
+    ///
+    /// The result goes into the cache `c_force`. A neutral application of a recursor has no slot, and without the cache each `force` of the same value does the iota steps again. For example, `N.add (ldepth2 l) 1` with `N.add` by recursion on its first argument forces the value below it once for each level above it, and the time is quadratic in the depth.
     pub fn force(&mut self, v0: ValueId) -> ValueId {
+        let cached = self.force_cached(v0);
+        if cached {
+            if let Some(w) = self.c_force.get(v0.0, 0) {
+                return ValueId(w);
+            }
+        }
         let mut v = v0;
         let mut done = false;
         while !done && !self.bad() {
@@ -197,11 +205,28 @@ impl Checker {
                 None => done = true,
             }
         }
+        if cached && !self.bad() {
+            self.c_force.put(v0.0, 0, v.0);
+        }
         v
+    }
+
+    /// True if `force` and `force_core` keep the result of `v` in `c_force`: a glued value or a neutral application of a constant. The other values are already in weak head normal form.
+    fn force_cached(&self, v: ValueId) -> bool {
+        matches!(
+            self.va.get(v),
+            Value::Glued(..) | Value::Neu(Head::Const(..), _)
+        )
     }
 
     /// `force` without delta: iota, the quotient rules and the `Nat` extension on heads that do not unfold (`whnf_core` of engine R). Engine F uses it in `conv`, so that lazy delta can compare two folded definitions before it unfolds them.
     pub(crate) fn force_core(&mut self, v0: ValueId) -> ValueId {
+        let cached = matches!(self.va.get(v0), Value::Neu(Head::Const(..), _));
+        if cached {
+            if let Some(w) = self.c_force.get(v0.0, 1) {
+                return ValueId(w);
+            }
+        }
         let mut v = v0;
         let mut done = false;
         while !done && !self.bad() {
@@ -221,6 +246,9 @@ impl Checker {
                 None => done = true,
             }
         }
+        if cached && !self.bad() {
+            self.c_force.put(v0.0, 1, v.0);
+        }
         v
     }
 
@@ -228,7 +256,7 @@ impl Checker {
     fn force_step(&mut self, v: ValueId) -> Option<ValueId> {
         match self.va.get(v) {
             Value::Glued(c, us, sp, s) => {
-                let r = self.nat_value(c, us, sp);
+                let r = self.glued_nat(c, us, sp, s);
                 if r.is_some() || self.bad() {
                     return r;
                 }
@@ -258,6 +286,26 @@ impl Checker {
             }
             _ => None,
         }
+    }
+
+    /// The content of the slot of a glued value, or else the `Nat` extension on it. The result of the `Nat` extension goes into the slot, so that the next `force` of the same value does not compute it again. Without this, each `force` of `Nat.mod (Nat.mul a b) 3` computes the product again, and on a term with shared subterms the time grows with each level. The slot then holds a literal and not the unfolding of the definition. Both are values of the same term, and the `Nat` extension is tried before delta at each place, so the answer does not change.
+    pub(crate) fn glued_nat(
+        &mut self,
+        c: NameId,
+        us: LevelListId,
+        sp: SpineId,
+        s: SlotId,
+    ) -> Option<ValueId> {
+        if let Some(u) = self.va.slot_get(s) {
+            return Some(u);
+        }
+        let r = self.nat_value(c, us, sp);
+        if let Some(n) = r {
+            if !self.bad() {
+                self.va.slot_set(s, n);
+            }
+        }
+        r
     }
 
     /// The `Nat` extension (spec 05.8): `Nat.succ` and the binary operations on two literals. The arguments are forced in engine F, and the operation is the one of engine R (`reduce_nat`).

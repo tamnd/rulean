@@ -174,6 +174,8 @@ impl Checker {
         let r = self.is_def_eq_proof_irrel(ta, tb);
         if r == LBool::True {
             self.f_bits |= F_TYPED;
+            let anon = self.st.anon();
+            self.note(Rule::ProofIrrel, anon);
         }
         r
     }

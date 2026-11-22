@@ -108,7 +108,7 @@ impl Expr {
 }
 
 /// The node arrays and the table of one tier.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Nodes {
     bvar: Vec<u32>,
     sort: Vec<LevelId>,
@@ -397,6 +397,15 @@ impl Store {
     /// The number of expression nodes of a kind.
     pub fn expr_count(&self, kind: Kind) -> usize {
         self.exprs.count(kind)
+    }
+
+    /// The number of frozen expression nodes of the kind with the number `k`, or 0 if there is no such kind.
+    pub fn kind_count(&self, k: usize) -> usize {
+        if k < KIND_COUNT {
+            self.exprs.sides[k].len()
+        } else {
+            0
+        }
     }
 
     /// The number of expression nodes of all kinds.

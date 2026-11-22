@@ -145,11 +145,26 @@ pub fn compare_hints(h1: Hints, h2: Hints) -> i32 {
 /// The constants of a run.
 ///
 /// `slot` maps a name handle to the position of its constant plus 1, or to 0. A lookup returns the slot, and `at` gives the constant of a slot. This keeps references out of the return types (subset rule S10).
-#[derive(Clone, Debug, Default)]
+///
+/// **Cut.** A worker of the scheduler sees only the constants before its declaration (spec 08.3.2). The environment of a worker has all the constants of the add stage, and `cut` is the number of constants that a lookup can see. A locked environment does not change its constants: `add` and `truncate` move the cut only. So a check runs in a worker with the same code as in a sequential run.
+#[derive(Clone, Debug)]
 pub struct Env {
     consts: Vec<ConstInfo>,
     slot: Vec<u32>,
     quot_init: bool,
+    /// The number of constants when the quotient constants were added.
+    quot_len: u32,
+    /// The number of constants that a lookup can see. It is `u32::MAX` if the environment has no cut.
+    cut: u32,
+    /// True for the environment of a worker.
+    locked: bool,
+}
+
+/// An empty environment with no cut, as `Env::new`.
+impl Default for Env {
+    fn default() -> Env {
+        Env::new()
+    }
 }
 
 impl Env {
@@ -159,23 +174,55 @@ impl Env {
             consts: Vec::new(),
             slot: Vec::new(),
             quot_init: false,
+            quot_len: 0,
+            cut: u32::MAX,
+            locked: false,
         }
     }
 
-    /// The number of constants.
+    /// The number of constants that a lookup can see.
     pub fn len(&self) -> usize {
+        let n = self.consts.len();
+        let c = self.cut as usize;
+        if c < n { c } else { n }
+    }
+
+    /// True if a lookup can see no constant.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The number of constants, with the constants after the cut.
+    pub fn total(&self) -> usize {
         self.consts.len()
     }
 
-    /// True if there is no constant.
-    pub fn is_empty(&self) -> bool {
-        self.consts.len() == 0
-    }
-
-    /// The slot of the constant with the name, or 0 if there is none (`find`).
+    /// The slot of the constant with the name, or 0 if there is none or if the constant is after the cut (`find`).
     pub fn find(&self, n: NameId) -> u32 {
         let i = n.0 as usize;
+        let s = if i < self.slot.len() { self.slot[i] } else { 0 };
+        if s > self.cut { 0 } else { s }
+    }
+
+    /// The slot of the constant with the name, also after the cut, or 0 if there is none.
+    pub fn find_any(&self, n: NameId) -> u32 {
+        let i = n.0 as usize;
         if i < self.slot.len() { self.slot[i] } else { 0 }
+    }
+
+    /// Locks the environment for a worker. After this call, `add` and `truncate` move the cut only.
+    pub fn lock(&mut self) {
+        self.locked = true;
+    }
+
+    /// True for the environment of a worker.
+    pub fn is_locked(&self) -> bool {
+        self.locked
+    }
+
+    /// Sets the cut: a lookup sees only the first `n` constants (spec 08.3.2).
+    pub fn set_cut(&mut self, n: u32) {
+        self.cut = n;
     }
 
     /// True if the environment has a constant with the name.
@@ -190,7 +237,20 @@ impl Env {
     }
 
     /// Adds the constant. A constant with the same name is replaced (`add_core`). The callers check the name first.
+    ///
+    /// In a locked environment, the add stage added the constant already, at the position after the cut. Then the call moves the cut after the constant, and the constant is not changed.
     pub fn add(&mut self, c: ConstInfo) {
+        if self.locked {
+            let s = self.find_any(c.name);
+            if s > self.cut {
+                self.cut = s;
+            }
+        } else {
+            self.add_new(c);
+        }
+    }
+
+    fn add_new(&mut self, c: ConstInfo) {
         let i = c.name.0 as usize;
         while self.slot.len() <= i {
             self.slot.push(0);
@@ -208,6 +268,16 @@ impl Env {
 
     /// Removes the constants after the first `n`, so the environment is as it was when it had `n` constants. A check that fails after it added constants uses this.
     pub fn truncate(&mut self, n: usize) {
+        if self.locked {
+            if (n as u64) < (self.cut as u64) {
+                self.cut = n as u32;
+            }
+        } else {
+            self.truncate_new(n);
+        }
+    }
+
+    fn truncate_new(&mut self, n: usize) {
         while self.consts.len() > n {
             let i = self.consts.len() - 1;
             let k = self.consts[i].name.0 as usize;
@@ -216,13 +286,16 @@ impl Env {
         }
     }
 
-    /// True if the quotient constants were added (`is_quot_initialized`).
+    /// True if the quotient constants were added before the cut (`is_quot_initialized`).
     pub fn quot_initialized(&self) -> bool {
-        self.quot_init
+        self.quot_init && self.quot_len as usize <= self.len()
     }
 
-    /// Records that the quotient constants were added.
+    /// Records that the quotient constants were added. A locked environment has the record of the add stage already.
     pub fn mark_quot_initialized(&mut self) {
-        self.quot_init = true;
+        if !self.locked {
+            self.quot_init = true;
+            self.quot_len = self.consts.len() as u32;
+        }
     }
 }

@@ -105,6 +105,7 @@ Kernel errors use the names of the official `Kernel.Exception` (A§1.13), so tha
 - Each worker owns its scratch tier, value arena and session caches. Workers share nothing that is mutable.
 - Results go into a slot array indexed by job. The merge is a function of that array (T5, 10.4.5).
 - There are no locks in the verified core. The only atomics are in `rulean-pool`.
+- In rulean 0.0.5, each worker has a copy of the store and does not share `&Store` (08.3.5).
 
 ## 03.6 What runs where in the verified build
 

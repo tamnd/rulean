@@ -81,6 +81,7 @@ dependencies = [
  "rulean-format",
  "rulean-io",
  "rulean-pack",
+ "rulean-pool",
  "rulean-store",
 ]
 

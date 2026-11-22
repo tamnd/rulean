@@ -30,7 +30,7 @@ Main options:
 | Option | Default | Meaning |
 |---|---|---|
 | `--profile <id>` | from the input | semantics profile (05.2) |
-| `--threads <n>` | number of cores | worker count (08.3) |
+| `--threads <n>` | 1 | worker count (08.3); 1 is the sequential check, and the plan is the number of cores (08.3.5) |
 | `--report <file>` | none | write the JSON report (09.4) |
 | `--format text\|json` | text | the format of standard output |
 | `--axioms <list>` | any | reject if a theorem uses an axiom outside the list; `std` means {propext, Quot.sound, Classical.choice} |

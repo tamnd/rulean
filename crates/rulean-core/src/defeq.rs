@@ -10,6 +10,7 @@ use crate::expr;
 use crate::level;
 use crate::pin::{PIN_NAT, PIN_STRING};
 use crate::tc::{Checker, LBool, to_lbool};
+use crate::trace::Rule;
 use rulean_format::Hints;
 
 /// The result of one step of lazy delta reduction (`reduction_status`).
@@ -611,6 +612,10 @@ impl Checker {
             }
         }
         let r = self.is_def_eq_proof_irrel(t_n, s_n);
+        if r == LBool::True {
+            let anon = self.st.anon();
+            self.note(Rule::ProofIrrel, anon);
+        }
         if r != LBool::Undef {
             return r == LBool::True;
         }
@@ -655,17 +660,28 @@ impl Checker {
         if t_nn != t_n || s_nn != s_n {
             return self.is_def_eq_core(t_nn, s_nn);
         }
-        if self.is_def_eq_app(t_n, s_n) || self.try_eta_expansion(t_n, s_n) {
+        let anon = self.st.anon();
+        if self.is_def_eq_app(t_n, s_n) {
+            return true;
+        }
+        if self.try_eta_expansion(t_n, s_n) {
+            self.note(Rule::EtaFn, anon);
             return true;
         }
         if self.try_eta_struct(t_n, s_n) {
+            self.note(Rule::EtaStruct, anon);
             return true;
         }
         let r = self.try_string_lit_expansion(t_n, s_n);
         if r != LBool::Undef {
+            self.note(Rule::StringLit, anon);
             return r == LBool::True;
         }
-        self.is_def_eq_unit_like(t_n, s_n)
+        let u = self.is_def_eq_unit_like(t_n, s_n);
+        if u {
+            self.note(Rule::UnitLike, anon);
+        }
+        u
     }
 
     /// `is_def_eq`: definitional equality. With `Engine::F`, engine F tries the query first (spec 05.1). A true result goes into the success cache.

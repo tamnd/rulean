@@ -18,6 +18,7 @@ use crate::level::{self, LevelCache};
 use crate::memo::Memo;
 use crate::pin;
 use crate::profile::{Flags, Profile};
+use crate::trace::Trace;
 use crate::value::Arena;
 
 /// The upper bound in bytes of a `Nat` literal (`LEAN_NAT_MAX_SIZE_DEFAULT`). This is semantics and not a resource limit (spec 05.11).
@@ -334,6 +335,10 @@ pub struct Checker {
     pub(crate) f_bits: u32,
     /// The number of open definitional equality queries. Engine F answers only a query that is not inside another query.
     pub(crate) eq_depth: u32,
+    /// `rulean explain`: write the rules that the checker applies into `trace`.
+    pub trace_on: bool,
+    /// The rule trace, when `trace_on` is true.
+    pub trace: Trace,
     /// The level parameters of the declaration (`m_lparams`). They are checked only if `check_lparams` is true.
     pub(crate) lparams: Vec<NameId>,
     pub(crate) check_lparams: bool,
@@ -393,6 +398,8 @@ impl Checker {
             f_stats: FStats::default(),
             f_bits: 0,
             eq_depth: 0,
+            trace_on: false,
+            trace: Trace::new(),
             lparams: Vec::new(),
             check_lparams: false,
             safety: Safety::Safe,

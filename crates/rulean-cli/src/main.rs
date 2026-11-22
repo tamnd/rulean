@@ -7,6 +7,7 @@ use std::process::ExitCode;
 mod check;
 mod diff;
 mod exit;
+mod explain;
 mod report;
 
 use exit::Code;
@@ -26,6 +27,10 @@ commands:
   diff <INPUT> --against <CMD>
                     check an export with rulean and with the command CMD, and
                     compare the verdicts (exit 0 if they are the same, 1 if not)
+  explain <INPUT> <DECL>
+                    check an export up to the declaration DECL and print the
+                    rules that the checker applies to DECL (takes --profile,
+                    --engine and --confirm)
   version           print the version and the build facts
   help              print this text
 
@@ -54,7 +59,7 @@ fn run(args: &[String]) -> Code {
         "olean" => not_written("olean", "M4"),
         "pack" => not_written("pack", "M4"),
         "diff" => diff::run(&args[1..]),
-        "explain" => not_written("explain", "M3"),
+        "explain" => explain::run(&args[1..]),
         other => {
             eprintln!("rulean: unknown command `{other}`\n\n{USAGE}");
             Code::Usage
@@ -108,7 +113,7 @@ mod tests {
     fn commands_that_are_not_written_decline() {
         assert_eq!(run_strs(&["check"]), Code::Usage);
         assert_eq!(run_strs(&["check", "no-such-file.ndjson"]), Code::Input);
-        for command in ["olean", "pack", "explain"] {
+        for command in ["olean", "pack"] {
             assert_eq!(run_strs(&[command]), Code::Decline, "{command}");
         }
     }

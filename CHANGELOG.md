@@ -24,6 +24,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `rulean check --engine F|R` selects the engine, and `--confirm default|all` selects the queries where engine R confirms engine F. In this version the default is `--engine R`, because engine F is new. The JSON report has the new `engine` object with the counts of engine F.
 - `scripts/arena-confirm.sh` runs engine F with `--confirm all` on each Arena test and fails if engine R does not confirm an equality of engine F. The `arena` and `arena either` CI jobs run it.
 - `rulean diff INPUT --against CMD` checks an export with rulean and with another checker, and compares the two verdicts (spec 11.3). It reads the exit codes of the other checker as the Arena does. It exits with 0 if the verdicts are the same and with 1 if they are different. It takes the check options, such as `--engine`. It does not yet compare the verdict of each declaration.
+- `rulean explain INPUT DECL` checks an export up to the declaration DECL and prints the rule trace of DECL (spec 09.2). Each line is one rule that the checker applied: delta, iota, the quotient rules, the `Nat` extension, proof irrelevance, function eta, structure eta, the unit-like rule, the string literal rule, and the answers of engine F. The indent shows the depth of the checker, and the last lines give the count of each rule. The trace keeps at most 100000 events. It takes `--profile`, `--engine` and `--confirm`.
 
 ### Changed
 

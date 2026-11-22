@@ -37,6 +37,7 @@ pub mod nbe;
 pub mod nested;
 pub mod pin;
 pub mod profile;
+pub mod sched;
 pub mod session;
 pub mod sha256;
 pub mod tc;

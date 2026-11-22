@@ -67,6 +67,15 @@ The verdict and the report do not depend on the thread count (T5, 10.1). Workers
 
 **Why not share caches between workers.** Sharing would save some work. It would also make the cache contents depend on timing. A cache entry is a true judgment, so sharing would still be sound, but it would make performance timing-dependent and the proof harder. rulean 1.0 does not share. A later release may add a read-only cache layer that is built in a first pass and then frozen.
 
+### 08.3.5 Status in rulean 0.0.5
+
+- The add stage runs on all declarations before the check stage starts. It adds each axiom, definition, theorem and opaque constant with a check of the name only, and it checks each inductive and quotient declaration fully. So the scheduler does not compute the dependency graph of 08.3.1, and each check runs after all declarations are added.
+- An inductive check in the add stage can use a definition whose check has not run yet. If that definition is wrong, the verdict is `reject`, as 08.3.1 says. The report does not mark the later declarations as `depends-on-rejected` yet. It gives the first rejected declaration in input order, as a sequential run does.
+- The check stage has 256 jobs of consecutive declarations with about the same cost, and not jobs of about 2 M instructions. The cost of a declaration is the number of distinct nodes of its type and its value. The workers take the jobs from a shared counter, the job with the largest cost first.
+- A worker keeps its session from one job to the next (08.4). A new session for each job made the check stage about two times slower on the Init export. The job sequence of a worker depends on timing. The verdict, the rejected declaration, the quarantine and the axioms do not depend on it, because each session entry is a true judgment and the stamp rule applies at the cut of each job. The session counts and the engine F counts depend on it. A check that stops at a resource limit can also depend on it.
+- Each worker has its own copy of the store and the environment, and not a shared `&Store` (03.5, K3). The memory grows by the size of the store for each worker. On Std, one thread uses 880 MB and four threads use 3285 MB.
+- `--threads` has the default 1, which is the sequential check, and not the number of cores, because of the memory of the copies.
+
 ## 08.4 Sessions: caches across declarations
 
 The official kernel clears its caches after each declaration. rulean keeps some of them in a per-worker **session** (B§8.3, gruszka).

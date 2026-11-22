@@ -50,7 +50,7 @@ pub struct Side {
 }
 
 /// The store of one run.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Store {
     // Strings: the bytes of all strings in one array.
     pub(crate) str_bytes: Vec<u8>,

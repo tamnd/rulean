@@ -10,9 +10,10 @@ use rulean_core::axioms::Axioms;
 use rulean_core::conv::Engine;
 use rulean_core::env::ConstKind;
 use rulean_core::profile::{self, Profile};
+use rulean_core::sched;
 use rulean_core::sha256::Hasher;
 use rulean_core::tc::{Checker, ErrorKind as CheckError};
-use rulean_format::{ErrorKind, Stream, rlb};
+use rulean_format::{Decl, ErrorKind, Stream, rlb};
 use rulean_store::Store;
 
 use crate::exit::Code;
@@ -40,6 +41,8 @@ pub struct Options {
     pub no_session: bool,
     /// The axioms that a theorem can use, from `--axioms`. None is `any`: each axiom is allowed.
     pub axioms: Option<Vec<String>>,
+    /// `--threads N`: the number of workers of the check stage (spec 08.3). 0 and 1 give the sequential check.
+    pub threads: usize,
 }
 
 /// The axioms of `--axioms std` (spec 09.2).
@@ -113,6 +116,16 @@ pub fn options(args: &[String]) -> Result<Options, String> {
             }
         } else if is_option(a, "--axioms") {
             o.axioms = axiom_list(&value("--axioms", a, &mut it)?)?;
+        } else if is_option(a, "--threads") {
+            let v = value("--threads", a, &mut it)?;
+            o.threads = match v.parse::<usize>() {
+                Ok(n) if (1..=1024).contains(&n) => n,
+                _ => {
+                    return Err(format!(
+                        "`--threads` needs a number from 1 to 1024, not `{v}`"
+                    ));
+                }
+            };
         } else if is_option(a, "--profile") {
             o.profile = Some(value("--profile", a, &mut it)?);
         } else if is_option(a, "--report") {
@@ -262,13 +275,27 @@ pub fn check_reader<R: BufRead>(o: &Options, input: R) -> std::io::Result<Run> {
     c.sess.on = !o.no_session;
     rep.engine = c.engine;
     rep.confirm_all = o.confirm_all;
-    let mut seen = 0;
-    let mut ax = Axioms::new();
-    let mut used: BTreeSet<String> = BTreeSet::new();
-    let mut outside: Option<String> = None;
-    for d in &export.decls {
+    if o.threads > 1 {
+        check_parallel(o, &mut c, &export.decls, &mut rep);
+    } else {
+        check_sequential(o, &mut c, &export.decls, &mut rep);
+    }
+    rep.session = !o.no_session;
+    for n in &c.pin_mismatch {
+        rep.pin_mismatch.push(name_text(&c, *n));
+    }
+    if !rep.pin_mismatch.is_empty() && !o.trust_primitives {
+        rep.deviations.push("D1");
+    }
+    Ok(done(o, rep, start))
+}
+
+/// Checks the declarations one after the other, and stops at the first declaration that is not accepted.
+fn check_sequential(o: &Options, c: &mut Checker, ds: &[Decl], rep: &mut Report) {
+    let mut t = Tally::new();
+    for d in ds {
         if let Some(f) = c.add_decl(d) {
-            let n = name_text(&c, d.name());
+            let n = name_text(c, d.name());
             rep.code = code_of_check(f.kind);
             if rep.code == Code::Reject {
                 rep.rejected = 1;
@@ -278,48 +305,117 @@ pub fn check_reader<R: BufRead>(o: &Options, input: R) -> std::io::Result<Run> {
             break;
         }
         rep.accepted += 1;
-        ax.update(&c.st, &c.env);
-        while seen < c.env.len() {
-            seen += 1;
-            let ci = c.env.at(seen as u32);
+        t.step(o, c, rep);
+    }
+    t.finish(rep);
+    rep.f_stats = c.f_stats;
+    rep.s_stats = c.sess.stats;
+    rep.s_entries = c.sess.len();
+    if c.st.is_full() {
+        store_full(rep);
+    }
+}
+
+/// The quarantine and the axioms of the accepted declarations. `step` reads the constants that the last accepted declaration added.
+struct Tally {
+    seen: usize,
+    ax: Axioms,
+    used: BTreeSet<String>,
+    outside: Option<String>,
+}
+
+impl Tally {
+    fn new() -> Tally {
+        Tally {
+            seen: 0,
+            ax: Axioms::new(),
+            used: BTreeSet::new(),
+            outside: None,
+        }
+    }
+
+    /// Reads the constants after the last call, up to the length of the environment.
+    fn step(&mut self, o: &Options, c: &Checker, rep: &mut Report) {
+        self.ax.update(&c.st, &c.env);
+        while self.seen < c.env.len() {
+            self.seen += 1;
+            let ci = c.env.at(self.seen as u32);
             if ci.is_unsafe() || ci.is_partial_defn() {
-                rep.quarantine.push(name_text(&c, ci.name));
+                rep.quarantine.push(name_text(c, ci.name));
             }
             if matches!(ci.kind, ConstKind::Thm { .. }) {
-                for a in ax.of_slot(seen as u32) {
-                    let t = name_text(&c, *a);
-                    if outside.is_none()
+                for a in self.ax.of_slot(self.seen as u32) {
+                    let t = name_text(c, *a);
+                    if self.outside.is_none()
                         && let Some(allowed) = &o.axioms
                         && !allowed.contains(&t)
                     {
-                        outside = Some(format!(
+                        self.outside = Some(format!(
                             "{}: the theorem uses the axiom {t}, which is not in --axioms",
-                            name_text(&c, ci.name)
+                            name_text(c, ci.name)
                         ));
                     }
-                    used.insert(t);
+                    self.used.insert(t);
                 }
             }
         }
     }
-    rep.axioms_used = used.into_iter().collect();
-    if rep.code == Code::Accept
-        && let Some(e) = outside
-    {
-        rep.code = Code::AxiomPolicy;
-        rep.error = Some(e);
+
+    /// Puts the axioms into the report. If all declarations are accepted and a theorem uses an axiom outside `--axioms`, the verdict is `axiom-policy`.
+    fn finish(self, rep: &mut Report) {
+        rep.axioms_used = self.used.into_iter().collect();
+        if rep.code == Code::Accept
+            && let Some(e) = self.outside
+        {
+            rep.code = Code::AxiomPolicy;
+            rep.error = Some(e);
+        }
     }
-    rep.f_stats = c.f_stats;
-    rep.session = !o.no_session;
-    rep.s_stats = c.sess.stats;
-    rep.s_entries = c.sess.len();
-    for n in &c.pin_mismatch {
-        rep.pin_mismatch.push(name_text(&c, *n));
+}
+
+/// Checks the declarations with the two-stage scheduler of spec 08.3 on `o.threads` workers. The result is the same as the result of `check_sequential`, except for the counts of the caches.
+fn check_parallel(o: &Options, c: &mut Checker, ds: &[Decl], rep: &mut Report) {
+    let plan = c.plan(ds);
+    let order = rulean_pool::largest_first(&plan.costs);
+    let main: &Checker = c;
+    let results = rulean_pool::run_all(
+        o.threads,
+        STACK_BYTES,
+        &order,
+        || Checker::worker(main.st.clone(), main.env.clone(), main),
+        |w: &mut Checker, k| w.run_job(&plan, ds, k),
+    );
+    let out = sched::merge(&plan, &results, ds.len() as u32);
+    rep.accepted = out.accepted as usize;
+    if let Some((i, f)) = out.failed {
+        let n = name_text(c, ds[i as usize].name());
+        rep.code = code_of_check(f.kind);
+        if rep.code == Code::Reject {
+            rep.rejected = 1;
+        }
+        rep.error = Some(format!("{n}: {:?}", f.kind));
+        rep.failed_decl = Some(n);
     }
-    if !rep.pin_mismatch.is_empty() && !o.trust_primitives {
-        rep.deviations.push("D1");
+    // The constants of the accepted declarations, in the order of the add stage. The cut gives `Tally` the environment after each declaration, as in a sequential run.
+    let mut t = Tally::new();
+    for &end in plan.ends.iter().take(out.accepted as usize) {
+        c.env.set_cut(end);
+        t.step(o, c, rep);
     }
-    Ok(done(o, rep, start))
+    c.env.set_cut(u32::MAX);
+    t.finish(rep);
+    rep.f_stats = out.f_stats;
+    rep.s_stats = out.s_stats;
+    rep.s_entries = out.s_entries as usize;
+    if out.full || c.st.is_full() {
+        store_full(rep);
+    }
+}
+
+/// The result of a run where an array of the store was full. Then some handles are wrong, so the run stops with a resource error (see the crate `rulean-store`).
+fn store_full(rep: &mut Report) {
+    rep.code = Code::Resource;
+    rep.error = Some("the store is full".to_owned());
 }
 
 fn done(o: &Options, mut rep: Report, start: Instant) -> Run {
@@ -594,6 +690,22 @@ mod tests {
             Some(want.iter().map(|a| (*a).to_owned()).collect())
         );
         assert!(options(&strs(&["x", "--axioms", "std,"])).is_err());
+        assert_eq!(options(&strs(&["x"])).expect("valid").threads, 0);
+        assert_eq!(
+            options(&strs(&["x", "--threads", "8"]))
+                .expect("valid")
+                .threads,
+            8
+        );
+        assert_eq!(
+            options(&strs(&["x", "--threads=1024"]))
+                .expect("valid")
+                .threads,
+            1024
+        );
+        assert!(options(&strs(&["x", "--threads", "0"])).is_err());
+        assert!(options(&strs(&["x", "--threads", "1025"])).is_err());
+        assert!(options(&strs(&["x", "--threads", "many"])).is_err());
     }
 
     #[test]
@@ -662,6 +774,18 @@ mod tests {
         );
         let r = run_on(&bad, &Options::default());
         assert_eq!(r.code, Code::Reject);
+        assert_eq!(r.failed_decl.as_deref(), Some("B"));
+        // The scheduler gives the same results. The type of `B` is checked in the check stage.
+        let four = Options {
+            threads: 4,
+            ..Options::default()
+        };
+        let r = run_on(&good, &four);
+        assert_eq!(r.code, Code::Accept, "{:?}", r.error);
+        assert_eq!(r.accepted, 1);
+        let r = run_on(&bad, &four);
+        assert_eq!(r.code, Code::Reject);
+        assert_eq!(r.accepted, 1);
         assert_eq!(r.failed_decl.as_deref(), Some("B"));
     }
 

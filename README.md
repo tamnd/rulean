@@ -42,10 +42,13 @@ rulean check --report report.json export.ndjson
 rulean check --profile v4.35 export.ndjson
 rulean pack export.ndjson -o export.rlb
 rulean check export.rlb
+rulean check --threads 4 export.ndjson
 rulean check --format text --axioms std export.ndjson
 ```
 
 The input is an export in the NDJSON format of [lean4export](https://github.com/leanprover/lean4export), or `-` for standard input. `rulean pack` writes the binary format of `docs/spec/07-input-formats.md` (07.2). This format is a cache of the export with less parse work, and `rulean check` finds it from its first bytes. rulean selects the semantics profile from the Lean version of the export. Use `--profile` for an export from a Lean version that has no profile. The JSON report follows `docs/report.schema.json`. After the check, rulean reads the input file again. If the file changed during the run, the exit code is 4 and the report gives no verdict.
+
+`--threads N` checks the declarations on N threads with the scheduler of spec 08.3. The verdict and the rejected declaration are the same as with one thread. Each thread has a copy of the term store, so the memory grows with N. The default is one thread.
 
 `--axioms LIST` gives the axioms that a theorem can use. LIST is `any` (the default), `none`, or names with a comma between them. The name `std` means `propext`, `Quot.sound` and `Classical.choice`. If every declaration is accepted but a theorem uses an axiom outside the list, the exit code is 5. The axioms of a theorem are the axioms that `#print axioms` shows. The last command above is the command for an external kernel of `lake comparator`. Lake adds the path of the export at the end, so the entry in `comparator.json` is:
 

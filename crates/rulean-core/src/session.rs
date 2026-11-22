@@ -108,6 +108,14 @@ impl Session {
         }
     }
 
+    /// A new empty session with the same size limit and the same `on` flag. The counts are zero.
+    pub fn fresh(&self) -> Session {
+        let mut s = Session::new(0);
+        s.max_slots = self.max_slots;
+        s.on = self.on;
+        s
+    }
+
     /// The number of entries in the table.
     pub fn len(&self) -> usize {
         self.len

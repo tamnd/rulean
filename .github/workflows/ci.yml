@@ -127,6 +127,10 @@ jobs:
           target/debug/rulean check --format json - < crates/rulean-cli/tests/data/loose-bvar.ndjson > _tmp/reject.json || code=$?
           test "$code" = 1
           jq -e '.verdict == "reject" and .failed_decl == "B"' _tmp/reject.json
+          code=0
+          target/debug/rulean check --threads 2 --format json crates/rulean-cli/tests/data/loose-bvar.ndjson > _tmp/reject2.json || code=$?
+          test "$code" = 1
+          jq -e '.verdict == "reject" and .failed_decl == "B"' _tmp/reject2.json
 
   # Every test of the Lean Kernel Arena must parse (milestone M1) and give the expected verdict (milestone M2). The job downloads the Arena, so it depends on arena.lean-lang.org and is not a required check.
   arena:
@@ -157,6 +161,8 @@ jobs:
         run: scripts/arena-check.sh _tmp/arena/tests
       - name: engine F and engine R on the Arena
         run: scripts/arena-confirm.sh _tmp/arena/tests
+      - name: the scheduler on the Arena
+        run: scripts/arena-threads.sh _tmp/arena/tests 4
 
   # The Arena tarball does not have the 30 tests with the outcome either, so the job builds them from the Arena sources at the commit of results.json with the Lean v4.36.0 release. The verdicts must be the verdicts of the official kernel in docs/arena/either-v4.35.tsv. The job depends on arena.lean-lang.org and on the Lean release, so it is not a required check.
   arena-either:

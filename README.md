@@ -40,9 +40,9 @@ target/release/rulean version
 rulean check export.ndjson
 rulean check --report report.json export.ndjson
 rulean check --profile v4.35 export.ndjson
-rulean check --format text --axioms std export.ndjson
 rulean pack export.ndjson -o export.rlb
 rulean check export.rlb
+rulean check --format text --axioms std export.ndjson
 ```
 
 The input is an export in the NDJSON format of [lean4export](https://github.com/leanprover/lean4export), or `-` for standard input. `rulean pack` writes the binary format of `docs/spec/07-input-formats.md` (07.2). This format is a cache of the export with less parse work, and `rulean check` finds it from its first bytes. rulean selects the semantics profile from the Lean version of the export. Use `--profile` for an export from a Lean version that has no profile. The JSON report follows `docs/report.schema.json`.

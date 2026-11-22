@@ -2,6 +2,17 @@
 
 This directory is the Lean package of the rulean proofs (spec 10). It will hold the theorems T1 to T6, the Lean twin of the verified core and the Lean files that Aeneas extracts from the Rust code.
 
+## Contents
+
+| Module | Contents |
+|---|---|
+| `RuleanProof.Basic` | the link to `ConLeche.IsModel` of con-leche |
+| `RuleanProof.Statements` | the draft statements of the theorems T1 to T6 of spec 10.1 |
+| `RuleanProof.Twin.Order` | a twin of the step order of the conversion loop, and the reordering lemmas O1, O2, O3 and O5 of spec 05.7.3 |
+| `RuleanProof.Twin.Zeta` | the reordering lemma O4 (lazy `let`) of spec 05.7.3 |
+
+The twin of `Twin/Order.lean` and `Twin/Zeta.lean` has terms with no binders and no types. Theorem R1 must still connect it to the Aeneas model of engine F.
+
 ## Dependencies
 
 | Package | Pin | Use |

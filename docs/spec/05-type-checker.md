@@ -178,6 +178,8 @@ Engine F may change the order of steps only as listed here. Each row has a twin 
 
 Rows are added only with a lemma, an Arena regression test and a corpus run that shows no verdict change.
 
+The lemmas of O1 to O5 are in `proof/RuleanProof/Twin/Order.lean` and `proof/RuleanProof/Twin/Zeta.lean`. They are proved on a twin of the step order. The terms of this twin have no binders and no types, and the twin has no proof irrelevance and no eta. Theorem R1 (10.3) must still connect this twin to the Aeneas model of engine F.
+
 ## 05.8 Nat and String literal extensions
 
 The kernel has exactly 15 built-in Nat operations (A§1.7): `Nat.succ`, `Nat.add`, `Nat.sub`, `Nat.mul`, `Nat.pow`, `Nat.gcd`, `Nat.div`, `Nat.mod`, `Nat.beq`, `Nat.ble`, `Nat.land`, `Nat.lor`, `Nat.xor`, `Nat.shiftLeft`, `Nat.shiftRight`.

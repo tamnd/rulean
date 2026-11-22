@@ -59,7 +59,7 @@ pub fn run(args: &[String]) -> Code {
     };
     let path = o.input.clone().unwrap_or_default();
     let reader = match check::open_input(&path) {
-        Ok(r) => r,
+        Ok(i) => i.reader,
         Err(e) => {
             eprintln!("rulean explain: cannot read {path}: {e}");
             return Code::Input;

@@ -74,8 +74,9 @@ pub fn run(args: &[String]) -> Code {
 /// Parses `input` and writes the binary file `output`. The result is a line with the counts, or the exit code and an error text.
 pub fn pack(input: &str, output: &str) -> Result<String, (Code, String)> {
     let start = Instant::now();
-    let mut reader =
+    let opened =
         open_input(input).map_err(|e| (Code::Input, format!("cannot read {input}: {e}")))?;
+    let mut reader = opened.reader;
     let head = std::io::BufRead::fill_buf(&mut reader)
         .map_err(|e| (Code::Input, format!("cannot read {input}: {e}")))?;
     if rlb::is_binary(head) {
@@ -91,6 +92,16 @@ pub fn pack(input: &str, output: &str) -> Result<String, (Code, String)> {
         sha256: digest,
     };
     let (bytes, n) = encode(&store, &export.decls, &src).map_err(|e| (Code::Input, e))?;
+    // Contract K2 (spec 10.7): the digest in the header must be the digest of the file as it is now.
+    match rulean_io::confirm(&opened.source, &digest) {
+        Ok(rulean_io::Confirm::Same | rulean_io::Confirm::NotAFile) => {}
+        Ok(rulean_io::Confirm::Changed(_)) => {
+            return Err((Code::Input, format!("{input} changed during the run")));
+        }
+        Err(e) => {
+            return Err((Code::Input, format!("cannot read {input} again: {e}")));
+        }
+    }
     std::fs::write(output, &bytes)
         .map_err(|e| (Code::Usage, format!("cannot write {output}: {e}")))?;
     Ok(format!(

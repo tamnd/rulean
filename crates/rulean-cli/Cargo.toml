@@ -20,6 +20,7 @@ path = "src/main.rs"
 [dependencies]
 rulean-core = { path = "../rulean-core" }
 rulean-format = { path = "../rulean-format" }
+rulean-io = { path = "../rulean-io" }
 rulean-pack = { path = "../rulean-pack" }
 rulean-store = { path = "../rulean-store" }
 

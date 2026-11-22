@@ -2,6 +2,8 @@
 //!
 //! The JSON text is written by hand, so the CLI has no JSON dependency. The schema is in `docs/report.schema.json`. Fields are only added, and a change of a field changes the schema version.
 
+use rulean_core::conv::{Engine, FStats};
+
 use crate::exit::Code;
 
 /// The schema version of the report.
@@ -25,6 +27,9 @@ pub struct Report {
     pub pin_mismatch: Vec<String>,
     pub deviations: Vec<&'static str>,
     pub wall_ms: u128,
+    pub engine: Engine,
+    pub confirm_all: bool,
+    pub f_stats: FStats,
 }
 
 /// The one line of text for standard output.
@@ -97,7 +102,22 @@ pub fn json(r: &Report) -> String {
         r.wall_ms
     ));
     s.push_str(&format!("  \"quarantine\": {},\n", list(&r.quarantine)));
-    s.push_str(&format!("  \"pin_mismatch\": {}\n", list(&r.pin_mismatch)));
+    s.push_str(&format!("  \"pin_mismatch\": {},\n", list(&r.pin_mismatch)));
+    let f = &r.f_stats;
+    s.push_str(&format!(
+        "  \"engine\": {{ \"engine\": {}, \"confirm\": {}, \"f_queries\": {}, \"f_equal\": {}, \"f_fallback\": {}, \"f_faults\": {}, \"r_confirmed\": {}, \"r_disagree\": {} }}\n",
+        quote(match r.engine {
+            Engine::F => "F",
+            Engine::R => "R",
+        }),
+        quote(if r.confirm_all { "all" } else { "default" }),
+        f.queries,
+        f.equal,
+        f.fallback,
+        f.faults,
+        f.confirmed,
+        f.disagree
+    ));
     s.push('}');
     s
 }

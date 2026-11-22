@@ -5,6 +5,7 @@
 use std::io::{BufRead, BufReader};
 use std::time::Instant;
 
+use rulean_core::conv::Engine;
 use rulean_core::profile::{self, Profile};
 use rulean_core::sha256::Hasher;
 use rulean_core::tc::{Checker, ErrorKind as CheckError};
@@ -26,6 +27,12 @@ pub struct Options {
     pub report: Option<String>,
     pub json: bool,
     pub trust_primitives: bool,
+    /// `--engine R` gives true: engine R only. The default is engine R in this version (see `run`).
+    pub engine_r: bool,
+    /// `--engine` was given.
+    pub engine_set: bool,
+    /// `--confirm all`.
+    pub confirm_all: bool,
 }
 
 /// The value of an option that takes one, from `--name=value` or from the next argument.
@@ -53,6 +60,19 @@ pub fn options(args: &[String]) -> Result<Options, String> {
             o.parse_only = true;
         } else if a == "--trust-primitives-by-name" {
             o.trust_primitives = true;
+        } else if is_option(a, "--engine") {
+            match value("--engine", a, &mut it)?.as_str() {
+                "F" => o.engine_r = false,
+                "R" => o.engine_r = true,
+                v => return Err(format!("unknown engine `{v}`")),
+            }
+            o.engine_set = true;
+        } else if is_option(a, "--confirm") {
+            match value("--confirm", a, &mut it)?.as_str() {
+                "default" => o.confirm_all = false,
+                "all" => o.confirm_all = true,
+                v => return Err(format!("unknown confirm set `{v}`")),
+            }
         } else if is_option(a, "--profile") {
             o.profile = Some(value("--profile", a, &mut it)?);
         } else if is_option(a, "--report") {
@@ -177,6 +197,10 @@ pub fn check_reader<R: BufRead>(o: &Options, input: R) -> std::io::Result<Run> {
     let mut c = Checker::new(store);
     c.flags = prof.flags();
     c.trust_primitives = o.trust_primitives;
+    c.engine = engine_of(o);
+    c.confirm_all = o.confirm_all;
+    rep.engine = c.engine;
+    rep.confirm_all = o.confirm_all;
     let mut seen = 0;
     for d in &export.decls {
         if let Some(f) = c.add_decl(d) {
@@ -198,6 +222,7 @@ pub fn check_reader<R: BufRead>(o: &Options, input: R) -> std::io::Result<Run> {
             }
         }
     }
+    rep.f_stats = c.f_stats;
     for n in &c.pin_mismatch {
         rep.pin_mismatch.push(name_text(&c, *n));
     }
@@ -213,6 +238,15 @@ fn done(o: &Options, mut rep: Report, start: Instant) -> Run {
         report: rep,
         report_file: o.report.clone(),
         json: o.json,
+    }
+}
+
+/// The engine of the run. Engine R is the default in this version, because engine F is new and the Arena runs with `--confirm all` must first show no difference (spec 05.1). Spec 09.2 makes engine F the default later.
+fn engine_of(o: &Options) -> Engine {
+    if o.engine_set && !o.engine_r {
+        Engine::F
+    } else {
+        Engine::R
     }
 }
 
@@ -378,6 +412,15 @@ mod tests {
         assert!(options(&strs(&["x", "--format=xml"])).is_err());
         let o = options(&strs(&["x", "--trust-primitives-by-name"])).expect("valid");
         assert!(o.trust_primitives);
+        let o = options(&strs(&["x", "--engine", "F", "--confirm=all"])).expect("valid");
+        assert_eq!(engine_of(&o), Engine::F);
+        assert!(o.confirm_all);
+        let o = options(&strs(&["x", "--engine=R"])).expect("valid");
+        assert_eq!(engine_of(&o), Engine::R);
+        let o = options(&strs(&["x"])).expect("valid");
+        assert_eq!(engine_of(&o), Engine::R);
+        assert!(options(&strs(&["x", "--engine", "G"])).is_err());
+        assert!(options(&strs(&["x", "--confirm", "some"])).is_err());
     }
 
     #[test]

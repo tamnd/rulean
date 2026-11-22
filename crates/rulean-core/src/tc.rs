@@ -11,6 +11,7 @@ use rulean_format::Safety;
 use rulean_nat::Nat;
 use rulean_store::{BinderInfo, Expr, ExprId, LevelId, Literal, NameId, Store};
 
+use crate::conv::{Engine, FStats};
 use crate::env::{ConstKind, Env};
 use crate::expr::{self, Scratch};
 use crate::level::{self, LevelCache};
@@ -323,6 +324,16 @@ pub struct Checker {
     pub(crate) va: Arena,
     /// The number of binders that `quote` of engine F has opened. Their free variables are not in the local context.
     pub(crate) f_under: u32,
+    /// The engine of the definitional equality queries (`--engine`).
+    pub engine: Engine,
+    /// `--confirm all`: engine R confirms each "equal" answer of engine F.
+    pub confirm_all: bool,
+    /// The counts of engine F since the checker was made.
+    pub f_stats: FStats,
+    /// The rules that the current engine F query used, as the bits `F_DELTA` and `F_TYPED`.
+    pub(crate) f_bits: u32,
+    /// The number of open definitional equality queries. Engine F answers only a query that is not inside another query.
+    pub(crate) eq_depth: u32,
     /// The level parameters of the declaration (`m_lparams`). They are checked only if `check_lparams` is true.
     pub(crate) lparams: Vec<NameId>,
     pub(crate) check_lparams: bool,
@@ -340,6 +351,10 @@ pub struct Checker {
     pub(crate) c_unfold: Memo,
     pub(crate) c_success: Memo,
     pub(crate) c_failure: Memo,
+    /// Engine F: the pairs of values that `conv` found not equal in the current top-level query.
+    pub(crate) c_conv_failure: Memo,
+    /// Engine F: `const_never_proof` of a constant at key (constant, 0), 1 for true and 2 for false.
+    pub(crate) c_never_proof: Memo,
     /// `m_eager_reduce`.
     pub(crate) eager: bool,
     pub(crate) depth: u32,
@@ -373,6 +388,11 @@ impl Checker {
             x: Scratch::new(),
             va: Arena::new(),
             f_under: 0,
+            engine: Engine::R,
+            confirm_all: false,
+            f_stats: FStats::default(),
+            f_bits: 0,
+            eq_depth: 0,
             lparams: Vec::new(),
             check_lparams: false,
             safety: Safety::Safe,
@@ -386,6 +406,8 @@ impl Checker {
             c_unfold: Memo::new(),
             c_success: Memo::new(),
             c_failure: Memo::new(),
+            c_conv_failure: Memo::new(),
+            c_never_proof: Memo::new(),
             eager: false,
             depth: 0,
             max_depth: MAX_DEPTH,
@@ -411,6 +433,8 @@ impl Checker {
         self.clear_caches();
         self.va.reset();
         self.f_under = 0;
+        self.f_bits = 0;
+        self.eq_depth = 0;
         self.eager = false;
         self.depth = 0;
         self.fault = None;
@@ -424,6 +448,8 @@ impl Checker {
         self.c_unfold.clear();
         self.c_success.clear();
         self.c_failure.clear();
+        self.c_conv_failure.clear();
+        self.c_never_proof.clear();
     }
 
     /// The first error since `begin`, if any.

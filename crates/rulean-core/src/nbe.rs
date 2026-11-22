@@ -9,6 +9,7 @@
 use alloc::vec::Vec;
 use rulean_store::{Expr, ExprId, LevelListId, Literal, NameId};
 
+use crate::conv::{F_DELTA, F_TYPED};
 use crate::env::ConstKind;
 use crate::expr;
 use crate::pin::{PIN_NAT, PIN_STRING};
@@ -156,7 +157,13 @@ impl Checker {
     }
 
     /// The unfolding of a glued value. It is computed once and kept in the slot of the value.
-    fn unfold_glued(&mut self, c: NameId, us: LevelListId, sp: SpineId, s: SlotId) -> ValueId {
+    pub(crate) fn unfold_glued(
+        &mut self,
+        c: NameId,
+        us: LevelListId,
+        sp: SpineId,
+        s: SlotId,
+    ) -> ValueId {
         match self.va.slot_get(s) {
             Some(u) => u,
             None => {
@@ -168,6 +175,7 @@ impl Checker {
                         return self.v_dummy();
                     }
                 };
+                self.f_bits |= F_DELTA;
                 let h = self.eval(EnvId::NIL, body);
                 let u = self.apply_spine(h, sp, e);
                 if !self.bad() {
@@ -184,6 +192,30 @@ impl Checker {
         let mut done = false;
         while !done && !self.bad() {
             match self.force_step(v) {
+                Some(w) => v = w,
+                None => done = true,
+            }
+        }
+        v
+    }
+
+    /// `force` without delta: iota, the quotient rules and the `Nat` extension on heads that do not unfold (`whnf_core` of engine R). Engine F uses it in `conv`, so that lazy delta can compare two folded definitions before it unfolds them.
+    pub(crate) fn force_core(&mut self, v0: ValueId) -> ValueId {
+        let mut v = v0;
+        let mut done = false;
+        while !done && !self.bad() {
+            let r = match self.va.get(v) {
+                Value::Neu(Head::Const(c, us), sp) => {
+                    let n = self.nat_value(c, us, sp);
+                    if n.is_some() || self.bad() {
+                        n
+                    } else {
+                        self.iota_value(c, us, sp)
+                    }
+                }
+                _ => None,
+            };
+            match r {
                 Some(w) => v = w,
                 None => done = true,
             }
@@ -228,7 +260,7 @@ impl Checker {
     }
 
     /// The `Nat` extension (spec 05.8): `Nat.succ` and the binary operations on two literals. The arguments are forced in engine F, and the operation is the one of engine R (`reduce_nat`).
-    fn nat_value(&mut self, c: NameId, us: LevelListId, sp: SpineId) -> Option<ValueId> {
+    pub(crate) fn nat_value(&mut self, c: NameId, us: LevelListId, sp: SpineId) -> Option<ValueId> {
         if !self.pin_on(PIN_NAT) || us != LevelListId(0) {
             return None;
         }
@@ -317,6 +349,7 @@ impl Checker {
         if t2 == t || self.bad() {
             major
         } else {
+            self.f_bits |= F_TYPED;
             self.eval(EnvId::NIL, t2)
         }
     }
@@ -337,6 +370,7 @@ impl Checker {
         if t2 == t || self.bad() {
             major
         } else {
+            self.f_bits |= F_TYPED;
             self.eval(EnvId::NIL, t2)
         }
     }

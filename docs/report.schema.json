@@ -43,6 +43,20 @@
       }
     },
     "quarantine": { "type": "array", "items": { "type": "string" }, "description": "The names of the unsafe and partial constants." },
-    "pin_mismatch": { "type": "array", "items": { "type": "string" }, "description": "The primitives whose declaration is not the reference declaration (spec 05.8)." }
+    "pin_mismatch": { "type": "array", "items": { "type": "string" }, "description": "The primitives whose declaration is not the reference declaration (spec 05.8)." },
+    "engine": {
+      "type": "object",
+      "description": "The engine of the definitional equality queries and the counts of engine F (spec 05.1).",
+      "properties": {
+        "engine": { "enum": ["F", "R"] },
+        "confirm": { "enum": ["default", "all"] },
+        "f_queries": { "type": "integer", "minimum": 0, "description": "The queries that engine F tried." },
+        "f_equal": { "type": "integer", "minimum": 0, "description": "The queries where engine F found an equality." },
+        "f_fallback": { "type": "integer", "minimum": 0, "description": "The queries where engine F did not find an equality, so engine R decided them." },
+        "f_faults": { "type": "integer", "minimum": 0, "description": "The queries where engine F stopped with a fault, so engine R decided them." },
+        "r_confirmed": { "type": "integer", "minimum": 0, "description": "The equalities of engine F that engine R confirmed." },
+        "r_disagree": { "type": "integer", "minimum": 0, "description": "The equalities of engine F that engine R did not confirm." }
+      }
+    }
   }
 }

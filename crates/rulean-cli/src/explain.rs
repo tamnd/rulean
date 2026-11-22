@@ -107,10 +107,7 @@ fn explain_reader<R: BufRead>(
     let export = match parsed {
         Ok(x) => x,
         Err(e) => {
-            return Err((
-                check::code_of(e.kind),
-                format!("line {}: {}", e.line, e.kind.text()),
-            ));
+            return Err((check::code_of(e.kind), check::error_text(&e)));
         }
     };
     let prof = match check::select_profile(o, &export.lean_version) {

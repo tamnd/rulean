@@ -68,25 +68,30 @@ The binary format is a **cache, not a new source of truth**. It is made from an 
 
 ### 07.2.2 Layout
 
-All integers are little-endian. All sections are 8-byte aligned.
+All integers are little-endian. All sections start at an 8-byte boundary. Version 1 has this layout.
 
 ```
-header      : magic "RULEANB\0", format version u32, flags u32,
+header      : magic "RULEANB\0", format version u32 (1), flags u32 (0),
               lean version (32 bytes), lean githash (40 bytes),
-              profile id u32, section count u32, SHA-256 of the source export (32 bytes)
+              profile id u32 (0), section count u32, SHA-256 of the source export (32 bytes)
 section dir : per section: kind u32, offset u64, length u64, item count u64, CRC-32C u32
-sections    : STRINGS   (lengths + UTF-8 bytes, validated once)
-              NAMES     (tag u8 + prefix index u32 + payload index u32)
-              LEVELS    (tag u8 + two operands u32)
-              EXPRS     (one array per constructor kind, as in the store, 04.2)
-              NATS      (big literals as length-prefixed u64 limbs)
-              DECLS     (declaration records with operand indices)
-              DEPS      (optional: per-declaration dependency lists, for the scheduler, 08.3)
+sections    : STRINGS   (1: all lengths u32, then all UTF-8 bytes)
+              NAMES     (2: tag u8, 3 zero bytes, prefix index u32, payload u64)
+              LEVELS    (3: tag u8, 3 zero bytes, two operands u32)
+              EXPRS     (4: one record of u32 words per node, children first)
+              NATS      (5: limb count u32, a zero u32, then the u64 limbs)
+              DECLS     (6: declaration records of u32 words with operand indices)
+              DEPS      (7, optional: per-declaration dependency lists, for the scheduler, 08.3)
 ```
 
-- Every index refers to an earlier item in its table, so decoding is one forward pass with bounds checks.
-- The EXPRS arrays have the same layout as the frozen store tier. Decoding is a bounds-checked copy plus hash recomputation. Hashes and flags are never read from the file.
-- The DEPS section is a hint. The scheduler recomputes dependencies when the hint is missing. A wrong hint can only cause a reject (unknown constant), never an accept.
+- The text fields of the header have zero bytes after the text. A version, a flag or a profile id that the decoder does not know is a decline. In version 1, the checker selects the profile from the Lean version (05.2).
+- The name at index 0 is the anonymous name, and the level at index 0 is zero. The tables do not hold them. A payload of a string name is a string index. A payload of a number name is the number.
+- The first word of an EXPRS record has the tag in its low byte: bvar, sort, const, app, lam, pi, let, nat literal, string literal, proj. For a binder, the second byte is the binder information. A const record has the name, the count of levels and the levels. The other operands are indices.
+- A number has no zero top limb, so that each number has one form. The literal bound of 07.1.2 applies.
+- The decoder reads the tables in this order: STRINGS, NAMES, LEVELS, NATS, EXPRS, DECLS. Every index refers to an item that the decoder already read, so decoding is one forward pass with bounds checks. An index to a later item is an undefined index.
+- The decoder makes each node with the constructors of the store, so the store computes the hashes and the flags again. Hashes and flags are never read from the file. A later version can copy the EXPRS arrays directly into the frozen tier, if the decode cost is too high.
+- A wrong checksum, a cut record, a nonzero pad, an unknown tag or a missing section is a reject of the input. A count must agree with the length of its section before the decoder allocates memory for it.
+- The DEPS section is a hint. The scheduler recomputes dependencies when the hint is missing. A wrong hint can only cause a reject (unknown constant), never an accept. The version 1 encoder does not write it, and the version 1 decoder does not read it.
 
 ### 07.2.3 Targets and proof
 

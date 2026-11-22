@@ -13,5 +13,8 @@ publish = false
 # The layer of spec section 03.2. xtask checks the dependency rule of 03.3 from this value.
 layer = "island"
 
+[dependencies]
+rulean-core = { path = "../rulean-core" }
+
 [lints]
 workspace = true

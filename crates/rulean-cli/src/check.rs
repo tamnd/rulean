@@ -3,7 +3,7 @@
 //! The command reads an export, selects the semantics profile and checks each declaration with engine R. It stops at the first declaration that is not accepted. The exit code follows spec 09.3, and `--report` writes the JSON report of spec 09.4.
 
 use std::collections::BTreeSet;
-use std::io::{BufRead, BufReader};
+use std::io::BufRead;
 use std::time::Instant;
 
 use rulean_core::axioms::Axioms;
@@ -149,7 +149,7 @@ pub fn run(args: &[String]) -> Code {
     if o.parse_only {
         let path = o.input.clone().unwrap_or_default();
         return match open_input(&path) {
-            Ok(r) => parse_only(&path, r),
+            Ok(i) => parse_only(&path, i.reader),
             Err(e) => {
                 eprintln!("rulean: cannot read {path}: {e}");
                 Code::Input
@@ -166,19 +166,24 @@ pub fn run(args: &[String]) -> Code {
 /// Checks the input of the options on the checker thread. An error gives the exit code, after a message on standard error.
 pub fn check_options(o: Options) -> Result<Run, Code> {
     let path = o.input.clone().unwrap_or_default();
-    let reader = match open_input(&path) {
-        Ok(r) => r,
+    let input = match open_input(&path) {
+        Ok(i) => i,
         Err(e) => {
             eprintln!("rulean: cannot read {path}: {e}");
             return Err(Code::Input);
         }
     };
+    let source = input.source;
+    let reader = input.reader;
     let h = std::thread::Builder::new()
         .stack_size(STACK_BYTES)
         .spawn(move || check_reader(&o, reader));
     match h {
         Ok(h) => match h.join() {
-            Ok(Ok(r)) => Ok(r),
+            Ok(Ok(mut r)) => {
+                confirm_input(&source, &mut r.report);
+                Ok(r)
+            }
             Ok(Err(e)) => {
                 eprintln!("rulean: cannot read {path}: {e}");
                 Err(Code::Input)
@@ -429,19 +434,53 @@ pub(crate) fn error_text(e: &rulean_format::Error) -> String {
     }
 }
 
-/// The size of the read buffer.
-const READ_BYTES: usize = 1 << 20;
+/// Opens the input read-only through `rulean-io` (contract K2, spec 10.7), or standard input for `-`.
+pub(crate) fn open_input(path: &str) -> std::io::Result<rulean_io::Input> {
+    rulean_io::open(path)
+}
 
-/// Opens the input file, or standard input for `-`.
-pub(crate) fn open_input(path: &str) -> std::io::Result<Box<dyn BufRead + Send>> {
-    if path == "-" {
-        Ok(Box::new(BufReader::with_capacity(
-            READ_BYTES,
-            std::io::stdin(),
-        )))
-    } else {
-        let f = std::fs::File::open(path)?;
-        Ok(Box::new(BufReader::with_capacity(READ_BYTES, f)))
+/// Reads the input file again after the run (contract K2). If the file changed, the report gets the input error and the verdict is not given. An input that cannot be read again does not change the report.
+pub(crate) fn confirm_input(source: &rulean_io::Source, rep: &mut Report) {
+    let mut start = [0u8; 32];
+    if !unhex(&rep.sha256, &mut start) {
+        return;
+    }
+    match rulean_io::confirm(source, &start) {
+        Ok(rulean_io::Confirm::Same | rulean_io::Confirm::NotAFile) => {}
+        Ok(rulean_io::Confirm::Changed(end)) => {
+            rep.code = Code::Input;
+            rep.error = Some(format!(
+                "the input changed during the run, the SHA-256 at the end is {}",
+                hex(&end)
+            ));
+        }
+        Err(e) => {
+            rep.code = Code::Input;
+            rep.error = Some(format!("cannot read the input again after the run: {e}"));
+        }
+    }
+}
+
+/// Reads 64 hex digits into `out`. The result is false for a text that is not 64 hex digits.
+fn unhex(s: &str, out: &mut [u8; 32]) -> bool {
+    let b = s.as_bytes();
+    if b.len() != 64 {
+        return false;
+    }
+    for (i, o) in out.iter_mut().enumerate() {
+        match (digit(b[2 * i]), digit(b[2 * i + 1])) {
+            (Some(x), Some(y)) => *o = (x << 4) | y,
+            _ => return false,
+        }
+    }
+    true
+}
+
+fn digit(c: u8) -> Option<u8> {
+    match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        _ => None,
     }
 }
 
@@ -685,5 +724,52 @@ mod tests {
     fn malformed_export_is_an_input_error() {
         let r = run_on(&format!("{META}\n{{\n"), &Options::default());
         assert_eq!(r.code, Code::Input);
+    }
+
+    #[test]
+    fn hex_digits_are_read_back() {
+        let d: [u8; 32] = core::array::from_fn(|i| (i * 37) as u8);
+        let mut out = [0u8; 32];
+        assert!(unhex(&hex(&d), &mut out));
+        assert_eq!(out, d);
+        assert!(!unhex("ab", &mut out));
+        assert!(!unhex(&"g".repeat(64), &mut out));
+    }
+
+    /// Writes `first`, gives the report of a run on it, and then writes `then` to the same file.
+    fn changed_report(name: &str, first: &[u8], then: &[u8]) -> (rulean_io::Source, Report) {
+        let p = std::env::temp_dir().join(format!("rulean-cli-{}-{name}", std::process::id()));
+        std::fs::write(&p, first).expect("write");
+        let i = open_input(p.to_str().expect("utf-8")).expect("open");
+        let d = rulean_io::digest(i.reader).expect("digest");
+        std::fs::write(&p, then).expect("write");
+        let rep = Report {
+            sha256: hex(&d),
+            ..Report::default()
+        };
+        (i.source, rep)
+    }
+
+    #[test]
+    fn a_changed_input_is_an_input_error() {
+        let (src, mut rep) = changed_report("changed", b"abc\n", b"abd\n");
+        confirm_input(&src, &mut rep);
+        assert_eq!(rep.code, Code::Input);
+        assert!(rep.error.as_deref().unwrap_or("").contains("changed"));
+        if let rulean_io::Source::File(p) = src {
+            std::fs::remove_file(p).expect("remove");
+        }
+    }
+
+    #[test]
+    fn an_unchanged_input_keeps_the_verdict() {
+        let (src, mut rep) = changed_report("same", b"abc\n", b"abc\n");
+        rep.code = Code::Reject;
+        confirm_input(&src, &mut rep);
+        assert_eq!(rep.code, Code::Reject);
+        assert_eq!(rep.error, None);
+        if let rulean_io::Source::File(p) = src {
+            std::fs::remove_file(p).expect("remove");
+        }
     }
 }

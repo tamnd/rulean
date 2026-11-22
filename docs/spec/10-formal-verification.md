@@ -207,6 +207,14 @@ Each island has a contract stated in Lean, in `proof/RuleanProof/Contracts.lean`
 
 If an island is wrong, the theorem does not apply. The mitigation is kernel diversity (10.8, last row) and the tests in 11.
 
+### 10.7.1 Status in rulean 0.0.5
+
+- K2 is stated in Lean as `ReadsAs` in `proof/RuleanProof/Contracts.lean`. The field `K2` of `Interface` in `Statements.lean` is still a free proposition.
+- `rulean-io` opens the input read-only and reads it in blocks of 1 MiB. `rulean check` and `rulean pack` read the input through it. The report gives the SHA-256 digest of the bytes that the core got.
+- After the run, `rulean-io` reads the file again and computes its digest. If the digest is not the same, `rulean check` gives exit code 4 and no verdict, and `rulean pack` writes no file. Standard input and a file that is not a regular file cannot be read again, so this check does not apply to them.
+- `rulean-io` does not map the file into memory. The second read costs about 50 instructions for each byte, 1.5 s on the 584 MB export of Std.
+- The check after the run cannot find a change that was made and then undone during the run. Review covers this case.
+
 ## 10.8 The trusted computing base
 
 | Component | Why it is trusted | Mitigation |

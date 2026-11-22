@@ -473,17 +473,25 @@ impl Checker {
     ) -> bool {
         let mut t = t0;
         let mut s = s0;
-        let mut st = Status::Continue;
-        while st == Status::Continue && !self.bad() {
+        let mut equal = false;
+        let mut done = false;
+        while !done && !self.bad() {
             let (r, t1, s1) = self.lazy_delta_reduction_step(t, s);
-            st = r;
             t = t1;
             s = s1;
+            match r {
+                Status::Continue => {}
+                Status::Equal => {
+                    equal = true;
+                    done = true;
+                }
+                Status::Unknown | Status::Diff => done = true,
+            }
         }
         if self.bad() {
             return false;
         }
-        if st == Status::Equal {
+        if equal {
             return true;
         }
         let tp = self.reduce_proj_core(t, sname, idx);

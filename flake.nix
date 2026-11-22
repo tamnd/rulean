@@ -1,9 +1,9 @@
 {
   description = "rulean: the tools that extract the verified core of rulean to Lean";
 
-  # Aeneas pins the Charon commit that it needs, and Charon pins the Rust nightly that it needs. All other inputs follow these two, so one commit names the full extraction toolchain. con-ron uses the same Aeneas commit (spec 10.3).
+  # Aeneas pins the Charon commit that it needs, and Charon pins the Rust nightly that it needs. All other inputs follow these two, so one commit names the full extraction toolchain. The Lean library of this Aeneas commit uses Lean v4.36.0, as con-leche does, so the proof package can import both (spec 10.3).
   inputs = {
-    aeneas.url = "github:AeneasVerif/aeneas/557eff83ecef5083b98a52a94ca7fae63d6c1dab";
+    aeneas.url = "github:AeneasVerif/aeneas/2e3d4488280bb8a95411db81019a7854a784861f";
     nixpkgs.follows = "aeneas/charon/nixpkgs";
     flake-utils.follows = "aeneas/flake-utils";
   };

@@ -71,7 +71,7 @@ pub fn json(r: &Report) -> String {
     ));
     let format = if r.format_version.is_empty() {
         "ndjson".to_owned()
-    } else if r.format_version.starts_with("rlb-") {
+    } else if r.format_version.starts_with("rlb-") || r.format_version.starts_with("olean-") {
         r.format_version.clone()
     } else {
         format!("ndjson-{}", r.format_version)

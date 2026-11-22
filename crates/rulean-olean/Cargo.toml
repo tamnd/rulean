@@ -15,3 +15,9 @@ layer = "hardened"
 
 [lints]
 workspace = true
+
+[dependencies]
+rulean-core = { path = "../rulean-core" }
+rulean-format = { path = "../rulean-format" }
+rulean-nat = { path = "../rulean-nat" }
+rulean-store = { path = "../rulean-store" }

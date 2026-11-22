@@ -21,6 +21,7 @@ path = "src/main.rs"
 rulean-core = { path = "../rulean-core" }
 rulean-format = { path = "../rulean-format" }
 rulean-io = { path = "../rulean-io" }
+rulean-olean = { path = "../rulean-olean" }
 rulean-pack = { path = "../rulean-pack" }
 rulean-pool = { path = "../rulean-pool" }
 rulean-store = { path = "../rulean-store" }

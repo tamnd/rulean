@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use rulean_format::crc::crc32c;
 use rulean_format::rlb::*;
-use rulean_format::{Decl, Hints, InductType, QuotKind, Rec, Safety};
+use rulean_format::{Decl, Defn, Hints, InductType, QuotKind, Rec, Safety};
 use rulean_store::{BinderInfo, Expr, ExprId, Level, Literal, Name, NameId, Store, Tier};
 
 /// The facts of the source export that go into the header.
@@ -262,6 +262,13 @@ impl Encoder<'_> {
                 self.visit(x.value)
             }
             Decl::Quot(x) => self.visit(x.ty),
+            Decl::Mutual(ds) => {
+                for x in ds {
+                    self.visit(x.ty)?;
+                    self.visit(x.value)?;
+                }
+                Ok(())
+            }
             Decl::Induct(x) => {
                 for t in &x.types {
                     self.visit(t.ty)?;
@@ -385,20 +392,14 @@ impl Encoder<'_> {
             }
             Decl::Defn(x) => {
                 put32(out, D_DEFN);
-                put32(out, x.name.0);
-                Self::names_list(out, &x.lparams);
-                put32(out, self.at(x.ty));
-                put32(out, self.at(x.value));
-                match x.hints {
-                    Hints::Opaque => put32(out, 0),
-                    Hints::Abbrev => put32(out, 1),
-                    Hints::Regular(h) => {
-                        put32(out, 2);
-                        put32(out, h);
-                    }
+                self.defn(out, x);
+            }
+            Decl::Mutual(ds) => {
+                put32(out, D_MUTUAL);
+                put32(out, ds.len() as u32);
+                for x in ds {
+                    self.defn(out, x);
                 }
-                put32(out, safety_code(x.safety));
-                Self::names_list(out, &x.all);
             }
             Decl::Thm(x) => {
                 put32(out, D_THM);
@@ -455,6 +456,24 @@ impl Encoder<'_> {
                 }
             }
         }
+    }
+
+    /// The fields of a definition, after its tag.
+    fn defn(&self, out: &mut Vec<u8>, x: &Defn) {
+        put32(out, x.name.0);
+        Self::names_list(out, &x.lparams);
+        put32(out, self.at(x.ty));
+        put32(out, self.at(x.value));
+        match x.hints {
+            Hints::Opaque => put32(out, 0),
+            Hints::Abbrev => put32(out, 1),
+            Hints::Regular(h) => {
+                put32(out, 2);
+                put32(out, h);
+            }
+        }
+        put32(out, safety_code(x.safety));
+        Self::names_list(out, &x.all);
     }
 
     fn induct_type(&self, out: &mut Vec<u8>, t: &InductType) {

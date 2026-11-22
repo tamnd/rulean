@@ -159,10 +159,12 @@ pub enum Decl {
     Opaque(Opaque),
     Quot(Quot),
     Induct(Induct),
+    /// A block of unsafe or partial definitions that can refer to each other, as the `mutualDefnDecl` declaration of Lean. The checker adds it with `add_mutual`. The NDJSON format has no form for it, and the `.olean` reader gives it (spec 07.3.4).
+    Mutual(Vec<Defn>),
 }
 
 impl Decl {
-    /// The name of the declaration. For an inductive block, it is the name of the first type, or the anonymous name if the block has no type.
+    /// The name of the declaration. For an inductive block, it is the name of the first type, and for a mutual block the name of the first definition. For an empty block it is the anonymous name.
     pub fn name(&self) -> NameId {
         match self {
             Decl::Axiom(d) => d.name,
@@ -175,6 +177,13 @@ impl Decl {
                     NameId(0)
                 } else {
                     d.types[0].name
+                }
+            }
+            Decl::Mutual(ds) => {
+                if ds.len() == 0 {
+                    NameId(0)
+                } else {
+                    ds[0].name
                 }
             }
         }

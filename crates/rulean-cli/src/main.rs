@@ -1,6 +1,6 @@
 //! The `rulean` command line.
 //!
-//! The commands and the exit codes follow section 09 of the specification. A command that is not written yet exits with code 2 (decline) and names the milestone that adds it, so that a caller never reads it as an accept.
+//! The commands and the exit codes follow section 09 of the specification.
 
 use std::process::ExitCode;
 
@@ -8,6 +8,7 @@ mod check;
 mod diff;
 mod exit;
 mod explain;
+mod olean;
 mod pack;
 mod report;
 
@@ -32,6 +33,9 @@ commands:
                     check an export up to the declaration DECL and print the
                     rules that the checker applies to DECL (takes --profile,
                     --engine and --confirm)
+  olean <MODULE>... check modules and their imports from .olean files
+                    --path <dir>: a directory of the search path, more than one
+                    is allowed (LEAN_PATH by default); takes the options of check
   pack <INPUT> -o <OUT.rlb>
                     write the binary format of an NDJSON export, which
                     `check` reads with less parse work
@@ -60,7 +64,7 @@ fn run(args: &[String]) -> Code {
             Code::Accept
         }
         "check" => check::run(&args[1..]),
-        "olean" => not_written("olean", "M4"),
+        "olean" => olean::run(&args[1..]),
         "pack" => pack::run(&args[1..]),
         "diff" => diff::run(&args[1..]),
         "explain" => explain::run(&args[1..]),
@@ -69,11 +73,6 @@ fn run(args: &[String]) -> Code {
             Code::Usage
         }
     }
-}
-
-fn not_written(command: &str, milestone: &str) -> Code {
-    eprintln!("rulean: the `{command}` command is not written yet. Milestone {milestone} adds it.");
-    Code::Decline
 }
 
 fn version_text() -> String {
@@ -114,10 +113,14 @@ mod tests {
     }
 
     #[test]
-    fn commands_that_are_not_written_decline() {
+    fn commands_check_their_arguments() {
         assert_eq!(run_strs(&["check"]), Code::Usage);
         assert_eq!(run_strs(&["check", "no-such-file.ndjson"]), Code::Input);
-        assert_eq!(run_strs(&["olean"]), Code::Decline);
+        assert_eq!(run_strs(&["olean"]), Code::Usage);
+        assert_eq!(
+            run_strs(&["olean", "--path", "/no/such/rulean/dir", "No.Such.Module"]),
+            Code::Input
+        );
         assert_eq!(run_strs(&["pack"]), Code::Usage);
     }
 

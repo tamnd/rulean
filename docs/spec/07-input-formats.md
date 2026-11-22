@@ -87,6 +87,7 @@ sections    : STRINGS   (1: all lengths u32, then all UTF-8 bytes)
 - The text fields of the header have zero bytes after the text. A version, a flag or a profile id that the decoder does not know is a decline. In version 1, the checker selects the profile from the Lean version (05.2).
 - The name at index 0 is the anonymous name, and the level at index 0 is zero. The tables do not hold them. A payload of a string name is a string index. A payload of a number name is the number.
 - The first word of an EXPRS record has the tag in its low byte: bvar, sort, const, app, lam, pi, let, nat literal, string literal, proj. For a binder, the second byte is the binder information. A const record has the name, the count of levels and the levels. The other operands are indices.
+- The first word of a DECLS record is the tag: 1 axiom, 2 definition, 3 theorem, 4 opaque, 5 quotient, 6 inductive block, 7 mutual block. A mutual block has the count of definitions, then one definition record without the tag for each definition.
 - A number has no zero top limb, so that each number has one form. The literal bound of 07.1.2 applies.
 - The decoder reads the tables in this order: STRINGS, NAMES, LEVELS, NATS, EXPRS, DECLS. Every index refers to an item that the decoder already read, so decoding is one forward pass with bounds checks. An index to a later item is an undefined index.
 - The decoder makes each node with the constructors of the store, so the store computes the hashes and the flags again. Hashes and flags are never read from the file. A later version can copy the EXPRS arrays directly into the frozen tier, if the decode cost is too high.
@@ -96,7 +97,7 @@ sections    : STRINGS   (1: all lengths u32, then all UTF-8 bytes)
 ### 07.2.3 Targets and proof
 
 - Decode at most 3 instructions per byte, so Mathlib decodes in at most 0.03 T.
-- Decoder correctness is lemma 10.5: `Spec.parseBinary b = Spec.parseStream (ndjson_of b)`. The decoder is in the verified core.
+- Decoder correctness is lemma 10.5: `Spec.parseBinary b = Spec.parseStream (ndjson_of b)`. The decoder is in the verified core. NDJSON has no form for a mutual block, so the lemma covers the files without tag 7.
 - Other binary formats (Susz from gruszka, BLean from olean-export) are not read by rulean 1.0. A converter is a later option (15.3).
 
 ## 07.3 `.olean` files
@@ -122,14 +123,15 @@ An `.olean` is a compacted heap image of Lean runtime objects (D§5, A§4.4).
 The official loader does no structural validation (I#16542). The rulean reader treats every byte as hostile input (12).
 
 - The file is read, or mapped read-only, at any address. It is never mapped at `base_addr`, and never with `MAP_FIXED`.
-- Pointers are translated as offsets from `base_addr`. A pointer that is outside the regions of the module and its loaded parts is a decline with `malformed-olean`.
+- Pointers are translated as offsets from `base_addr`. A pointer that is outside the regions of the module and its loaded parts is a malformed input (exit code 4, 09.3). The root pointer of each part must point to an object, so a part that is cut after an object is also malformed.
 - Every object header is checked: tag, field count, scalar size and total size, against the expected constructor of the Lean type at that position. The reader is typed: it knows that position p must hold an `Expr`, so a `Name` at that position is an error.
-- The object graph must be acyclic. The reader decodes in post-order with an explicit stack and a visited table. A back edge is an error.
+- The object graph must be acyclic. The reader decodes in post-order with an explicit stack and a visited table. A back edge is an error. In version 2 the compactor writes each object after its children, so the reader requires each pointer to point to an earlier object.
+- A constructor without fields is a boxed scalar, also for a type with computed fields. For example `Level.zero` is box(0), as `Name.anonymous` is.
 - Cached data is ignored and recomputed: `Expr.Data` (hash, flags, loose bound variable range, depth), `Level.Data` and `Name.hash` (D§3). The 32-bit hash changed in v4.37.0-rc1 (#16107), so cached data cannot even be compared across versions.
-- Big numbers are decoded from the GMP or native encoding by the flag bit. Limbs are checked for a canonical form (no leading zero limb).
+- Big numbers are decoded from the GMP or native encoding by the flag bit. Limbs are checked for a canonical form (no leading zero limb). The reader of this version reads only the GMP encoding, and the native encoding is a decline.
 - Strings are checked for UTF-8 and for their stored length and character count.
 - The reader takes only `ModuleData.constants` and `constNames` (D§5.4). Environment extensions are not read.
-- The reader version table has one row per supported `(OLEAN_VERSION, profile)`. An unknown version is a decline.
+- The reader version table has one row per supported `(OLEAN_VERSION, profile)`. An unknown version is a decline. In this version the table has one row: version 2, which Lean v4.33 to v4.36 write. Versions 3 and 4 are a decline.
 
 ### 07.3.4 Module order and parts
 
@@ -137,6 +139,9 @@ The official loader does no structural validation (I#16542). The rulean reader t
 - For each module it loads `.olean`, then `.olean.server`, then `.olean.private`, as the official loader does.
 - Where a theorem appears as an axiom in `.olean` and as a theorem in `.olean.private`, the private version is the declaration that is checked, and the axiom form must have the same name, level parameters and type.
 - A module that is not a `module` file has a single `.olean`. That file holds full declarations.
+- A private part can have no objects. Lean writes it so when the private data is the same as the public data, and its root is then the root of the public part. So a root can point into an earlier part.
+- Lean can make the same auxiliary theorem in two modules, for example an equation lemma or a `congr_simp` lemma. Its import keeps the first theorem and accepts a second theorem with the same name, level parameters, type and `all` list. The reader does the same. Any other name that occurs two times is a malformed input.
+- `ModuleData.constants` is not in dependency order, and it holds the types, constructors and recursors of an inductive block as separate constants. The reader makes one `Induct` declaration for each block, at the position of its first type. It puts each unsafe or partial definition into one `Mutual` declaration with the other definitions of its `all` list (04.7), because Lean adds a recursive unsafe or partial definition with `mutualDefnDecl`, and the olean does not keep the declaration form. Then a depth-first sort puts each declaration after the declarations of the module that it uses. The order of the recursors of a nested block can differ from the order in lean4export, and the checker finds recursors by name.
 
 ### 07.3.5 Trust
 
@@ -155,6 +160,10 @@ For each corpus project and each profile, CI runs:
 3. a comparison of the two decoded declaration streams, constant by constant, by structural hash.
 
 Any difference is a release blocker. This is the evidence for the reader until it has a specification.
+
+- lean4export gives a subset of the constants of the oleans. It does not export some auxiliary constants, for example `_unsafe_rec`, `_proof_N` and `_impl` constants. For Init of v4.36.0 the export has 58,547 declarations and the oleans have 64,714 before the mutual blocks are made. So the comparison requires each declaration of the export to be in the oleans, and it reports the others as a count.
+- lean4export shares expressions that are equal up to alpha equivalence, because the equality of `Expr` in Lean ignores binder names and binder information. So a binder name in the export can come from another term. The comparison is modulo binder names and binder information.
+- The first form of this check is the example `olean_compare` of `rulean-olean`. On Init of v4.36.0, each of the 58,547 declarations of the export is equal to the declaration from the oleans. The CI job is not written yet.
 
 ## 07.4 Formats rulean does not read
 

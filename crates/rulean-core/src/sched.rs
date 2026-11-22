@@ -195,7 +195,7 @@ fn decl_terms(d: &Decl) -> (ExprId, Option<ExprId>) {
         Decl::Thm(t) => (t.ty, Some(t.value)),
         Decl::Opaque(o) => (o.ty, Some(o.value)),
         Decl::Quot(q) => (q.ty, None),
-        Decl::Induct(_) => (ExprId(0), None),
+        Decl::Induct(_) | Decl::Mutual(_) => (ExprId(0), None),
     }
 }
 
@@ -233,7 +233,7 @@ impl Checker {
     /// The add stage for one declaration (spec 08.3.1).
     pub fn stage_decl(&mut self, d: &Decl) -> Staged {
         match d {
-            Decl::Quot(_) | Decl::Induct(_) => match self.add_decl(d) {
+            Decl::Quot(_) | Decl::Induct(_) | Decl::Mutual(_) => match self.add_decl(d) {
                 Some(f) => Staged::Failed(f),
                 None => Staged::Done,
             },

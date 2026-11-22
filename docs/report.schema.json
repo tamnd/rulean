@@ -20,9 +20,9 @@
       "required": ["path", "format", "sha256", "lean_version", "profile"],
       "properties": {
         "path": { "type": "string" },
-        "format": { "type": "string", "description": "The input format and the format version, such as ndjson-3.1.0, or rlb-1 for the binary format. The value is ndjson if the meta line was not read." },
-        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "SHA-256 of the exact bytes that were checked." },
-        "lean_version": { "type": "string", "description": "The lean.version field of the meta line, or an empty string." },
+        "format": { "type": "string", "description": "The input format and the format version, such as ndjson-3.1.0, rlb-1 for the binary format, or olean-2 for `rulean olean`. The value is ndjson if the meta line was not read." },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "SHA-256 of the exact bytes that were checked. For `rulean olean`, the bytes of all files in load order." },
+        "lean_version": { "type": "string", "description": "The lean.version field of the meta line, or the Lean version in the olean headers, or an empty string." },
         "profile": { "type": ["string", "null"], "description": "The semantics profile (spec 05.2), or null if no profile was selected." }
       }
     },

@@ -277,3 +277,37 @@ fn every_arena_test_round_trips() {
         paths.len()
     );
 }
+
+#[test]
+fn a_mutual_block_round_trips() {
+    let mut st = Store::new();
+    let x = rulean_format::parse_export(&mut st, EXPORT.as_bytes()).expect("parse");
+    // The NDJSON format has no mutual form, so the test makes a block of two copies of the partial definition.
+    let mut decls = x.decls.clone();
+    let i = decls
+        .iter()
+        .position(|d| matches!(d, rulean_format::Decl::Defn(_)))
+        .expect("a definition");
+    let rulean_format::Decl::Defn(d) = decls[i].clone() else {
+        unreachable!()
+    };
+    let mut e = d.clone();
+    e.hints = rulean_format::Hints::Opaque;
+    e.safety = rulean_format::Safety::Unsafe;
+    decls[i] = rulean_format::Decl::Mutual(vec![d.clone(), e]);
+    let a = encode(&st, &decls, &source(&x.lean_version))
+        .expect("the encoder takes the block")
+        .0;
+    assert_eq!(repack(&a), a);
+    let mut st2 = Store::new();
+    let y = rlb::decode(&mut st2, &a).expect("decode");
+    let rulean_format::Decl::Mutual(m) = &y.decls[i] else {
+        panic!("the decoder does not give the block")
+    };
+    assert_eq!(m.len(), 2);
+    assert_eq!(st2.name_text(m[0].name), st.name_text(d.name));
+    assert_eq!(m[0].safety, rulean_format::Safety::Partial);
+    assert_eq!(m[1].safety, rulean_format::Safety::Unsafe);
+    assert_eq!(m[1].hints, rulean_format::Hints::Opaque);
+    assert_eq!(m[0].hints, d.hints);
+}

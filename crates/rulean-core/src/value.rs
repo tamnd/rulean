@@ -35,8 +35,8 @@ impl SpineId {
     pub const NIL: SpineId = SpineId(u32::MAX);
 }
 
-/// The largest number of nodes in one array of the arena. At this limit the arena is full, and the caller stops the declaration with a resource error (spec 05.11).
-pub const MAX_NODES: u32 = u32::MAX - 1;
+/// The largest number of nodes in one array of the arena, 2^22. At this limit the arena is full. Engine F then stops with a fault, the fault is removed, and engine R decides the query and each later query of the declaration (spec 05.1). With nodes of 8 to 24 bytes, the four arrays use at most about 0.2 GiB, the per-worker scratch of spec 04.9. Without this limit, engine F can use gigabytes on a declaration that engine R checks in a few seconds, for example the Arena test `ite-taken-branch`.
+pub const MAX_NODES: u32 = 1 << 22;
 
 /// A closure: the body of a binder and the environment of its free de Bruijn indices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

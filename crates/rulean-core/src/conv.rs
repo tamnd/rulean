@@ -1,13 +1,14 @@
 //! Definitional equality of engine F on values (spec 05.4.4), and the way engine F and engine R share a query (spec 05.1).
 //!
-//! `conv` gives true only by official rules: the quick checks, beta, delta, iota, the `Nat` extension, lazy delta on glued heads, the same head with equal arguments, and function eta. It does not try proof irrelevance, structure eta, unit-like types or the string literal expansion. When it does not find an equality it gives false, and engine R decides the query on the terms (rule 2 of spec 05.1).
+//! `conv` gives true only by official rules: the quick checks, beta, delta, iota, the `Nat` extension, proof irrelevance, lazy delta on glued heads, the same head with equal arguments, and function eta. It does not try structure eta, unit-like types or the string literal expansion. When it does not find an equality it gives false, and engine R decides the query on the terms (rule 2 of spec 05.1).
 //!
 //! `conv` opens a binder with a local declaration of the checker, as engine R does. So each free variable of a value is in the local context, and each value can be read back.
 
 use rulean_format::Hints;
-use rulean_store::{BinderInfo, ExprId, LevelListId, NameId};
+use rulean_store::{BinderInfo, Expr, ExprId, LevelListId, NameId};
 
 use crate::env::compare_hints;
+use crate::expr;
 use crate::level;
 use crate::tc::{Checker, ErrorKind, LBool, to_lbool};
 use crate::value::{Closure, EnvId, Head, SpineId, Value, ValueId};
@@ -55,6 +56,7 @@ impl Checker {
         self.f_stats.queries += 1;
         let depth = self.depth;
         self.f_bits = 0;
+        self.c_conv_failure.clear();
         self.eq_depth += 1;
         let a = self.eval(EnvId::NIL, t);
         let b = self.eval(EnvId::NIL, s);
@@ -92,16 +94,25 @@ impl Checker {
         r
     }
 
-    /// `conv(a, b)`: true if engine F finds that the values are definitionally equal.
+    /// `conv(a, b)`: true if engine F finds that the values are definitionally equal. A pair that is not equal goes into a failure cache for the rest of the top-level query, as in the official kernel. Without the cache, lazy delta compares the same arguments again after each unfold of the same head, and the time can be exponential.
     pub fn conv(&mut self, a: ValueId, b: ValueId) -> bool {
         if a == b {
             return true;
         }
-        if self.bad() || !self.enter(self.dummy) {
+        if self.bad() {
+            return false;
+        }
+        if self.c_conv_failure.contains(a.0, b.0) || self.c_conv_failure.contains(b.0, a.0) {
+            return false;
+        }
+        if !self.enter(self.dummy) {
             return false;
         }
         let r = self.conv_body(a, b);
         self.leave();
+        if !r && !self.bad() {
+            self.c_conv_failure.put(a.0, b.0, 1);
+        }
         r && !self.bad()
     }
 
@@ -109,6 +120,12 @@ impl Checker {
         let q = self.conv_quick(a, b);
         if q != LBool::Undef {
             return q == LBool::True;
+        }
+        if self.flags.proof_irrel_first {
+            let p = self.conv_proof_irrel(a, b);
+            if p != LBool::Undef {
+                return p == LBool::True;
+            }
         }
         let a1 = self.force_core(a);
         let b1 = self.force_core(b);
@@ -121,11 +138,99 @@ impl Checker {
                 return q == LBool::True;
             }
         }
+        if !self.flags.proof_irrel_first {
+            let p = self.conv_proof_irrel(a1, b1);
+            if p != LBool::Undef {
+                return p == LBool::True;
+            }
+        }
         let (q, x, y) = self.conv_lazy_delta(a1, b1);
         if q != LBool::Undef {
             return q == LBool::True;
         }
         self.conv_whnf(x, y)
+    }
+
+    /// Proof irrelevance (spec 05.4.4 step 3 and 05.7.1). If the type of `a` is a proposition, `a` and `b` are equal when their types are equal. The rule needs the types, so it reads both values back and uses `is_def_eq_proof_irrel` of engine R. It is a type-directed rule, so it sets `F_TYPED`. Without this step, engine F compares two proofs of the same proposition by their structure, and it can unfold a proof that computes for a long time, for example a proof by `decide` on a large `Nat` literal.
+    ///
+    /// The step first looks at the heads of the values. If one value is never a proof (`never_proof`), the step does not apply, and the values are not read back. The step gives only "equal" or "not equal by proof irrelevance", so a skipped step can only make engine F give "not equal", and then engine R decides the query.
+    fn conv_proof_irrel(&mut self, a: ValueId, b: ValueId) -> LBool {
+        if self.never_proof(a) || self.never_proof(b) {
+            return LBool::Undef;
+        }
+        let base = self.lctx_ty.len() as u32;
+        let ta = self.quote(base, base, a);
+        let tb = self.quote(base, base, b);
+        if self.bad() {
+            return LBool::Undef;
+        }
+        let r = self.is_def_eq_proof_irrel(ta, tb);
+        if r == LBool::True {
+            self.f_bits |= F_TYPED;
+        }
+        r
+    }
+
+    /// True if the type of `v` is not a proposition for each value of the level parameters. A sort, a literal and a Pi type are never proofs. An application of a constant is never a proof if the type of the constant ends in a sort, or in an inductive type whose sort is never zero (`const_never_proof`). For other values the result is false, and the step reads the values back.
+    fn never_proof(&mut self, v: ValueId) -> bool {
+        match self.va.get(v) {
+            Value::Sort(_) | Value::Lit(_) | Value::Pi(..) => true,
+            Value::Neu(Head::Const(c, _), _) => self.const_never_proof(c),
+            Value::Glued(c, _, _, _) => self.const_never_proof(c),
+            _ => false,
+        }
+    }
+
+    /// `never_proof` for an application of the constant `c`, with a memo in `c_never_proof`. The function removes the Pi binders of the type of `c`. If the rest is a sort, an application of `c` is a type. If the rest is an application of an inductive type whose own type ends in a sort with a level that is never zero, an application of `c` is a value of a type that is not a proposition. A partial application of `c` has a Pi type whose codomain is that type, and it is also not a proposition. The function does not unfold the rest, so a type such as a definition that unfolds to a proposition gives false.
+    fn const_never_proof(&mut self, c: NameId) -> bool {
+        if let Some(x) = self.c_never_proof.get(c.0, 0) {
+            return x == 1;
+        }
+        let slot = self.env.find(c);
+        let r = if slot == 0 {
+            false
+        } else {
+            let ty = self.env.at(slot).ty;
+            let t = self.pi_codomain(ty);
+            match self.st.node(t) {
+                Expr::Sort(_) => true,
+                _ => self.induct_type_not_prop(t),
+            }
+        };
+        self.c_never_proof.put(c.0, 0, if r { 1 } else { 2 });
+        r
+    }
+
+    /// The term after the Pi binders of `t`, with no reduction.
+    fn pi_codomain(&self, t: ExprId) -> ExprId {
+        let mut cur = t;
+        let mut walking = true;
+        while walking {
+            match self.st.node(cur) {
+                Expr::Pi(b) => cur = b.body,
+                _ => walking = false,
+            }
+        }
+        cur
+    }
+
+    /// True if `t` is an application of an inductive type whose own type ends in a sort with a level that is never zero.
+    fn induct_type_not_prop(&self, t: ExprId) -> bool {
+        let h = expr::app_fn(&self.st, t);
+        match self.st.node(h) {
+            Expr::Const(i, _) => {
+                let slot = self.env.find(i);
+                if slot == 0 || !self.env.at(slot).is_induct() {
+                    return false;
+                }
+                let it = self.pi_codomain(self.env.at(slot).ty);
+                match self.st.node(it) {
+                    Expr::Sort(l) => level::is_not_zero(&self.st, l),
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
     }
 
     /// The quick checks: sorts, literals and binders with the same form.

@@ -269,7 +269,7 @@ impl Checker {
     }
 
     /// `is_def_eq_proof_irrel`: two proofs of the same proposition are equal.
-    fn is_def_eq_proof_irrel(&mut self, t: ExprId, s: ExprId) -> LBool {
+    pub(crate) fn is_def_eq_proof_irrel(&mut self, t: ExprId, s: ExprId) -> LBool {
         let t_type = self.infer(t);
         if self.bad() || !self.is_prop(t_type) {
             return LBool::Undef;

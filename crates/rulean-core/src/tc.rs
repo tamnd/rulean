@@ -351,6 +351,10 @@ pub struct Checker {
     pub(crate) c_unfold: Memo,
     pub(crate) c_success: Memo,
     pub(crate) c_failure: Memo,
+    /// Engine F: the pairs of values that `conv` found not equal in the current top-level query.
+    pub(crate) c_conv_failure: Memo,
+    /// Engine F: `const_never_proof` of a constant at key (constant, 0), 1 for true and 2 for false.
+    pub(crate) c_never_proof: Memo,
     /// `m_eager_reduce`.
     pub(crate) eager: bool,
     pub(crate) depth: u32,
@@ -402,6 +406,8 @@ impl Checker {
             c_unfold: Memo::new(),
             c_success: Memo::new(),
             c_failure: Memo::new(),
+            c_conv_failure: Memo::new(),
+            c_never_proof: Memo::new(),
             eager: false,
             depth: 0,
             max_depth: MAX_DEPTH,
@@ -442,6 +448,8 @@ impl Checker {
         self.c_unfold.clear();
         self.c_success.clear();
         self.c_failure.clear();
+        self.c_conv_failure.clear();
+        self.c_never_proof.clear();
     }
 
     /// The first error since `begin`, if any.

@@ -179,3 +179,30 @@ fn engine_r_does_not_use_engine_f() {
     assert!(t.eq(ida, a));
     assert_eq!(t.c.f_stats.queries, 0);
 }
+
+#[test]
+fn proof_irrelevance_is_equal_in_engine_f() {
+    let mut t = T::new();
+    let l = t.c.st.level_zero();
+    let prop = t.c.st.mk_sort(l);
+    let p = t.axiom("P", prop);
+    let h1 = t.axiom("h1", p);
+    let h2 = t.axiom("h2", p);
+    assert!(t.eq(h1, h2));
+    let s = t.c.f_stats;
+    assert_eq!((s.queries, s.equal, s.fallback), (1, 1, 0));
+}
+
+#[test]
+fn two_values_of_a_type_are_not_equal_by_irrelevance() {
+    let mut t = T::new();
+    let a = t.axiom("a", t.a_ty);
+    let b = t.axiom("b", t.a_ty);
+    let fty = t.a_to_a();
+    let f = t.axiom("f", fty);
+    let fa = t.app(f, &[a]);
+    let fb = t.app(f, &[b]);
+    assert!(!t.eq(fa, fb));
+    let s = t.c.f_stats;
+    assert_eq!((s.queries, s.equal, s.fallback), (1, 0, 1));
+}

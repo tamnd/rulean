@@ -149,23 +149,45 @@ fn fail<T>(kind: ErrorKind) -> Result<T, Error> {
 }
 
 /// The text of a zero-padded field: the bytes before the first zero byte. The second result is false if a byte after the first zero byte is not zero, or if the text is not valid UTF-8.
+///
+/// Each loop is in its own function, and each loop changes its state with no condition, because Aeneas cannot find a fixed point for the loop otherwise.
 fn padded(b: &[u8], start: usize, len: usize) -> (Vec<u8>, bool) {
-    let mut out = Vec::with_capacity(len);
-    let mut ended = false;
-    let mut ok = true;
+    let end = start + len;
+    let stop = text_end(b, start, end);
+    let out = copy_bytes(b, start, stop, len);
+    let ok = all_zero(b, stop, end) && utf8_valid(&out);
+    (out, ok)
+}
+
+/// The position of the first zero byte in `b[start..end]`, or `end` if there is no zero byte.
+fn text_end(b: &[u8], start: usize, end: usize) -> usize {
     let mut i = start;
-    while i < start + len {
-        if b[i] == 0 {
-            ended = true;
-        } else if ended {
-            ok = false;
-        } else {
-            out.push(b[i]);
-        }
+    while i < end && b[i] != 0 {
         i += 1;
     }
-    ok = ok && utf8_valid(&out);
-    (out, ok)
+    i
+}
+
+/// True if each byte in `b[start..end]` is zero.
+fn all_zero(b: &[u8], start: usize, end: usize) -> bool {
+    let mut ok = true;
+    let mut i = start;
+    while ok && i < end {
+        ok = b[i] == 0;
+        i += 1;
+    }
+    ok
+}
+
+/// A copy of `b[start..end]`, with a capacity of `cap` bytes.
+fn copy_bytes(b: &[u8], start: usize, end: usize, cap: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(cap);
+    let mut i = start;
+    while i < end {
+        out.push(b[i]);
+        i += 1;
+    }
+    out
 }
 
 /// Reads and checks the header.
@@ -205,46 +227,27 @@ pub fn header(b: &[u8]) -> Result<Header, Error> {
 }
 
 /// Reads and checks the section directory. Each section must be in the file, start at an 8-byte boundary and have its checksum. Each required kind must be there one time. A DEPS section is allowed. It is a hint, and this decoder does not read it.
+///
+/// The loop body is in `entry_check`, and the count of each kind is in `kind_count`. This keeps the loop state small for Aeneas.
 pub fn sections(b: &[u8], h: &Header) -> Result<Vec<Section>, Error> {
     let n = h.sections as usize;
     if n > 16 || b.len() < HEADER_BYTES + n * DIR_BYTES {
         return fail(ErrorKind::BadBinary);
     }
     let mut out = Vec::with_capacity(n);
-    let mut seen: [u32; 8] = [0; 8];
     let mut bad = false;
     let mut sum = false;
     let mut i = 0;
     while i < n && !bad && !sum {
-        let p = HEADER_BYTES + i * DIR_BYTES;
-        let s = Section {
-            kind: u32_at(b, p),
-            offset: u64_at(b, p + 4),
-            length: u64_at(b, p + 12),
-            count: u64_at(b, p + 20),
-            crc: u32_at(b, p + 28),
-        };
-        let len = b.len() as u64;
-        bad = s.kind == 0
-            || s.kind > SEC_DEPS
-            || !s.offset.is_multiple_of(8)
-            || s.offset < (HEADER_BYTES + n * DIR_BYTES) as u64
-            || s.offset > len
-            || s.length > len - s.offset;
-        if !bad {
-            seen[s.kind as usize] += 1;
-            bad = seen[s.kind as usize] > 1;
-        }
-        if !bad {
-            sum = crc32c(b, s.offset as usize, (s.offset + s.length) as usize) != s.crc;
-        }
+        let s = entry(b, i);
+        let (x, y) = entry_check(b, n, s);
+        bad = x;
+        sum = y;
         out.push(s);
         i += 1;
     }
-    let mut k = 0;
-    while k < ORDER.len() && !bad {
-        bad = seen[ORDER[k] as usize] != 1;
-        k += 1;
+    if !bad && !sum {
+        bad = !kinds_ok(&out);
     }
     if sum {
         fail(ErrorKind::BadChecksum)
@@ -255,17 +258,68 @@ pub fn sections(b: &[u8], h: &Header) -> Result<Vec<Section>, Error> {
     }
 }
 
-/// The entry of kind `kind`. `sections` has checked that it is there.
-fn find(secs: &[Section], kind: u32) -> Section {
+/// The entry `i` of the section directory.
+fn entry(b: &[u8], i: usize) -> Section {
+    let p = HEADER_BYTES + i * DIR_BYTES;
+    Section {
+        kind: u32_at(b, p),
+        offset: u64_at(b, p + 4),
+        length: u64_at(b, p + 12),
+        count: u64_at(b, p + 20),
+        crc: u32_at(b, p + 28),
+    }
+}
+
+/// Checks one entry of a directory of `n` entries. The first result is true if the kind is not known or the section is not in the file. The second result is true if the section is in the file and its checksum is not correct.
+fn entry_check(b: &[u8], n: usize, s: Section) -> (bool, bool) {
+    let len = b.len() as u64;
+    let bad = s.kind == 0
+        || s.kind > SEC_DEPS
+        || !s.offset.is_multiple_of(8)
+        || s.offset < (HEADER_BYTES + n * DIR_BYTES) as u64
+        || s.offset > len
+        || s.length > len - s.offset;
+    if bad {
+        return (true, false);
+    }
+    let sum = crc32c(b, s.offset as usize, (s.offset + s.length) as usize) != s.crc;
+    (false, sum)
+}
+
+/// True if each required kind is in `secs` one time, and DEPS is there at most one time.
+fn kinds_ok(secs: &[Section]) -> bool {
+    kind_count(secs, SEC_STRINGS) == 1
+        && kind_count(secs, SEC_NAMES) == 1
+        && kind_count(secs, SEC_LEVELS) == 1
+        && kind_count(secs, SEC_EXPRS) == 1
+        && kind_count(secs, SEC_NATS) == 1
+        && kind_count(secs, SEC_DECLS) == 1
+        && kind_count(secs, SEC_DEPS) <= 1
+}
+
+/// The number of entries of kind `kind` in `secs`.
+fn kind_count(secs: &[Section], kind: u32) -> u32 {
+    let mut c = 0;
     let mut i = 0;
-    let mut at = 0;
     while i < secs.len() {
-        if secs[i].kind == kind {
-            at = i;
-        }
+        c += same_kind(secs, i, kind);
         i += 1;
     }
-    secs[at]
+    c
+}
+
+/// 1 if entry `i` of `secs` has the kind `kind`, and 0 if not.
+fn same_kind(secs: &[Section], i: usize, kind: u32) -> u32 {
+    if secs[i].kind == kind { 1 } else { 0 }
+}
+
+/// The entry of kind `kind`. `sections` has checked that it is there one time.
+fn find(secs: &[Section], kind: u32) -> Section {
+    let mut i = 0;
+    while i < secs.len() && secs[i].kind != kind {
+        i += 1;
+    }
+    secs[i]
 }
 
 /// The state of a decode: the cursor in the current section and the map from file indices to store handles for each table.

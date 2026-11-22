@@ -1,0 +1,7 @@
+{
+  "challenge_module": "Challenge",
+  "solution_module": "Solution",
+  "theorem_names": ["two_add_two", "add_comm'"],
+  "permitted_axioms": ["propext", "Quot.sound", "Classical.choice"],
+  "external_kernels": {"rulean": ["rulean", "check", "--format", "text", "--axioms", "std"]}
+}

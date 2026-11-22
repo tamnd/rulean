@@ -198,6 +198,38 @@ jobs:
       - name: engine F and engine R on the either tests
         run: scripts/arena-confirm.sh _tmp/arena-extra
 
+  # rulean as an external kernel of lake comparator, with the bwrap sandbox of lake (spec 09.5). Ubuntu 24.04 blocks the user namespaces that bwrap needs, so the job allows them first. The job depends on the Lean release, so it is not a required check.
+  lake:
+    name: lake comparator
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      LEAN_ASSET: lean-4.36.0-linux.tar.zst
+      LEAN_SHA256: 2b7ab1ed8b92d2e6abfaf41344823b510064dbc9c0260cac73eb496ab2dea6eb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: false
+      - run: cargo build --locked --release --bin rulean
+      - name: bwrap
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: the Lean v4.36.0 release
+        run: |
+          mkdir -p _tmp/lean
+          curl -sSfL --retry 3 -o "_tmp/lean/$LEAN_ASSET" "https://github.com/leanprover/lean4/releases/download/v4.36.0/$LEAN_ASSET"
+          echo "$LEAN_SHA256  _tmp/lean/$LEAN_ASSET" | sha256sum -c -
+          tar --zstd -xf "_tmp/lean/$LEAN_ASSET" -C _tmp/lean
+          echo "$PWD/_tmp/lean/lean-4.36.0-linux/bin" >> "$GITHUB_PATH"
+      - name: rulean in lake comparator
+        run: scripts/lake-comparator.sh
+
   # The repository rules of the spec: the dependency rule (03.3), the no-C policy (13.3) and the Aeneas subset (10.6). `cargo xtask all` also scans the vendored source of each dependency.
   policy:
     name: policy

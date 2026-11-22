@@ -1,0 +1,11 @@
+name = "fixture"
+defaultTargets = ["Challenge", "Solution", "Sorry"]
+
+[[lean_lib]]
+name = "Challenge"
+
+[[lean_lib]]
+name = "Solution"
+
+[[lean_lib]]
+name = "Sorry"

@@ -2,10 +2,13 @@
 //!
 //! The command reads an export, selects the semantics profile and checks each declaration with engine R. It stops at the first declaration that is not accepted. The exit code follows spec 09.3, and `--report` writes the JSON report of spec 09.4.
 
+use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader};
 use std::time::Instant;
 
+use rulean_core::axioms::Axioms;
 use rulean_core::conv::Engine;
+use rulean_core::env::ConstKind;
 use rulean_core::profile::{self, Profile};
 use rulean_core::sha256::Hasher;
 use rulean_core::tc::{Checker, ErrorKind as CheckError};
@@ -35,6 +38,33 @@ pub struct Options {
     pub confirm_all: bool,
     /// `--session off`: clear all caches at each declaration, as the official kernel does.
     pub no_session: bool,
+    /// The axioms that a theorem can use, from `--axioms`. None is `any`: each axiom is allowed.
+    pub axioms: Option<Vec<String>>,
+}
+
+/// The axioms of `--axioms std` (spec 09.2).
+pub const STD_AXIOMS: [&str; 3] = ["propext", "Quot.sound", "Classical.choice"];
+
+/// The list of `--axioms`: `any`, `none`, or names and `std` with a comma between them.
+fn axiom_list(v: &str) -> Result<Option<Vec<String>>, String> {
+    if v == "any" {
+        return Ok(None);
+    }
+    let mut out = Vec::new();
+    if v == "none" {
+        return Ok(Some(out));
+    }
+    for part in v.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            return Err(format!("an empty name in `--axioms {v}`"));
+        } else if part == "std" {
+            out.extend(STD_AXIOMS.iter().map(|a| (*a).to_owned()));
+        } else {
+            out.push(part.to_owned());
+        }
+    }
+    Ok(Some(out))
 }
 
 /// The value of an option that takes one, from `--name=value` or from the next argument.
@@ -81,6 +111,8 @@ pub fn options(args: &[String]) -> Result<Options, String> {
                 "off" => o.no_session = true,
                 v => return Err(format!("unknown session mode `{v}`")),
             }
+        } else if is_option(a, "--axioms") {
+            o.axioms = axiom_list(&value("--axioms", a, &mut it)?)?;
         } else if is_option(a, "--profile") {
             o.profile = Some(value("--profile", a, &mut it)?);
         } else if is_option(a, "--report") {
@@ -226,6 +258,9 @@ pub fn check_reader<R: BufRead>(o: &Options, input: R) -> std::io::Result<Run> {
     rep.engine = c.engine;
     rep.confirm_all = o.confirm_all;
     let mut seen = 0;
+    let mut ax = Axioms::new();
+    let mut used: BTreeSet<String> = BTreeSet::new();
+    let mut outside: Option<String> = None;
     for d in &export.decls {
         if let Some(f) = c.add_decl(d) {
             let n = name_text(&c, d.name());
@@ -238,13 +273,36 @@ pub fn check_reader<R: BufRead>(o: &Options, input: R) -> std::io::Result<Run> {
             break;
         }
         rep.accepted += 1;
+        ax.update(&c.st, &c.env);
         while seen < c.env.len() {
             seen += 1;
             let ci = c.env.at(seen as u32);
             if ci.is_unsafe() || ci.is_partial_defn() {
                 rep.quarantine.push(name_text(&c, ci.name));
             }
+            if matches!(ci.kind, ConstKind::Thm { .. }) {
+                for a in ax.of_slot(seen as u32) {
+                    let t = name_text(&c, *a);
+                    if outside.is_none()
+                        && let Some(allowed) = &o.axioms
+                        && !allowed.contains(&t)
+                    {
+                        outside = Some(format!(
+                            "{}: the theorem uses the axiom {t}, which is not in --axioms",
+                            name_text(&c, ci.name)
+                        ));
+                    }
+                    used.insert(t);
+                }
+            }
         }
+    }
+    rep.axioms_used = used.into_iter().collect();
+    if rep.code == Code::Accept
+        && let Some(e) = outside
+    {
+        rep.code = Code::AxiomPolicy;
+        rep.error = Some(e);
     }
     rep.f_stats = c.f_stats;
     rep.session = !o.no_session;
@@ -459,6 +517,18 @@ mod tests {
                 .no_session
         );
         assert!(options(&strs(&["x", "--session", "maybe"])).is_err());
+        assert_eq!(options(&strs(&["x"])).expect("valid").axioms, None);
+        let o = options(&strs(&["x", "--axioms", "any"])).expect("valid");
+        assert_eq!(o.axioms, None);
+        let o = options(&strs(&["x", "--axioms=none"])).expect("valid");
+        assert_eq!(o.axioms, Some(Vec::new()));
+        let o = options(&strs(&["-", "--axioms", "std,A.b"])).expect("valid");
+        let want = ["propext", "Quot.sound", "Classical.choice", "A.b"];
+        assert_eq!(
+            o.axioms,
+            Some(want.iter().map(|a| (*a).to_owned()).collect())
+        );
+        assert!(options(&strs(&["x", "--axioms", "std,"])).is_err());
     }
 
     #[test]
@@ -541,6 +611,48 @@ mod tests {
         let r = run_on(&text, &Options::default());
         assert_eq!(r.code, Code::Accept, "{:?}", r.error);
         assert_eq!(r.quarantine, vec!["A".to_owned()]);
+    }
+
+    /// `axiom A : Prop`, `axiom h : A` and `theorem t : A := h`.
+    fn theorem_with_axiom() -> String {
+        format!(
+            "{META}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
+            r#"{"in":1,"str":{"pre":0,"str":"A"}}"#,
+            r#"{"in":2,"str":{"pre":0,"str":"h"}}"#,
+            r#"{"in":3,"str":{"pre":0,"str":"t"}}"#,
+            r#"{"ie":0,"sort":0}"#,
+            r#"{"ie":1,"const":{"name":1,"us":[]}}"#,
+            r#"{"ie":2,"const":{"name":2,"us":[]}}"#,
+            r#"{"axiom":{"name":1,"levelParams":[],"type":0,"isUnsafe":false}}"#,
+            r#"{"axiom":{"name":2,"levelParams":[],"type":1,"isUnsafe":false}}"#,
+            r#"{"thm":{"all":[3],"levelParams":[],"name":3,"type":1,"value":2}}"#
+        )
+    }
+
+    #[test]
+    fn axiom_policy() {
+        let text = theorem_with_axiom();
+        let r = run_on(&text, &Options::default());
+        assert_eq!(r.code, Code::Accept, "{:?}", r.error);
+        assert_eq!(r.axioms_used, vec!["A".to_owned(), "h".to_owned()]);
+        let o = Options {
+            axioms: Some(vec!["A".to_owned(), "h".to_owned()]),
+            ..Options::default()
+        };
+        assert_eq!(run_on(&text, &o).code, Code::Accept);
+        let o = Options {
+            axioms: Some(vec!["A".to_owned()]),
+            ..Options::default()
+        };
+        let r = run_on(&text, &o);
+        assert_eq!(r.code, Code::AxiomPolicy);
+        assert_eq!(r.accepted, 3);
+        assert!(
+            r.error.as_deref().is_some_and(|e| e.starts_with("t: ")),
+            "{:?}",
+            r.error
+        );
+        assert!(report::json(&r).contains(r#""axioms_used": ["A", "h"]"#));
     }
 
     #[test]

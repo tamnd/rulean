@@ -16,7 +16,7 @@ use crate::exit::Code;
 use crate::report::{self, Report};
 
 /// The stack size of the checker thread. Engine R recurses on the depth of the terms, so the default stack of 2 MiB is too small for real exports.
-const STACK_BYTES: usize = 1 << 30;
+pub(crate) const STACK_BYTES: usize = 1 << 30;
 
 /// The options of `check`.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -106,38 +106,53 @@ pub fn run(args: &[String]) -> Code {
             return Code::Usage;
         }
     };
+    if o.parse_only {
+        let path = o.input.clone().unwrap_or_default();
+        return match open_input(&path) {
+            Ok(r) => parse_only(&path, r),
+            Err(e) => {
+                eprintln!("rulean: cannot read {path}: {e}");
+                Code::Input
+            }
+        };
+    }
+    let r = match check_options(o) {
+        Ok(r) => r,
+        Err(code) => return code,
+    };
+    finish(&r)
+}
+
+/// Checks the input of the options on the checker thread. An error gives the exit code, after a message on standard error.
+pub fn check_options(o: Options) -> Result<Run, Code> {
     let path = o.input.clone().unwrap_or_default();
     let reader = match open_input(&path) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("rulean: cannot read {path}: {e}");
-            return Code::Input;
+            return Err(Code::Input);
         }
     };
-    if o.parse_only {
-        return parse_only(&path, reader);
-    }
     let h = std::thread::Builder::new()
         .stack_size(STACK_BYTES)
         .spawn(move || check_reader(&o, reader));
-    let r = match h {
+    match h {
         Ok(h) => match h.join() {
-            Ok(Ok(r)) => r,
+            Ok(Ok(r)) => Ok(r),
             Ok(Err(e)) => {
                 eprintln!("rulean: cannot read {path}: {e}");
-                return Code::Input;
+                Err(Code::Input)
             }
             Err(_) => {
                 eprintln!("rulean: internal error: the checker thread stopped");
-                return Code::Resource;
+                Err(Code::Resource)
             }
         },
         Err(e) => {
             eprintln!("rulean: cannot start the checker thread: {e}");
-            return Code::Resource;
+            Err(Code::Resource)
         }
-    };
-    finish(&r)
+    }
 }
 
 /// Prints the result, writes the report and gives the exit code.
@@ -242,7 +257,7 @@ fn done(o: &Options, mut rep: Report, start: Instant) -> Run {
 }
 
 /// The engine of the run. Engine R is the default in this version, because engine F is new and the Arena runs with `--confirm all` must first show no difference (spec 05.1). Spec 09.2 makes engine F the default later.
-fn engine_of(o: &Options) -> Engine {
+pub(crate) fn engine_of(o: &Options) -> Engine {
     if o.engine_set && !o.engine_r {
         Engine::F
     } else {
@@ -251,7 +266,7 @@ fn engine_of(o: &Options) -> Engine {
 }
 
 /// The profile from `--profile`, or from the Lean version of the export (spec 05.2).
-fn select_profile(o: &Options, lean_version: &[u8]) -> Result<Profile, String> {
+pub(crate) fn select_profile(o: &Options, lean_version: &[u8]) -> Result<Profile, String> {
     if let Some(id) = &o.profile {
         return profile::of_id(id.as_bytes()).ok_or_else(|| format!("unknown profile `{id}`"));
     }
@@ -269,7 +284,7 @@ fn select_profile(o: &Options, lean_version: &[u8]) -> Result<Profile, String> {
     })
 }
 
-fn name_text(c: &Checker, n: rulean_store::NameId) -> String {
+pub(crate) fn name_text(c: &Checker, n: rulean_store::NameId) -> String {
     String::from_utf8_lossy(&c.st.name_text(n)).into_owned()
 }
 
@@ -336,7 +351,7 @@ pub fn code_of_check(kind: CheckError) -> Code {
 const READ_BYTES: usize = 1 << 20;
 
 /// Opens the input file, or standard input for `-`.
-fn open_input(path: &str) -> std::io::Result<Box<dyn BufRead + Send>> {
+pub(crate) fn open_input(path: &str) -> std::io::Result<Box<dyn BufRead + Send>> {
     if path == "-" {
         Ok(Box::new(BufReader::with_capacity(
             READ_BYTES,
@@ -349,7 +364,7 @@ fn open_input(path: &str) -> std::io::Result<Box<dyn BufRead + Send>> {
 }
 
 /// Parses the export that `input` gives, one line at a time, and computes the SHA-256 digest of all of the input. After a parse error, the function reads the rest of the input for the digest only.
-fn read_export<R: BufRead>(
+pub(crate) fn read_export<R: BufRead>(
     store: &mut Store,
     mut input: R,
 ) -> std::io::Result<(

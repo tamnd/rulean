@@ -11,6 +11,7 @@ use crate::env::compare_hints;
 use crate::expr;
 use crate::level;
 use crate::tc::{Checker, ErrorKind, LBool, to_lbool};
+use crate::trace::Rule;
 use crate::value::{Closure, EnvId, Head, SpineId, Value, ValueId};
 
 /// The engine of the definitional equality queries.
@@ -62,26 +63,32 @@ impl Checker {
         let b = self.eval(EnvId::NIL, s);
         let f = self.conv(a, b);
         self.eq_depth -= 1;
+        let anon = self.st.anon();
         if self.bad() {
             self.fault = None;
             self.depth = depth;
             self.f_stats.faults += 1;
+            self.note(Rule::FFallback, anon);
             return self.is_def_eq_r(t, s);
         }
         if !f {
             self.f_stats.fallback += 1;
+            self.note(Rule::FFallback, anon);
             return self.is_def_eq_r(t, s);
         }
         self.f_stats.equal += 1;
         let confirm = self.confirm_all || self.f_bits == F_DELTA | F_TYPED;
         if !confirm {
+            self.note(Rule::FEqual, anon);
             return true;
         }
         let r = self.is_def_eq_r(t, s);
         if r {
             self.f_stats.confirmed += 1;
+            self.note(Rule::FConfirmed, anon);
         } else if !self.bad() {
             self.f_stats.disagree += 1;
+            self.note(Rule::FDisagree, anon);
         }
         r
     }
@@ -167,6 +174,8 @@ impl Checker {
         let r = self.is_def_eq_proof_irrel(ta, tb);
         if r == LBool::True {
             self.f_bits |= F_TYPED;
+            let anon = self.st.anon();
+            self.note(Rule::ProofIrrel, anon);
         }
         r
     }

@@ -14,6 +14,7 @@ use crate::tc::{
     Checker, ErrorKind, NAT_ADD, NAT_BEQ, NAT_BLE, NAT_DIV, NAT_GCD, NAT_LAND, NAT_LOR, NAT_MOD,
     NAT_MUL, NAT_POW, NAT_SHL, NAT_SHR, NAT_SUB, NAT_XOR,
 };
+use crate::trace::Rule;
 
 /// The data of a recursor that `inductive_reduce_rec` needs.
 #[derive(Clone, Copy)]
@@ -410,11 +411,18 @@ impl Checker {
     fn reduce_recursor(&mut self, e: ExprId, cheap_rec: bool, cheap_proj: bool) -> Option<ExprId> {
         if self.env.quot_initialized() {
             let r = self.quot_reduce_rec(e);
+            if r.is_some() {
+                self.note_head(Rule::Quot, e);
+            }
             if r.is_some() || self.bad() {
                 return r;
             }
         }
-        self.inductive_reduce_rec(e, cheap_rec, cheap_proj)
+        let r = self.inductive_reduce_rec(e, cheap_rec, cheap_proj);
+        if r.is_some() {
+            self.note_head(Rule::Iota, e);
+        }
+        r
     }
 
     /// `whnf_fvar`: zeta-reduction of a `let` free variable.
@@ -602,6 +610,7 @@ impl Checker {
         if d == 0 {
             return None;
         }
+        self.note_head(Rule::Delta, e);
         let ls = self.st.level_list_vec(list);
         if ls.len() > 0 {
             if let Some(r) = self.c_unfold.get(e.0, 0) {
@@ -765,6 +774,14 @@ impl Checker {
 
     /// `reduce_nat`: the 15 built-in operations on literals (spec 05.8).
     pub(crate) fn reduce_nat(&mut self, e: ExprId) -> Option<ExprId> {
+        let r = self.reduce_nat_body(e);
+        if r.is_some() {
+            self.note_head(Rule::Nat, e);
+        }
+        r
+    }
+
+    fn reduce_nat_body(&mut self, e: ExprId) -> Option<ExprId> {
         if !self.pin_on(PIN_NAT) {
             return None;
         }

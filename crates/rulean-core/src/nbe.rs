@@ -14,6 +14,7 @@ use crate::env::ConstKind;
 use crate::expr;
 use crate::pin::{PIN_NAT, PIN_STRING};
 use crate::tc::{Checker, ErrorKind};
+use crate::trace::Rule;
 use crate::value::{Closure, EnvId, Head, SlotId, SpineId, Value, ValueId};
 use crate::whnf::find_rule;
 
@@ -261,6 +262,14 @@ impl Checker {
 
     /// The `Nat` extension (spec 05.8): `Nat.succ` and the binary operations on two literals. The arguments are forced in engine F, and the operation is the one of engine R (`reduce_nat`).
     pub(crate) fn nat_value(&mut self, c: NameId, us: LevelListId, sp: SpineId) -> Option<ValueId> {
+        let r = self.nat_value_body(c, us, sp);
+        if r.is_some() {
+            self.note(Rule::Nat, c);
+        }
+        r
+    }
+
+    fn nat_value_body(&mut self, c: NameId, us: LevelListId, sp: SpineId) -> Option<ValueId> {
         if !self.pin_on(PIN_NAT) || us != LevelListId(0) {
             return None;
         }
@@ -377,6 +386,19 @@ impl Checker {
 
     /// `inductive_reduce_rec` on values: a recursor whose major premise forces to a constructor application steps by the rule of the constructor. A `Nat` or a `String` literal is first made a constructor application.
     fn iota_value(&mut self, c: NameId, us: LevelListId, sp: SpineId) -> Option<ValueId> {
+        let r = self.iota_value_body(c, us, sp);
+        if r.is_some() {
+            let rule = if c == self.b.quot_lift || c == self.b.quot_ind {
+                Rule::Quot
+            } else {
+                Rule::Iota
+            };
+            self.note(rule, c);
+        }
+        r
+    }
+
+    fn iota_value_body(&mut self, c: NameId, us: LevelListId, sp: SpineId) -> Option<ValueId> {
         let slot = self.env.find(c);
         if slot == 0 {
             return None;

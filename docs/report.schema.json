@@ -38,6 +38,7 @@
         "accepted": { "type": "integer", "minimum": 0 },
         "rejected": { "type": "integer", "minimum": 0 },
         "quarantine": { "type": "integer", "minimum": 0, "description": "The number of unsafe and partial constants (spec 05.10)." },
+        "axioms_used": { "type": "array", "items": { "type": "string" }, "description": "The axioms that the accepted theorems use, sorted by name. The axioms of a theorem are the axioms that #print axioms shows (spec 09.4)." },
         "deviations": { "type": "array", "items": { "type": "string" }, "description": "The rows of docs/deviations.json that changed this run." },
         "wall_ms": { "type": "integer", "minimum": 0 }
       }

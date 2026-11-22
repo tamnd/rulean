@@ -23,6 +23,7 @@
 
 extern crate alloc;
 
+pub mod axioms;
 pub mod conv;
 pub mod decl;
 pub mod defeq;

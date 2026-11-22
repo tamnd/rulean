@@ -40,9 +40,12 @@ target/release/rulean version
 rulean check export.ndjson
 rulean check --report report.json export.ndjson
 rulean check --profile v4.35 export.ndjson
+rulean check --format text --axioms std - < export.ndjson
 ```
 
 The input is an export in the NDJSON format of [lean4export](https://github.com/leanprover/lean4export), or `-` for standard input. rulean selects the semantics profile from the Lean version of the export. Use `--profile` for an export from a Lean version that has no profile. The JSON report follows `docs/report.schema.json`.
+
+`--axioms LIST` gives the axioms that a theorem can use. LIST is `any` (the default), `none`, or names with a comma between them. The name `std` means `propext`, `Quot.sound` and `Classical.choice`. If every declaration is accepted but a theorem uses an axiom outside the list, the exit code is 5. The axioms of a theorem are the axioms that `#print axioms` shows. The last command above is the command for an external kernel of `lake check`.
 
 | Exit code | Meaning |
 |---|---|

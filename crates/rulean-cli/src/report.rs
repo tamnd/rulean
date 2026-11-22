@@ -25,6 +25,8 @@ pub struct Report {
     pub failed_decl: Option<String>,
     pub error: Option<String>,
     pub quarantine: Vec<String>,
+    /// The axioms that the accepted theorems use, sorted by name (spec 09.4).
+    pub axioms_used: Vec<String>,
     pub pin_mismatch: Vec<String>,
     pub deviations: Vec<&'static str>,
     pub wall_ms: u128,
@@ -100,11 +102,12 @@ pub fn json(r: &Report) -> String {
         }
     ));
     s.push_str(&format!(
-        "  \"summary\": {{ \"declarations\": {}, \"accepted\": {}, \"rejected\": {}, \"quarantine\": {}, \"deviations\": {}, \"wall_ms\": {} }},\n",
+        "  \"summary\": {{ \"declarations\": {}, \"accepted\": {}, \"rejected\": {}, \"quarantine\": {}, \"axioms_used\": {}, \"deviations\": {}, \"wall_ms\": {} }},\n",
         r.declarations,
         r.accepted,
         r.rejected,
         r.quarantine.len(),
+        list(&r.axioms_used),
         list(&r.deviations),
         r.wall_ms
     ));

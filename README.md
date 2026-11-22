@@ -19,8 +19,8 @@ rulean is at an early stage. Engine R, the reference type checker, checks NDJSON
 | M0 Foundations | repository, CI, the no-C checks, the Aeneas subset lint, the proof package, the bench harness | in progress |
 | M1 Store and parser | the term store, the Nat type, the NDJSON parser | in progress |
 | M2 Engine R | the reference type checker, inductive types, quotients | in progress |
-| M3 Engine F | the fast type checker and the confirm set | planned |
-| M4 Scale | sessions, parallel checking, the binary format, the `.olean` reader | planned |
+| M3 Engine F | the fast type checker and the confirm set | in progress |
+| M4 Scale | sessions, parallel checking, the binary format, the `.olean` reader | in progress |
 | M5 Capstone | the soundness theorem with no `sorry` | planned |
 | M6 In-process | rulean as the kernel inside Lean | planned |
 | M7 Release 1.0 | the release gate, a security review, reproducible builds | planned |
@@ -41,9 +41,11 @@ rulean check export.ndjson
 rulean check --report report.json export.ndjson
 rulean check --profile v4.35 export.ndjson
 rulean check --format text --axioms std export.ndjson
+rulean pack export.ndjson -o export.rlb
+rulean check export.rlb
 ```
 
-The input is an export in the NDJSON format of [lean4export](https://github.com/leanprover/lean4export), or `-` for standard input. rulean selects the semantics profile from the Lean version of the export. Use `--profile` for an export from a Lean version that has no profile. The JSON report follows `docs/report.schema.json`.
+The input is an export in the NDJSON format of [lean4export](https://github.com/leanprover/lean4export), or `-` for standard input. `rulean pack` writes the binary format of `docs/spec/07-input-formats.md` (07.2). This format is a cache of the export with less parse work, and `rulean check` finds it from its first bytes. rulean selects the semantics profile from the Lean version of the export. Use `--profile` for an export from a Lean version that has no profile. The JSON report follows `docs/report.schema.json`.
 
 `--axioms LIST` gives the axioms that a theorem can use. LIST is `any` (the default), `none`, or names with a comma between them. The name `std` means `propext`, `Quot.sound` and `Classical.choice`. If every declaration is accepted but a theorem uses an axiom outside the list, the exit code is 5. The axioms of a theorem are the axioms that `#print axioms` shows. The last command above is the command for an external kernel of `lake comparator`. Lake adds the path of the export at the end, so the entry in `comparator.json` is:
 

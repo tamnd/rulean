@@ -47,6 +47,10 @@ pub enum ErrorKind {
     IndexLimit,
     /// An array of the store is full. This is a decline.
     StoreFull,
+    /// The layout of a binary file is wrong: a bad magic, a section out of the file, a missing section or a record that is cut (spec 07.2).
+    BadBinary,
+    /// A section of a binary file does not have the CRC-32C of its directory entry.
+    BadChecksum,
 }
 
 impl ErrorKind {
@@ -85,6 +89,8 @@ impl ErrorKind {
             ErrorKind::UnknownVersion => "unknown format version",
             ErrorKind::IndexLimit => "index above the table limit",
             ErrorKind::StoreFull => "the term store is full",
+            ErrorKind::BadBinary => "invalid binary file layout",
+            ErrorKind::BadChecksum => "section checksum mismatch",
         }
     }
 }

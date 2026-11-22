@@ -8,6 +8,7 @@ mod check;
 mod diff;
 mod exit;
 mod explain;
+mod pack;
 mod report;
 
 use exit::Code;
@@ -16,7 +17,7 @@ const USAGE: &str = "\
 usage: rulean <command> [options]
 
 commands:
-  check <INPUT>     check an export (.ndjson or \"-\" for standard input)
+  check <INPUT>     check an export (.ndjson, .rlb or \"-\" for standard input)
                     --profile <id>: the semantics profile, from the input by default
                     --report <file>: write the JSON report
                     --format text|json: the format of standard output
@@ -31,6 +32,9 @@ commands:
                     check an export up to the declaration DECL and print the
                     rules that the checker applies to DECL (takes --profile,
                     --engine and --confirm)
+  pack <INPUT> -o <OUT.rlb>
+                    write the binary format of an NDJSON export, which
+                    `check` reads with less parse work
   version           print the version and the build facts
   help              print this text
 
@@ -57,7 +61,7 @@ fn run(args: &[String]) -> Code {
         }
         "check" => check::run(&args[1..]),
         "olean" => not_written("olean", "M4"),
-        "pack" => not_written("pack", "M4"),
+        "pack" => pack::run(&args[1..]),
         "diff" => diff::run(&args[1..]),
         "explain" => explain::run(&args[1..]),
         other => {
@@ -113,9 +117,8 @@ mod tests {
     fn commands_that_are_not_written_decline() {
         assert_eq!(run_strs(&["check"]), Code::Usage);
         assert_eq!(run_strs(&["check", "no-such-file.ndjson"]), Code::Input);
-        for command in ["olean", "pack"] {
-            assert_eq!(run_strs(&[command]), Code::Decline, "{command}");
-        }
+        assert_eq!(run_strs(&["olean"]), Code::Decline);
+        assert_eq!(run_strs(&["pack"]), Code::Usage);
     }
 
     #[test]

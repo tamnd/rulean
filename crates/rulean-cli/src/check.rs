@@ -12,7 +12,7 @@ use rulean_core::env::ConstKind;
 use rulean_core::profile::{self, Profile};
 use rulean_core::sha256::Hasher;
 use rulean_core::tc::{Checker, ErrorKind as CheckError};
-use rulean_format::{ErrorKind, Stream};
+use rulean_format::{ErrorKind, Stream, rlb};
 use rulean_store::Store;
 
 use crate::exit::Code;
@@ -233,7 +233,7 @@ pub fn check_reader<R: BufRead>(o: &Options, input: R) -> std::io::Result<Run> {
         Ok(x) => x,
         Err(e) => {
             rep.code = code_of(e.kind);
-            rep.error = Some(format!("line {}: {}", e.line, e.kind.text()));
+            rep.error = Some(error_text(&e));
             return Ok(done(o, rep, start));
         }
     };
@@ -392,7 +392,7 @@ fn parse_only<R: BufRead>(path: &str, input: R) -> Code {
             Code::Accept
         }
         Err(e) => {
-            eprintln!("rulean: {path}: line {}: {}", e.line, e.kind.text());
+            eprintln!("rulean: {path}: {}", error_text(&e));
             code_of(e.kind)
         }
     }
@@ -417,6 +417,18 @@ pub fn code_of_check(kind: CheckError) -> Code {
     }
 }
 
+/// The format version that `read_export` gives for a binary input.
+pub(crate) const BINARY_FORMAT: &str = "rlb-1";
+
+/// The text of a parse error. The line of an error in a binary input is 0.
+pub(crate) fn error_text(e: &rulean_format::Error) -> String {
+    if e.line == 0 {
+        format!("binary input: {}", e.kind.text())
+    } else {
+        format!("line {}: {}", e.line, e.kind.text())
+    }
+}
+
 /// The size of the read buffer.
 const READ_BYTES: usize = 1 << 20;
 
@@ -434,6 +446,8 @@ pub(crate) fn open_input(path: &str) -> std::io::Result<Box<dyn BufRead + Send>>
 }
 
 /// Parses the export that `input` gives, one line at a time, and computes the SHA-256 digest of all of the input. After a parse error, the function reads the rest of the input for the digest only.
+///
+/// An input that starts with the magic of the binary format (spec 07.2) is read as a whole and decoded. Then the format version of the result is `rlb-1`, and the line of an error is 0.
 pub(crate) fn read_export<R: BufRead>(
     store: &mut Store,
     mut input: R,
@@ -441,6 +455,18 @@ pub(crate) fn read_export<R: BufRead>(
     Result<rulean_format::Export, rulean_format::Error>,
     [u8; 32],
 )> {
+    if rlb::is_binary(input.fill_buf()?) {
+        let mut b = Vec::new();
+        input.read_to_end(&mut b)?;
+        let mut hasher = Hasher::new();
+        hasher.update(&b);
+        let parsed = rlb::decode(store, &b).map(|x| rulean_format::Export {
+            decls: x.decls,
+            lean_version: x.header.lean_version,
+            format_version: BINARY_FORMAT.as_bytes().to_vec(),
+        });
+        return Ok((parsed, hasher.finish()));
+    }
     let mut s = Stream::new();
     let mut hasher = Hasher::new();
     let mut tail = false;

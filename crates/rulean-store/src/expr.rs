@@ -639,4 +639,9 @@ impl Store {
     pub fn nat_hash(&self, n: NatId) -> u32 {
         self.nat_hash[n.0 as usize]
     }
+
+    /// The number of natural number literals.
+    pub fn nat_count(&self) -> usize {
+        self.nats.len()
+    }
 }

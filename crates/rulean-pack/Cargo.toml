@@ -15,3 +15,7 @@ layer = "tool"
 
 [lints]
 workspace = true
+
+[dependencies]
+rulean-format = { path = "../rulean-format" }
+rulean-store = { path = "../rulean-store" }

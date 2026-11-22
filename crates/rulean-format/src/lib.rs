@@ -20,6 +20,8 @@
 // The `vec!` macro and `is_empty` are outside the modelled `Vec` functions of spec 10.6.
 #![allow(clippy::vec_init_then_push)]
 #![allow(clippy::len_zero)]
+// `Vec::clear` is outside the modelled functions too, so the code uses `truncate(0)`.
+#![allow(clippy::manual_clear)]
 // `RangeInclusive::contains` and `Option::is_none` are outside the modelled functions too, so the code compares and matches by hand.
 #![allow(clippy::manual_range_contains)]
 #![allow(clippy::redundant_pattern_matching)]
@@ -29,11 +31,13 @@
 
 extern crate alloc;
 
+pub mod crc;
 pub mod decl;
 pub mod error;
 pub mod json;
 pub mod keys;
 pub mod ndjson;
+pub mod rlb;
 
 pub use decl::{
     Axiom, Ctor, Decl, Defn, Hints, Induct, InductType, Opaque, Quot, QuotKind, Rec, RecRule,

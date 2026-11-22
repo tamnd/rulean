@@ -79,6 +79,7 @@ version = "0.0.3"
 dependencies = [
  "rulean-core",
  "rulean-format",
+ "rulean-pack",
  "rulean-store",
 ]
 
@@ -125,6 +126,10 @@ version = "0.0.3"
 [[package]]
 name = "rulean-pack"
 version = "0.0.3"
+dependencies = [
+ "rulean-format",
+ "rulean-store",
+]
 
 [[package]]
 name = "rulean-pool"

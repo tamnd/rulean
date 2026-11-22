@@ -58,6 +58,7 @@ impl Checker {
         let depth = self.depth;
         self.f_bits = 0;
         self.c_conv_failure.clear();
+        self.c_conv_success.clear();
         self.eq_depth += 1;
         let a = self.eval(EnvId::NIL, t);
         let b = self.eval(EnvId::NIL, s);
@@ -101,7 +102,7 @@ impl Checker {
         r
     }
 
-    /// `conv(a, b)`: true if engine F finds that the values are definitionally equal. A pair that is not equal goes into a failure cache for the rest of the top-level query, as in the official kernel. Without the cache, lazy delta compares the same arguments again after each unfold of the same head, and the time can be exponential.
+    /// `conv(a, b)`: true if engine F finds that the values are definitionally equal. A pair that is not equal goes into a failure cache for the rest of the top-level query, as in the official kernel. Without the cache, lazy delta compares the same arguments again after each unfold of the same head, and the time can be exponential. A pair that is equal goes into a success cache for the rest of the top-level query (row O2 of spec 05.7.3). Without it, two trees with shared subtrees, such as `node a a` and `node b b`, compare `a` and `b` once for each path, and the time is exponential in the depth. A value does not change in the arena, and the local context only grows in a query, so a pair that was equal stays equal.
     pub fn conv(&mut self, a: ValueId, b: ValueId) -> bool {
         if a == b {
             return true;
@@ -112,13 +113,20 @@ impl Checker {
         if self.c_conv_failure.contains(a.0, b.0) || self.c_conv_failure.contains(b.0, a.0) {
             return false;
         }
+        if self.c_conv_success.contains(a.0, b.0) {
+            return true;
+        }
         if !self.enter(self.dummy) {
             return false;
         }
         let r = self.conv_body(a, b);
         self.leave();
-        if !r && !self.bad() {
-            self.c_conv_failure.put(a.0, b.0, 1);
+        if !self.bad() {
+            if r {
+                self.c_conv_success.put(a.0, b.0, 1);
+            } else {
+                self.c_conv_failure.put(a.0, b.0, 1);
+            }
         }
         r && !self.bad()
     }

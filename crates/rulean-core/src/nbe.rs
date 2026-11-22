@@ -188,7 +188,15 @@ impl Checker {
     }
 
     /// `force(v)`: reduces `v` until its head is not a redex: delta on glued heads, iota on recursors, the quotient rules and the `Nat` extension (spec 05.4.2). The result is in weak head normal form.
+    ///
+    /// The result goes into the cache `c_force`. A neutral application of a recursor has no slot, and without the cache each `force` of the same value does the iota steps again. For example, `N.add (ldepth2 l) 1` with `N.add` by recursion on its first argument forces the value below it once for each level above it, and the time is quadratic in the depth.
     pub fn force(&mut self, v0: ValueId) -> ValueId {
+        let cached = self.force_cached(v0);
+        if cached {
+            if let Some(w) = self.c_force.get(v0.0, 0) {
+                return ValueId(w);
+            }
+        }
         let mut v = v0;
         let mut done = false;
         while !done && !self.bad() {
@@ -197,11 +205,28 @@ impl Checker {
                 None => done = true,
             }
         }
+        if cached && !self.bad() {
+            self.c_force.put(v0.0, 0, v.0);
+        }
         v
+    }
+
+    /// True if `force` and `force_core` keep the result of `v` in `c_force`: a glued value or a neutral application of a constant. The other values are already in weak head normal form.
+    fn force_cached(&self, v: ValueId) -> bool {
+        matches!(
+            self.va.get(v),
+            Value::Glued(..) | Value::Neu(Head::Const(..), _)
+        )
     }
 
     /// `force` without delta: iota, the quotient rules and the `Nat` extension on heads that do not unfold (`whnf_core` of engine R). Engine F uses it in `conv`, so that lazy delta can compare two folded definitions before it unfolds them.
     pub(crate) fn force_core(&mut self, v0: ValueId) -> ValueId {
+        let cached = matches!(self.va.get(v0), Value::Neu(Head::Const(..), _));
+        if cached {
+            if let Some(w) = self.c_force.get(v0.0, 1) {
+                return ValueId(w);
+            }
+        }
         let mut v = v0;
         let mut done = false;
         while !done && !self.bad() {
@@ -220,6 +245,9 @@ impl Checker {
                 Some(w) => v = w,
                 None => done = true,
             }
+        }
+        if cached && !self.bad() {
+            self.c_force.put(v0.0, 1, v.0);
         }
         v
     }

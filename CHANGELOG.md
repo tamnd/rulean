@@ -19,6 +19,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ### Fixed
 
+- The CI job `olean cross-validation (v4.37.0-rc1)` failed since it was added, because rulean has no profile for v4.37.0-rc1 yet and declined the export. The job now sets `NO_PROFILE=1` for this release. `scripts/olean-xval.sh` then requires that `rulean check` declines the export with `unsupported-version` and the exit code 2, and that `rulean olean --parse-only` loads the oleans. The comparison of the `.olean` reader with lean4export is the same as for the other releases (spec 07.3.6).
 - `rulean help` did not list the options `--threads`, `--axioms` and `--session` of `rulean check`. Now it lists them, and a test requires that the help text has each option of `check`. `--help` or `-h` after a command, for example `rulean check --help`, now prints the help text with exit code 0. Before, it was an unknown option with exit code 64 (usage).
 - `fuzz/Cargo.lock` had the version 0.0.5 of the rulean crates, so `cargo test --locked` in `fuzz/` failed, and the runs of the workflow `fuzz` since v0.0.6 failed. The lock file now has the version 0.0.7. The CI job `policy` checks that the lock file is up to date.
 

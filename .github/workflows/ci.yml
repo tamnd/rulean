@@ -257,7 +257,7 @@ jobs:
       - name: the work gate on Init and Std of the release
         run: scripts/work-gate.sh docs/bench/work.json
 
-  # The cross-validation of the `.olean` reader with lean4export on Init and Std (spec 07.3.6), for each Lean release of a profile (spec 05.2). v4.35.0 and v4.36.0 have the profile v4.35 and write oleans of version 2. v4.37.0-rc1 has the profile v4.37 and writes oleans of version 4. The job depends on the Lean releases, so it is not a required check.
+  # The cross-validation of the `.olean` reader with lean4export on Init and Std (spec 07.3.6), for each Lean release of a profile (spec 05.2). v4.35.0 and v4.36.0 have the profile v4.35 and write oleans of version 2. v4.37.0-rc1 writes oleans of version 4 and needs the profile v4.37, which is not in rulean yet (milestone M7). For this release, the job sets NO_PROFILE, so rulean must decline the export and the oleans give only a parse. The job depends on the Lean releases, so it is not a required check.
   olean-xval:
     name: olean cross-validation (v${{ matrix.lean }})
     runs-on: ubuntu-latest
@@ -272,9 +272,11 @@ jobs:
             sha256: 2b7ab1ed8b92d2e6abfaf41344823b510064dbc9c0260cac73eb496ab2dea6eb
           - lean: 4.37.0-rc1
             sha256: 2e1bbb832870bb81b7131cb70b13aec2cc7ed9f22e2bdbb236b86076ae20382d
+            no_profile: 1
     env:
       LEAN: ${{ matrix.lean }}
       LEAN_SHA256: ${{ matrix.sha256 }}
+      NO_PROFILE: ${{ matrix.no_profile || 0 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -47,7 +47,9 @@ pub fn run() -> Result<(), Vec<String>> {
     }
     allocators(&root, &mut problems);
     if problems.is_empty() {
-        println!("profile: the release and dev profiles have panic = \"abort\" and overflow-checks = true, and no crate sets a global allocator");
+        println!(
+            "profile: the release and dev profiles have panic = \"abort\" and overflow-checks = true, and no crate sets a global allocator"
+        );
         Ok(())
     } else {
         Err(problems)

@@ -39,7 +39,12 @@ pub struct Report {
     pub s_stats: SessionStats,
     /// The entries in the session at the end.
     pub s_entries: usize,
+    /// The slowest declarations of a sequential run, with the time of each in microseconds, the slowest first (at most `SLOWEST`).
+    pub slowest: Vec<(String, u64)>,
 }
+
+/// The number of declarations in `slowest`.
+pub const SLOWEST: usize = 10;
 
 /// The one line of text for standard output.
 pub fn text(r: &Report) -> String {
@@ -132,9 +137,17 @@ pub fn json(r: &Report) -> String {
     ));
     let t = &r.s_stats;
     s.push_str(&format!(
-        "  \"session\": {{ \"on\": {}, \"entries\": {}, \"hits\": {}, \"stores\": {}, \"drops\": {}, \"evictions\": {}, \"promoted\": {} }}\n",
+        "  \"session\": {{ \"on\": {}, \"entries\": {}, \"hits\": {}, \"stores\": {}, \"drops\": {}, \"evictions\": {}, \"promoted\": {} }},\n",
         r.session, r.s_entries, t.hits, t.stores, t.drops, t.evictions, t.promoted
     ));
+    s.push_str("  \"slowest\": [");
+    for (i, (n, us)) in r.slowest.iter().enumerate() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        s.push_str(&format!("{{ \"name\": {}, \"us\": {us} }}", quote(n)));
+    }
+    s.push_str("]\n");
     s.push('}');
     s
 }

@@ -17,7 +17,7 @@ use rulean_format::{Decl, ErrorKind, Stream, rlb};
 use rulean_store::Store;
 
 use crate::exit::Code;
-use crate::report::{self, Report};
+use crate::report::{self, Report, SLOWEST};
 
 /// The stack size of the checker thread. Engine R recurses on the depth of the terms, so the default stack of 2 MiB is too small for real exports.
 pub(crate) const STACK_BYTES: usize = 1 << 30;
@@ -320,8 +320,12 @@ pub(crate) fn check_export(
 /// Checks the declarations one after the other, and stops at the first declaration that is not accepted.
 fn check_sequential(o: &Options, c: &mut Checker, ds: &[Decl], rep: &mut Report) {
     let mut t = Tally::new();
-    for d in ds {
-        if let Some(f) = c.add_decl(d) {
+    let mut times: Vec<(u64, usize)> = Vec::new();
+    for (i, d) in ds.iter().enumerate() {
+        let t0 = Instant::now();
+        let fault = c.add_decl(d);
+        keep_slowest(&mut times, (micros(t0), i));
+        if let Some(f) = fault {
             let n = name_text(c, d.name());
             rep.code = code_of_check(f.kind);
             if rep.code == Code::Reject {
@@ -335,12 +339,30 @@ fn check_sequential(o: &Options, c: &mut Checker, ds: &[Decl], rep: &mut Report)
         t.step(o, c, rep);
     }
     t.finish(rep);
+    for (us, i) in times {
+        rep.slowest.push((name_text(c, ds[i].name()), us));
+    }
     rep.f_stats = c.f_stats;
     rep.s_stats = c.sess.stats;
     rep.s_entries = c.sess.len();
     if c.st.is_full() {
         store_full(rep);
     }
+}
+
+/// The time since `t0` in microseconds.
+fn micros(t0: Instant) -> u64 {
+    u64::try_from(t0.elapsed().as_micros()).unwrap_or(u64::MAX)
+}
+
+/// Puts `x` into `times`, which holds the `SLOWEST` largest times, the largest first.
+fn keep_slowest(times: &mut Vec<(u64, usize)>, x: (u64, usize)) {
+    if times.len() == SLOWEST && times.last().is_some_and(|l| l.0 >= x.0) {
+        return;
+    }
+    let at = times.partition_point(|y| y.0 >= x.0);
+    times.insert(at, x);
+    times.truncate(SLOWEST);
 }
 
 /// The quarantine and the axioms of the accepted declarations. `step` reads the constants that the last accepted declaration added.
@@ -875,6 +897,19 @@ mod tests {
     fn malformed_export_is_an_input_error() {
         let r = run_on(&format!("{META}\n{{\n"), &Options::default());
         assert_eq!(r.code, Code::Input);
+    }
+
+    #[test]
+    fn keep_slowest_keeps_the_largest_times_in_order() {
+        let mut v = Vec::new();
+        for (k, us) in [5u64, 1, 9, 7, 3, 9, 2, 8, 6, 4, 10, 0].iter().enumerate() {
+            keep_slowest(&mut v, (*us, k));
+        }
+        let us: Vec<u64> = v.iter().map(|x| x.0).collect();
+        assert_eq!(us, vec![10, 9, 9, 8, 7, 6, 5, 4, 3, 2]);
+        // For equal times, the declaration that came first stays first.
+        assert_eq!(v[1].1, 2);
+        assert_eq!(v[2].1, 5);
     }
 
     #[test]

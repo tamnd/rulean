@@ -37,6 +37,7 @@ If the official kernel adopts NbE or a handle store, the 10x target may become i
 | T6 | Should rulean read Susz (gruszka) or BLean (olean-export) as input? | after 1.0 |
 | T7 | Can the side record (04.2.2) shrink to 4 bytes without losing speed? | M1 |
 | T8 | How should heartbeats be calibrated across machines and releases (09.6.4)? | M6 |
+| T9 | Can P1.d hold on the `bad/` tests of `perf/`? Rule 2 of 05.1 says that a reject needs engine R, and engine R follows the official order, so a reject test costs at least the official search for "not equal" with the constant factor of rulean. The official kernel takes 28 to 40 G instructions (5 to 7 virtual seconds) on these tests. In the Arena results of November 2026, no checker keeps all 44 `perf/` tests at or below 6 G instructions: nano-lean keeps 40, gruszka 37 and sokonanoda 36. Options: a faster engine R with the same step order, a "not equal" answer of engine F that is final for some rules with a lemma, or a P1.d that counts only the `good/` tests. | M4 |
 
 ## 15.4 Questions for the project owner
 

@@ -20,6 +20,6 @@ cargo +nightly run --release --bin seeds -- corpus/olean
 cargo +nightly fuzz run olean corpus/olean -- -max_total_time=600 -rss_limit_mb=2048 -timeout=10
 ```
 
-`seeds` writes the module `Init.Control.Do` of the fixtures of `rulean-olean` as seed inputs. For `ndjson`, small exports are good seeds, for example the `tutorial` tests of the Lean Kernel Arena. For `rlb`, pack these exports with `rulean pack`. The workflow `.github/workflows/fuzz.yml` makes the seeds in this way and runs each target each week.
+`seeds` writes the module `Init.Control.Do` of the fixtures of `rulean-olean` as seed inputs. For `ndjson`, small exports are good seeds, for example the `tutorial` tests of the Lean Kernel Arena. For `rlb`, pack these exports with `rulean pack`. The workflow `.github/workflows/fuzz.yml` makes the seeds in this way. Each week, it runs 2 shards of each target for 4 hours with 4 workers, about 96 CPU-hours in total, and it keeps the corpus of each shard in the Actions cache.
 
 A crash goes to `artifacts/TARGET/`. Each find becomes a regression test in the crate of the reader (spec 11.5.1).

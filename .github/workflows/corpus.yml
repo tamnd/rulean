@@ -1,6 +1,6 @@
 name: corpus
 
-# The weekly Mathlib corpus run of spec 11.2: rulean on the Mathlib test of the Lean Kernel Arena, from the export and from the oleans, and the cross-validation of the .olean reader with lean4export (spec 07.3.6). The Arena export is too large to keep, so the job makes it again from mathlib4 at the commit of the Arena test. A step that fails does not stop the next steps, so one run gives as much data as possible.
+# The weekly corpus run of spec 11.2: rulean on the large tests of the Lean Kernel Arena that use Lean v4.36.0, from the export and from the oleans, and the cross-validation of the .olean reader with lean4export (spec 07.3.6). The Arena exports are too large to keep, so each job makes its export again from the project at the commit of the Arena test. A step that fails does not stop the next steps, so one run gives as much data as possible.
 on:
   schedule:
     - cron: "17 4 * * 0"
@@ -9,6 +9,11 @@ on:
       threads:
         description: The number of threads of rulean check and rulean olean
         default: "1"
+      test:
+        description: The test to run, or all
+        type: choice
+        options: [all, mathlib, cslib, cedar]
+        default: all
 
 permissions:
   contents: read
@@ -30,10 +35,17 @@ env:
   WORK: /mnt/corpus
 
 jobs:
-  mathlib:
-    name: rulean on Mathlib
+  corpus:
+    name: rulean on ${{ matrix.test }}
     runs-on: ubuntu-latest
     timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        # The weekly run has no inputs, so it runs all the tests.
+        test: ${{ fromJSON((inputs.test == '' || inputs.test == 'all') && '["mathlib","cslib","cedar"]' || format('["{0}"]', inputs.test)) }}
+    env:
+      TEST: ${{ matrix.test }}
     steps:
       - name: free disk space
         run: |
@@ -60,26 +72,26 @@ jobs:
           rm "_tmp/lean/lean.tar.zst"
           echo "$PWD/_tmp/lean/lean-$LEAN-linux/bin" >> "$GITHUB_PATH"
       - id: fetch
-        name: mathlib4 and its oleans
-        run: scripts/mathlib-corpus.sh fetch "$WORK"
+        name: the project and its oleans
+        run: scripts/corpus.sh "$TEST" fetch "$WORK"
       - id: export
         if: ${{ !cancelled() && steps.fetch.outcome == 'success' }}
-        name: leanexport Mathlib
-        run: scripts/mathlib-corpus.sh export "$WORK"
+        name: leanexport
+        run: scripts/corpus.sh "$TEST" export "$WORK"
       - if: ${{ !cancelled() && steps.export.outcome == 'success' }}
         name: rulean check on the export
-        run: scripts/mathlib-corpus.sh check "$WORK"
+        run: scripts/corpus.sh "$TEST" check "$WORK"
       - if: ${{ !cancelled() && steps.fetch.outcome == 'success' }}
         name: rulean olean on the oleans
-        run: scripts/mathlib-corpus.sh olean "$WORK"
+        run: scripts/corpus.sh "$TEST" olean "$WORK"
       - if: ${{ !cancelled() && steps.export.outcome == 'success' }}
-        name: the .olean reader and lean4export on Mathlib
-        run: scripts/mathlib-corpus.sh compare "$WORK"
+        name: the .olean reader and lean4export
+        run: scripts/corpus.sh "$TEST" compare "$WORK"
       - if: ${{ !cancelled() }}
         name: summary
         run: |
           {
-            echo "## rulean on Mathlib, $THREADS threads"
+            echo "## rulean on $TEST, $THREADS threads"
             for s in check olean compare; do
               if [ -f "$WORK/out/$s.time" ]; then
                 echo "- $s: $(grep -E 'Elapsed|Maximum resident' "$WORK/out/$s.time" | sed 's/^[[:space:]]*//' | paste -sd ',' -)"
@@ -93,6 +105,6 @@ jobs:
       - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: corpus
+          name: corpus-${{ matrix.test }}
           path: /mnt/corpus/out
           if-no-files-found: ignore

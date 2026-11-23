@@ -3,7 +3,7 @@
 #
 # Usage: scripts/arena-check.sh TESTS [RULEAN]
 #
-# TESTS is the tests directory of scripts/arena-fetch.sh or the output directory of scripts/arena-build.py. A test in good/ must exit with 0, and a test in bad/ must exit with 1. A test in docs/arena/either-v4.35.tsv must have the verdict of that file, and a test in either/ must be in that file. The script does not run a test with the pinned verdict either, because the official kernel did not give a verdict for it. RULEAN is the rulean binary, and the default is target/release/rulean. Each test has a limit of ARENA_TIMEOUT seconds (default 600) if the `timeout` command is installed. The script prints one line for each wrong verdict, and exits with 1 if there is one.
+# TESTS is the tests directory of scripts/arena-fetch.sh or the output directory of scripts/arena-build.py. A test in good/ must exit with 0, and a test in bad/ must exit with 1. ARENA_PROFILE is the semantics profile, and the default is v4.35. A test in docs/arena/either-PROFILE.tsv must have the verdict of that file, and a test in either/ must be in that file. The script does not run a test with the pinned verdict either, because the official kernel did not give a verdict for it. RULEAN is the rulean binary, and the default is target/release/rulean. Each test has a limit of ARENA_TIMEOUT seconds (default 600) if the `timeout` command is installed. The script prints one line for each wrong verdict, and exits with 1 if there is one.
 
 set -euo pipefail
 
@@ -15,7 +15,9 @@ tests="$1"
 here="$(cd "$(dirname "$0")/.." && pwd)"
 rulean="${2:-$here/target/release/rulean}"
 limit="${ARENA_TIMEOUT:-600}"
-either="$here/docs/arena/either-v4.35.tsv"
+profile="${ARENA_PROFILE:-v4.35}"
+either="$here/docs/arena/either-$profile.tsv"
+export ARENA_PROFILE="$profile"
 
 run=("$here/scripts/arena-run.sh")
 if command -v timeout >/dev/null; then

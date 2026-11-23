@@ -3,7 +3,7 @@
 #
 # Usage: scripts/arena-confirm.sh TESTS [RULEAN]
 #
-# TESTS is the tests directory of scripts/arena-fetch.sh or the output directory of scripts/arena-build.py. RULEAN is the rulean binary, and the default is target/release/rulean. The script reads the `engine` object of the JSON report of each export. It prints one line for each export where engine R did not confirm an equality of engine F, and exits with 1 if there is one. Each export has a limit of ARENA_TIMEOUT seconds (default 600) if the `timeout` command is installed. An export that reaches the limit is counted, but it is not a difference. The script does not run a test with the pinned verdict either in docs/arena/either-v4.35.tsv, because a checker may not terminate on it, as scripts/arena-check.sh does.
+# TESTS is the tests directory of scripts/arena-fetch.sh or the output directory of scripts/arena-build.py. RULEAN is the rulean binary, and the default is target/release/rulean. The script reads the `engine` object of the JSON report of each export. It prints one line for each export where engine R did not confirm an equality of engine F, and exits with 1 if there is one. Each export has a limit of ARENA_TIMEOUT seconds (default 600) if the `timeout` command is installed. An export that reaches the limit is counted, but it is not a difference. ARENA_PROFILE is the semantics profile, and the default is v4.35. The script does not run a test with the pinned verdict either in docs/arena/either-PROFILE.tsv, because a checker may not terminate on it, as scripts/arena-check.sh does.
 
 set -euo pipefail
 
@@ -15,7 +15,8 @@ tests="$1"
 here="$(cd "$(dirname "$0")/.." && pwd)"
 rulean="${2:-$here/target/release/rulean}"
 limit="${ARENA_TIMEOUT:-600}"
-either="$here/docs/arena/either-v4.35.tsv"
+profile="${ARENA_PROFILE:-v4.35}"
+either="$here/docs/arena/either-$profile.tsv"
 
 run=("$rulean")
 if command -v timeout >/dev/null; then
@@ -39,7 +40,7 @@ while IFS= read -r -d '' f; do
     continue
   fi
   total=$((total + 1))
-  out="$("${run[@]}" check --profile v4.35 --engine F --confirm all --format json "$f" 2>/dev/null)" || true
+  out="$("${run[@]}" check --profile "$profile" --engine F --confirm all --format json "$f" 2>/dev/null)" || true
   e="$(printf '%s' "$out" | jq -r '.engine | "\(.f_queries) \(.f_equal) \(.r_confirmed) \(.r_disagree)"' 2>/dev/null || true)"
   if [ -z "$e" ]; then
     slow=$((slow + 1))

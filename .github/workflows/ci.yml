@@ -183,7 +183,7 @@ jobs:
       - name: the scheduler on the Arena
         run: scripts/arena-threads.sh _tmp/arena/tests 4
 
-  # The Arena tarball does not have the 30 tests with the outcome either, so the job builds them from the Arena sources at the commit of results.json with the Lean v4.36.0 release. The verdicts must be the verdicts of the official kernel in docs/arena/either-v4.35.tsv. The job depends on arena.lean-lang.org and on the Lean release, so it is not a required check.
+  # The Arena tarball does not have the 30 tests with the outcome either, so the job builds them from the Arena sources at the commit of results.json with the Lean v4.36.0 release. The verdicts must be the verdicts of the official kernel in docs/arena/either-v4.35.tsv. Then the job runs `leanchecker` of v4.37.0-rc1 on the same exports, and the verdicts of that official kernel and of rulean with the profile v4.37 must be the verdicts in docs/arena/either-v4.37.tsv. The job depends on arena.lean-lang.org and on the Lean release, so it is not a required check.
   arena-either:
     name: arena either
     runs-on: ubuntu-latest
@@ -191,6 +191,8 @@ jobs:
     env:
       LEAN_ASSET: lean-4.36.0-linux.tar.zst
       LEAN_SHA256: 2b7ab1ed8b92d2e6abfaf41344823b510064dbc9c0260cac73eb496ab2dea6eb
+      LEAN37_ASSET: lean-4.37.0-rc1-linux.tar.zst
+      LEAN37_SHA256: 2e1bbb832870bb81b7131cb70b13aec2cc7ed9f22e2bdbb236b86076ae20382d
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -221,6 +223,24 @@ jobs:
       - name: the verdicts of the either tests
         run: scripts/arena-check.sh _tmp/arena-extra
       - name: engine F and engine R on the either tests
+        run: scripts/arena-confirm.sh _tmp/arena-extra
+      - name: the Lean v4.37.0-rc1 release, not on PATH
+        run: |
+          mkdir -p _tmp/lean37
+          curl -sSfL --retry 3 -o "_tmp/lean37/$LEAN37_ASSET" "https://github.com/leanprover/lean4/releases/download/v4.37.0-rc1/$LEAN37_ASSET"
+          echo "$LEAN37_SHA256  _tmp/lean37/$LEAN37_ASSET" | sha256sum -c -
+          tar --zstd -xf "_tmp/lean37/$LEAN37_ASSET" -C _tmp/lean37
+      - name: the official kernel of v4.37.0-rc1 on the either tests
+        env:
+          ARENA_TIMEOUT: 120
+        run: scripts/arena-official.sh _tmp/arena-extra docs/arena/either-v4.37.tsv "$PWD/_tmp/lean37/lean-4.37.0-rc1-linux/bin/leanchecker"
+      - name: the verdicts of the either tests with the profile v4.37
+        env:
+          ARENA_PROFILE: v4.37
+        run: scripts/arena-check.sh _tmp/arena-extra
+      - name: engine F and engine R on the either tests with the profile v4.37
+        env:
+          ARENA_PROFILE: v4.37
         run: scripts/arena-confirm.sh _tmp/arena-extra
 
   # rulean as an external kernel of lake comparator, with the bwrap sandbox of lake (spec 09.5), and the work gate of the quick suite on Init and Std (spec 08.7.4). Ubuntu 24.04 blocks the user namespaces that bwrap needs, so the job allows them first. The job depends on the Lean release, so it is not a required check.

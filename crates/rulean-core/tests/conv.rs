@@ -207,3 +207,53 @@ fn two_values_of_a_type_are_not_equal_by_irrelevance() {
     let s = t.c.f_stats;
     assert_eq!((s.queries, s.equal, s.fallback), (1, 0, 1));
 }
+
+/// `pick (α : s) (x y : α) : α := x`, a definition whose type ends in its bound variable `α`.
+fn pick(t: &mut T, s: ExprId) -> ExprId {
+    let b0 = t.bv(0);
+    let b1 = t.bv(1);
+    let b2 = t.bv(2);
+    let inner = t.pi("y", b1, b2);
+    let mid = t.pi("x", b0, inner);
+    let ty = t.pi("α", s, mid);
+    let x = t.bv(1);
+    let b0 = t.bv(0);
+    let b1 = t.bv(1);
+    let lam_y = t.lam("y", b1, x);
+    let lam_x = t.lam("x", b0, lam_y);
+    let value = t.lam("α", s, lam_x);
+    t.def("pick", ty, value, 1)
+}
+
+#[test]
+fn a_constant_that_ends_in_a_bound_proposition_can_be_a_proof() {
+    let mut t = T::new();
+    let l = t.c.st.level_zero();
+    let prop = t.c.st.mk_sort(l);
+    let p = t.axiom("P", prop);
+    let h1 = t.axiom("h1", p);
+    let h2 = t.axiom("h2", p);
+    let pk = pick(&mut t, prop);
+    let x = t.app(pk, &[p, h1, h2]);
+    let y = t.app(pk, &[p, h2, h1]);
+    assert!(t.eq(x, y));
+    let s = t.c.f_stats;
+    assert_eq!((s.queries, s.equal, s.fallback), (1, 1, 0));
+}
+
+#[test]
+fn a_constant_that_ends_in_a_bound_type_is_not_a_proof() {
+    let mut t = T::new();
+    let a = t.axiom("a", t.a_ty);
+    let b = t.axiom("b", t.a_ty);
+    let a_ty = t.a_ty;
+    let l = t.c.st.level_zero();
+    let l1 = t.c.st.level_succ(l);
+    let ty1 = t.c.st.mk_sort(l1);
+    let pk = pick(&mut t, ty1);
+    let x = t.app(pk, &[a_ty, a, b]);
+    let y = t.app(pk, &[a_ty, b, a]);
+    assert!(!t.eq(x, y));
+    let s = t.c.f_stats;
+    assert_eq!((s.queries, s.equal, s.fallback), (1, 0, 1));
+}

@@ -358,7 +358,7 @@ impl Checker {
         self.f_stats = FStats::default();
         self.sess.stats = SessionStats::default();
         let start = self.steps;
-        let start_interns = self.st.interns;
+        let start_interns = self.st.interns();
         let mut r = JobResult::default();
         let mut i = plan.starts[k] as usize;
         let end = plan.starts[k + 1] as usize;
@@ -383,7 +383,7 @@ impl Checker {
         r.s_entries = self.sess.len() as u64;
         r.full = self.st.is_full();
         r.steps = self.steps - start;
-        r.interns = self.st.interns - start_interns;
+        r.interns = self.st.interns() - start_interns;
         r
     }
 }

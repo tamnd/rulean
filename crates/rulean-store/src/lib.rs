@@ -86,8 +86,8 @@ pub struct Store {
     pub(crate) nat_heap: usize,
     // The memory budget of the store in bytes (`--max-memory`, spec 12.3). `usize::MAX` is no budget.
     pub(crate) max_bytes: usize,
-    /// The calls of `intern_expr`, with the calls that find the node. This is a part of the work count of the report (spec 08.7.4).
-    pub interns: u64,
+    // The calls of `intern_expr`, with the calls that find the node (see `interns`).
+    pub(crate) interns: u64,
 }
 
 impl Default for Store {
@@ -135,6 +135,11 @@ impl Store {
     /// True if an array of the store was full. Then some handles are wrong, and the driver must decline (see the crate documentation).
     pub fn is_full(&self) -> bool {
         self.full
+    }
+
+    /// The calls of `intern_expr` since the store was made, with the calls that find the node. This is a part of the work count of the report (spec 08.7.4).
+    pub fn interns(&self) -> u64 {
+        self.interns
     }
 
     /// Sets the memory budget of the store in bytes (`--max-memory`, spec 12.3). When an array of expressions must grow and the store would then use more than `bytes`, the store is full, as at the capacity limit. `usize::MAX` is no budget, and this is the default.

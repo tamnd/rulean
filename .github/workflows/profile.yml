@@ -1,6 +1,6 @@
 name: profile
 
-# A manual instruction profile of `rulean check` on a module of Lean v4.36.0 (spec 08.7.3). GitHub-hosted runners have no hardware counters, so the job runs rulean under valgrind. The artifact has the profile, the annotation of each function and the JSON report.
+# A manual instruction profile of `rulean check` on a module of Lean v4.36.0 or on one Arena test (spec 08.7.3). GitHub-hosted runners have no hardware counters, so the job runs rulean under valgrind. The artifact has the profile, the annotation of each function and the JSON report.
 on:
   workflow_dispatch:
     inputs:
@@ -19,24 +19,37 @@ on:
         options:
           - callgrind
           - cachegrind
+      test:
+        description: An Arena test to check in place of the module, for example perf/magma-list-deep-n21
+        type: string
+        default: ""
+      engine:
+        description: The engine of rulean check
+        type: choice
+        default: R
+        options:
+          - R
+          - F
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.module }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.module }}-${{ inputs.test }}
   cancel-in-progress: false
 
 jobs:
   profile:
-    name: profile (${{ inputs.module }}, ${{ inputs.tool }})
+    name: profile (${{ inputs.test || inputs.module }}, ${{ inputs.tool }}, engine ${{ inputs.engine }})
     runs-on: ubuntu-latest
     timeout-minutes: 300
     env:
       LEAN_ASSET: lean-4.36.0-linux.tar.zst
       LEAN_SHA256: 2b7ab1ed8b92d2e6abfaf41344823b510064dbc9c0260cac73eb496ab2dea6eb
-      MODULE: ${{ inputs.module }}
+      MODULE: ${{ inputs.test || inputs.module }}
+      TEST: ${{ inputs.test }}
       TOOL: ${{ inputs.tool }}
+      ENGINE: ${{ inputs.engine }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -51,7 +64,13 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -q -y --no-install-recommends valgrind
           valgrind --version
+      - name: the Arena tests
+        if: inputs.test != ''
+        run: |
+          scripts/arena-fetch.sh _tmp/arena
+          echo "ARENA_DIR=$PWD/_tmp/arena" >> "$GITHUB_ENV"
       - name: the Lean v4.36.0 release
+        if: inputs.test == ''
         run: |
           mkdir -p _tmp/lean
           curl -sSfL --retry 3 -o "_tmp/lean/$LEAN_ASSET" "https://github.com/leanprover/lean4/releases/download/v4.36.0/$LEAN_ASSET"
@@ -63,6 +82,6 @@ jobs:
       - name: upload the profile
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: profile-${{ inputs.module }}-${{ inputs.tool }}
+          name: profile-${{ inputs.test != '' && 'arena' || inputs.module }}-${{ inputs.tool }}-${{ inputs.engine }}
           path: _tmp/profile
           retention-days: 30

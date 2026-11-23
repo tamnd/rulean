@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- The manual workflow `profile` can profile one Arena test, for example `perf/magma-list-deep-n21`, with engine R or engine F (spec 08.7.3). `scripts/profile.sh` takes the name of the test and the directory of `scripts/arena-fetch.sh` in `ARENA_DIR`, and `ENGINE` selects the engine.
+
 ## [0.0.9] - 2026-11-23
 
 ### Added

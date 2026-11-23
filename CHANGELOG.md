@@ -18,6 +18,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ### Fixed
 
+- `rulean help` did not list the options `--threads`, `--axioms` and `--session` of `rulean check`. Now it lists them, and a test requires that the help text has each option of `check`. `--help` or `-h` after a command, for example `rulean check --help`, now prints the help text with exit code 0. Before, it was an unknown option with exit code 64 (usage).
 - `fuzz/Cargo.lock` had the version 0.0.5 of the rulean crates, so `cargo test --locked` in `fuzz/` failed, and the runs of the workflow `fuzz` since v0.0.6 failed. The lock file now has the version 0.0.7. The CI job `policy` checks that the lock file is up to date.
 
 ## [0.0.7] - 2026-11-23

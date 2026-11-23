@@ -30,6 +30,12 @@ commands:
                     --max-memory <size>|none: the memory limit, for example 8G
                     (0.8 times the physical memory by default)
                     --timeout <time>: the wall time limit, for example 90s or 2h
+                    --threads <n>: the number of workers, 1 by default; each
+                    worker has its own copy of the store
+                    --axioms <list>|any: the axioms that a theorem can use, for
+                    example std or std,A.b (any by default; exit 5 if not)
+                    --session on|off: keep the caches across declarations
+                    (on by default)
   diff <INPUT> --against <CMD>
                     check an export with rulean and with the command CMD, and
                     compare the verdicts (exit 0 if they are the same, 1 if not)
@@ -40,11 +46,11 @@ commands:
   olean <MODULE>... check modules and their imports from .olean files
                     --path <dir>: a directory of the search path, more than one
                     is allowed (LEAN_PATH by default); takes the options of check
-  pack <INPUT> -o <OUT.rlb>
+  pack <INPUT> -o|--output <OUT.rlb>
                     write the binary format of an NDJSON export, which
                     `check` reads with less parse work
   version           print the version and the build facts
-  help              print this text
+  help              print this text (also `--help` after a command)
 
 See docs/spec/09-integration.md for the full command line.";
 
@@ -58,6 +64,11 @@ fn run(args: &[String]) -> Code {
         eprintln!("{USAGE}");
         return Code::Usage;
     };
+    // `rulean check --help` prints the help text, and it does not check a file with the name `--help`.
+    if args[1..].iter().any(|a| a == "--help" || a == "-h") {
+        println!("{USAGE}");
+        return Code::Accept;
+    }
     match command.as_str() {
         "help" | "-h" | "--help" => {
             println!("{USAGE}");
@@ -115,6 +126,30 @@ mod tests {
     fn help_and_version_succeed() {
         assert_eq!(run_strs(&["help"]), Code::Accept);
         assert_eq!(run_strs(&["version"]), Code::Accept);
+    }
+
+    #[test]
+    fn help_after_a_command_succeeds() {
+        assert_eq!(run_strs(&["check", "--help"]), Code::Accept);
+        assert_eq!(run_strs(&["olean", "-h"]), Code::Accept);
+        assert_eq!(run_strs(&["pack", "x.ndjson", "--help"]), Code::Accept);
+    }
+
+    #[test]
+    fn the_help_text_has_each_option_of_check() {
+        for o in [
+            "--profile",
+            "--report",
+            "--format",
+            "--engine",
+            "--confirm",
+            "--parse-only",
+            "--max-memory",
+            "--timeout",
+            "--threads",
+        ] {
+            assert!(USAGE.contains(o), "{o}");
+        }
     }
 
     #[test]

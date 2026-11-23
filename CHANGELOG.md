@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.0.9] - 2026-11-23
+
 ### Added
 
 - The manual workflow `profile` gives an instruction profile of `rulean check` on Init, `Init.Prelude` or Std of Lean v4.36.0 (spec 08.7.3). `scripts/profile.sh` exports the module with leanexport and runs the check under callgrind or cachegrind, and the artifact has the cost of each function.
@@ -198,7 +200,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.8...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.9...HEAD
+[0.0.9]: https://github.com/tamnd/rulean/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/tamnd/rulean/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/tamnd/rulean/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/tamnd/rulean/compare/v0.0.5...v0.0.6

@@ -3,6 +3,7 @@
 use rulean_core::conv::Engine;
 use rulean_core::env::{ConstInfo, ConstKind};
 use rulean_core::tc::Checker;
+use rulean_core::trace::Rule;
 use rulean_format::{Hints, Safety};
 use rulean_store::{BinderInfo, ExprId, NameId, Store};
 
@@ -256,4 +257,39 @@ fn a_constant_that_ends_in_a_bound_type_is_not_a_proof() {
     assert!(!t.eq(x, y));
     let s = t.c.f_stats;
     assert_eq!((s.queries, s.equal, s.fallback), (1, 0, 1));
+}
+
+#[test]
+fn two_values_of_the_same_form_are_equal_with_no_delta_step() {
+    let mut t = T::new();
+    let a = t.axiom("a", t.a_ty);
+    let fty = t.a_to_a();
+    let f = t.axiom("f", fty);
+    // `D : A → A := fun x => f x`, an abbreviation.
+    let b0 = t.bv(0);
+    let fx = t.app(f, &[b0]);
+    let dv = t.lam("x", t.a_ty, fx);
+    let n = t.name("D");
+    t.c.env.add(ConstInfo {
+        name: n,
+        lparams: Vec::new(),
+        ty: fty,
+        safety: Safety::Safe,
+        kind: ConstKind::Defn {
+            value: dv,
+            hints: Hints::Abbrev,
+        },
+    });
+    let d = t.k("D");
+    // `D a` and `(fun y => D y) a` evaluate to two values of the same form. Without the check of the form, lazy delta unfolds `D` on both sides.
+    let x = t.app(d, &[a]);
+    let b0 = t.bv(0);
+    let dy = t.app(d, &[b0]);
+    let l = t.lam("y", t.a_ty, dy);
+    let y = t.app(l, &[a]);
+    t.c.trace_on = true;
+    assert!(t.eq(x, y));
+    assert_eq!(t.c.trace.counts[Rule::Delta.index()], 0);
+    let s = t.c.f_stats;
+    assert_eq!((s.queries, s.equal, s.fallback), (1, 1, 0));
 }

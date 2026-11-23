@@ -17,6 +17,10 @@ layer = "hardened"
 name = "rulean"
 path = "src/main.rs"
 
+[features]
+# 64-bit expression handles (spec 04.2.1). `cargo build --release --features wide` builds this rulean.
+wide = ["rulean-store/wide"]
+
 [dependencies]
 rulean-core = { path = "../rulean-core" }
 rulean-format = { path = "../rulean-format" }

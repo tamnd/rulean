@@ -23,6 +23,8 @@ ExprId = u32
 
 - The kind is in the handle, so a `match` on the kind needs no memory load.
 - 134 M entries per kind and tier is enough: Mathlib's export has 112 M lines in total for all record kinds (A§4.1). FLT (Anthropic) has a 37.8 GB export, about 6.4 times Mathlib. If a corpus needs more than 2^27 nodes of one kind, the store switches to a 64-bit handle build (`--features wide`). That build is a separate type, checked by the same proof with a generic width.
+- In the `wide` build, `ExprId` holds a `u64`: bit 63 is the tier, bits 59..62 are the kind and bits 0..58 are the index. The type `Raw` of `rulean-store` is the integer type of the handle, `u32` or `u64`. The memo tables, the session table and the index tables of the parsers store values of type `Raw`. A hash mixes the low 32 bits and then the high 32 bits of a `Raw` value, so the hashes of the two builds are different. `NameId`, `LevelId` and the other handles stay 32 bits in both builds.
+- `rulean version` gives the width of the build. On Init of v4.36.0, `rulean olean` in the `wide` build uses 3.5% more instructions and 27% more memory than in the default build, and it gives the same verdict. CI runs clippy and the tests on the `wide` build. The `.rlb` format keeps 32-bit expression indices, so a file has at most 2^32 expressions in both builds.
 
 ### 04.2.2 Node arrays
 

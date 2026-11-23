@@ -29,6 +29,18 @@ pub fn mix(h: u32, k: u32) -> u32 {
     add32(mul32(h1, 5), 0xe654_6b64)
 }
 
+/// Mixes a value of the handle type into `h`. Without the `wide` feature this is `mix`.
+#[cfg(not(feature = "wide"))]
+pub fn mix_raw(h: u32, x: crate::ids::Raw) -> u32 {
+    mix(h, x)
+}
+
+/// Mixes a value of the handle type into `h`: the low 32 bits, then the high 32 bits.
+#[cfg(feature = "wide")]
+pub fn mix_raw(h: u32, x: crate::ids::Raw) -> u32 {
+    mix(mix(h, x as u32), (x >> 32) as u32)
+}
+
 /// The last step of MurmurHash3: spreads the bits of the state.
 pub fn finish(h: u32) -> u32 {
     let mut x = h ^ (h >> 16);
@@ -70,6 +82,14 @@ pub fn word64(h: u32, x: u64) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mix_raw_uses_all_bits_of_the_handle() {
+        #[cfg(not(feature = "wide"))]
+        assert_eq!(mix_raw(7, 5), mix(7, 5));
+        #[cfg(feature = "wide")]
+        assert_ne!(mix_raw(7, 5), mix_raw(7, 5 | (1 << 40)));
+    }
 
     #[test]
     fn the_hash_is_fixed() {

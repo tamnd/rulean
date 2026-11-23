@@ -69,6 +69,22 @@ jobs:
       # The release profile has its own settings (fat LTO, abort on panic, overflow checks). Build it on each platform so that a fault in it shows before a release.
       - run: cargo build --workspace --locked --release
 
+  # The build with 64-bit expression handles (spec 04.2.1). It is a separate type, so clippy and the tests run on it too.
+  wide:
+    name: wide
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo clippy --workspace --all-targets --locked --features rulean-store/wide -- -D warnings
+      - run: cargo test --workspace --locked --features rulean-store/wide
+
   docs:
     name: rustdoc
     runs-on: ubuntu-latest

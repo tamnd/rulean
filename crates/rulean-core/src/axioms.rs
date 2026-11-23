@@ -5,6 +5,7 @@
 //! The checker adds the declarations in input order, so the constants that a new constant uses are already in the environment, except the other members of the same inductive group. `update` computes the sets of the new constants from the sets of the old ones, and then joins the sets of the new constants that use each other until no set changes.
 
 use alloc::vec::Vec;
+use rulean_store::ids::{low, raw};
 use rulean_store::{Expr, ExprId, NameId, Store};
 
 use crate::env::{ConstKind, Env};
@@ -210,14 +211,14 @@ impl Axioms {
 
     /// The set `{a}`.
     fn single(&mut self, a: NameId) -> u32 {
-        if let Some(x) = self.singles.get(a.0, 0) {
-            return x;
+        if let Some(x) = self.singles.get(raw(a.0), 0) {
+            return low(x);
         }
         let mut v = Vec::new();
         v.push(a);
         let id = self.sets.len() as u32;
         self.sets.push(v);
-        self.singles.put(a.0, 0, id);
+        self.singles.put(raw(a.0), 0, raw(id));
         id
     }
 
@@ -230,8 +231,8 @@ impl Axioms {
             return b;
         }
         let (lo, hi) = if a < b { (a, b) } else { (b, a) };
-        if let Some(x) = self.unions.get(lo, hi) {
-            return x;
+        if let Some(x) = self.unions.get(raw(lo), raw(hi)) {
+            return low(x);
         }
         let m = merge(&self.sets[a as usize], &self.sets[b as usize]);
         let r = if m.len() == self.sets[a as usize].len() {
@@ -243,7 +244,7 @@ impl Axioms {
             self.sets.push(m);
             id
         };
-        self.unions.put(lo, hi, r);
+        self.unions.put(raw(lo), raw(hi), raw(r));
         r
     }
 }

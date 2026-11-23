@@ -14,7 +14,7 @@ use crate::expr;
 use crate::memo::Memo;
 use crate::tc::Checker;
 use alloc::vec::Vec;
-use rulean_store::{Expr, ExprId, Literal, Tier, hash};
+use rulean_store::{Expr, ExprId, Literal, Raw, Tier, hash};
 
 /// The tag of an `infer` entry in infer-only mode. The key is (term, 0).
 pub(crate) const S_INFER: u8 = 1;
@@ -27,7 +27,8 @@ pub(crate) const S_SUCCESS: u8 = 4;
 /// The tag of an unfolding of a constant with its level list. The key is (constant term, 0).
 pub(crate) const S_UNFOLD: u8 = 5;
 
-const SLOT_BYTES: usize = 18;
+/// The bytes of one slot: the tag, two keys, the value, the stamp and the reference bit.
+const SLOT_BYTES: usize = 6 + 3 * (Raw::BITS as usize / 8);
 const WAYS: usize = 4;
 const FIRST_SLOTS: usize = 1 << 12;
 const SEED: u32 = 0x5345_5353;
@@ -56,16 +57,16 @@ pub struct Session {
     /// True if the checker uses the session.
     pub on: bool,
     tag: Vec<u8>,
-    ka: Vec<u32>,
-    kb: Vec<u32>,
-    val: Vec<u32>,
+    ka: Vec<Raw>,
+    kb: Vec<Raw>,
+    val: Vec<Raw>,
     stamp: Vec<u32>,
     refd: Vec<u8>,
     len: usize,
     max_slots: usize,
     hand: usize,
     /// The entries of the current declaration: tag, key, key, value.
-    pub(crate) pending: Vec<(u8, u32, u32, u32)>,
+    pub(crate) pending: Vec<(u8, Raw, Raw, Raw)>,
     /// The counts.
     pub stats: SessionStats,
 }
@@ -76,8 +77,11 @@ impl Default for Session {
     }
 }
 
-fn slot_hash(tag: u8, a: u32, b: u32) -> u32 {
-    hash::finish(hash::mix(hash::mix(hash::mix(SEED, tag as u32), a), b))
+fn slot_hash(tag: u8, a: Raw, b: Raw) -> u32 {
+    hash::finish(hash::mix_raw(
+        hash::mix_raw(hash::mix(SEED, tag as u32), a),
+        b,
+    ))
 }
 
 /// The largest power of two of slots that fits in `bytes`, and at least one bucket.
@@ -137,13 +141,13 @@ impl Session {
         self.pending.truncate(0);
     }
 
-    fn bucket(&self, tag: u8, a: u32, b: u32) -> usize {
+    fn bucket(&self, tag: u8, a: Raw, b: Raw) -> usize {
         let mask = self.tag.len() - 1;
         (slot_hash(tag, a, b) as usize & mask) & !(WAYS - 1)
     }
 
     /// The value of an entry whose stamp is not above `cut`.
-    pub fn get(&mut self, tag: u8, a: u32, b: u32, cut: u32) -> Option<u32> {
+    pub fn get(&mut self, tag: u8, a: Raw, b: Raw, cut: u32) -> Option<Raw> {
         if self.len == 0 {
             return None;
         }
@@ -157,7 +161,7 @@ impl Session {
     }
 
     /// The slot of the key, or `usize::MAX`.
-    fn find(&self, tag: u8, a: u32, b: u32) -> usize {
+    fn find(&self, tag: u8, a: Raw, b: Raw) -> usize {
         let start = self.bucket(tag, a, b);
         let mut found = usize::MAX;
         let mut i = start;
@@ -171,7 +175,7 @@ impl Session {
     }
 
     /// Adds a pending entry of the current declaration.
-    pub(crate) fn note(&mut self, tag: u8, a: u32, b: u32, v: u32) {
+    pub(crate) fn note(&mut self, tag: u8, a: Raw, b: Raw, v: Raw) {
         self.pending.push((tag, a, b, v));
     }
 
@@ -192,9 +196,9 @@ impl Session {
         let old_val = core::mem::take(&mut self.val);
         let old_stamp = core::mem::take(&mut self.stamp);
         self.tag = zeros_u8(n);
-        self.ka = zeros_u32(n);
-        self.kb = zeros_u32(n);
-        self.val = zeros_u32(n);
+        self.ka = zeros_raw(n);
+        self.kb = zeros_raw(n);
+        self.val = zeros_raw(n);
         self.stamp = zeros_u32(n);
         self.refd = zeros_u8(n);
         self.len = 0;
@@ -208,7 +212,7 @@ impl Session {
     }
 
     /// Writes an entry. An entry with the same key gets the new value and the smaller stamp. In a full bucket a CLOCK step evicts one entry.
-    pub(crate) fn store(&mut self, tag: u8, a: u32, b: u32, v: u32, stamp: u32) {
+    pub(crate) fn store(&mut self, tag: u8, a: Raw, b: Raw, v: Raw, stamp: u32) {
         if self.tag.is_empty() || (self.len * 2 > self.tag.len() && self.tag.len() < self.max_slots)
         {
             self.grow();
@@ -219,7 +223,7 @@ impl Session {
     }
 
     /// The work of `store` without the growth and the count of stores. It gives true for a new entry.
-    fn put(&mut self, tag: u8, a: u32, b: u32, v: u32, stamp: u32) -> bool {
+    fn put(&mut self, tag: u8, a: Raw, b: Raw, v: Raw, stamp: u32) -> bool {
         let old = self.find(tag, a, b);
         if old != usize::MAX {
             if stamp < self.stamp[old] {
@@ -262,6 +266,17 @@ impl Session {
         self.len += 1;
         true
     }
+}
+
+/// A vector of `n` zeros of the handle type.
+fn zeros_raw(n: usize) -> Vec<Raw> {
+    let mut v: Vec<Raw> = Vec::with_capacity(n);
+    let mut i = 0;
+    while i < n {
+        v.push(0);
+        i += 1;
+    }
+    v
 }
 
 /// A vector of `n` zeros.
@@ -321,7 +336,7 @@ impl Checker {
 
     /// Looks up a session entry.
     #[inline]
-    pub(crate) fn sess_get(&mut self, tag: u8, a: u32, b: u32) -> Option<u32> {
+    pub(crate) fn sess_get(&mut self, tag: u8, a: Raw, b: Raw) -> Option<Raw> {
         let cut = self.sess_cut();
         self.sess.get(tag, a, b, cut)
     }

@@ -252,7 +252,7 @@ fn nat_rules() {
         let e = rulean_store::ExprId::new(
             rulean_store::Tier::Frozen,
             rulean_store::Kind::Lit,
-            i as u32,
+            i as rulean_store::Raw,
         );
         if let Expr::Lit(Literal::Nat(n)) = store.node(e) {
             found |= store.nat(n).to_decimal() == big.as_bytes();

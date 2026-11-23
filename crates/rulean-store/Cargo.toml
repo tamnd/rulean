@@ -13,6 +13,10 @@ publish = false
 # The layer of spec section 03.2. xtask checks the dependency rule of 03.3 from this value.
 layer = "core"
 
+[features]
+# 64-bit expression handles for a corpus with more than 2^27 nodes of one kind (spec 04.2.1).
+wide = []
+
 [lints]
 workspace = true
 

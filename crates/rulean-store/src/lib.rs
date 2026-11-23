@@ -25,7 +25,7 @@ pub mod name;
 pub mod table;
 
 pub use expr::{Binder, Expr, Flags, LetNode, Literal, ProjNode, SATURATED};
-pub use ids::{BinderInfo, ExprId, Kind, LevelId, LevelListId, NameId, NatId, StrId, Tier};
+pub use ids::{BinderInfo, ExprId, Kind, LevelId, LevelListId, NameId, NatId, Raw, StrId, Tier};
 pub use level::Level;
 pub use name::Name;
 

@@ -34,6 +34,8 @@ cargo build --release
 target/release/rulean version
 ```
 
+For a corpus with more than 2^27 expression nodes of one kind, build with `--features wide`. This build has 64-bit expression handles and uses more memory.
+
 ## Use
 
 ```sh

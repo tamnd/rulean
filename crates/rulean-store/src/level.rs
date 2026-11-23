@@ -5,7 +5,7 @@
 use alloc::vec::Vec;
 
 use crate::hash;
-use crate::ids::{LevelId, LevelListId, NameId};
+use crate::ids::{LevelId, LevelListId, NameId, low, raw};
 use crate::table::Probe;
 use crate::{Span, Store};
 
@@ -79,7 +79,7 @@ impl Store {
                 Probe::Free => walking = false,
                 Probe::Full(hh, v) => {
                     if hh == h && self.levels[v as usize] == node {
-                        found = v + 1;
+                        found = low(v) + 1;
                         walking = false;
                     } else {
                         pos = self.level_table.next(pos);
@@ -97,7 +97,7 @@ impl Store {
             self.levels.push(node);
             self.level_hash.push(h);
             self.level_param.push(has_param);
-            self.level_table.put(pos, h, id);
+            self.level_table.put(pos, h, raw(id));
             LevelId(id)
         }
     }
@@ -149,8 +149,8 @@ impl Store {
             match self.list_table.get(pos) {
                 Probe::Free => walking = false,
                 Probe::Full(hh, v) => {
-                    if hh == h && self.list_eq(v, items) {
-                        found = v + 1;
+                    if hh == h && self.list_eq(low(v), items) {
+                        found = low(v) + 1;
                         walking = false;
                     } else {
                         pos = self.list_table.next(pos);
@@ -177,7 +177,7 @@ impl Store {
             });
             self.list_hash.push(h);
             self.list_param.push(p);
-            self.list_table.put(pos, h, id);
+            self.list_table.put(pos, h, raw(id));
             LevelListId(id)
         }
     }

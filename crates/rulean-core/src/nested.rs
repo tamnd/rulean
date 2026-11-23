@@ -3,6 +3,7 @@
 //! The checker changes each nested occurrence `I Ds is` in a constructor type to `Iaux As is`, where `Iaux` is a new auxiliary type of the block. Then it checks the block with the auxiliary types. Then it removes the auxiliary declarations, changes the auxiliary types back to the nested occurrences in the constructors and the recursors, and adds the restored declarations.
 
 use alloc::vec::Vec;
+use rulean_store::ids::raw;
 use rulean_store::{Expr, ExprId, LevelListId, NameId};
 
 use crate::env::{ConstInfo, ConstKind, InductInfo, RecInfo, RuleInfo};
@@ -109,7 +110,7 @@ impl Checker {
 
     /// `replace` of `replace_fn.h` with `replace_if_nested` or with the function of `restore_nested`. The traversal goes into the function before the argument and into the domain before the body.
     fn map_term(&mut self, s: &mut Ind, e: ExprId, mode: u32) -> ExprId {
-        match s.rep.get(e.0, mode) {
+        match s.rep.get(e.0, raw(mode)) {
             Some(v) => ExprId(v),
             None => self.map_core(s, e, mode),
         }
@@ -129,7 +130,7 @@ impl Checker {
             None => self.map_children(s, e, mode),
         };
         self.leave();
-        s.rep.put(e.0, mode, r.0);
+        s.rep.put(e.0, raw(mode), r.0);
         r
     }
 

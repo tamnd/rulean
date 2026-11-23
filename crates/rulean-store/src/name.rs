@@ -5,7 +5,7 @@
 //! A name is anonymous, or a string or a number after a prefix name, as `Lean.Name`. `NameId(0)` is the anonymous name.
 
 use crate::hash;
-use crate::ids::{NameId, StrId};
+use crate::ids::{NameId, StrId, low, raw};
 use crate::table::Probe;
 use crate::{Span, Store};
 
@@ -43,8 +43,8 @@ impl Store {
             match self.str_table.get(pos) {
                 Probe::Free => walking = false,
                 Probe::Full(hh, v) => {
-                    if hh == h && self.str_eq(v, b) {
-                        found = v + 1;
+                    if hh == h && self.str_eq(low(v), b) {
+                        found = low(v) + 1;
                         walking = false;
                     } else {
                         pos = self.str_table.next(pos);
@@ -70,7 +70,7 @@ impl Store {
                 len: b.len(),
             });
             self.str_hash.push(h);
-            self.str_table.put(pos, h, id);
+            self.str_table.put(pos, h, raw(id));
             StrId(id)
         }
     }
@@ -137,7 +137,7 @@ impl Store {
                 Probe::Free => walking = false,
                 Probe::Full(hh, v) => {
                     if hh == h && self.names[v as usize] == node {
-                        found = v + 1;
+                        found = low(v) + 1;
                         walking = false;
                     } else {
                         pos = self.name_table.next(pos);
@@ -154,7 +154,7 @@ impl Store {
             let id = self.names.len() as u32;
             self.names.push(node);
             self.name_hash.push(h);
-            self.name_table.put(pos, h, id);
+            self.name_table.put(pos, h, raw(id));
             NameId(id)
         }
     }

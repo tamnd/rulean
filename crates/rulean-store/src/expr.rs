@@ -9,8 +9,8 @@ use rulean_nat::Nat;
 
 use crate::hash;
 use crate::ids::{
-    BinderInfo, ExprId, KIND_COUNT, Kind, LevelId, LevelListId, MAX_INDEX, NameId, NatId, StrId,
-    Tier,
+    BinderInfo, ExprId, KIND_COUNT, Kind, LevelId, LevelListId, MAX_INDEX, NameId, NatId, Raw,
+    StrId, Tier, low, raw,
 };
 use crate::table::{Probe, Table};
 use crate::{Side, Store};
@@ -284,12 +284,12 @@ fn has_scratch_field(node: Expr) -> bool {
 }
 
 /// The walk for a node in the table of one tier. The result is (found, value, position): the value is the handle if found is true, and the position is the free slot where the walk stopped if found is false.
-fn probe(nodes: &Nodes, node: Expr, h: u32) -> (bool, u32, usize) {
+fn probe(nodes: &Nodes, node: Expr, h: u32) -> (bool, Raw, usize) {
     let kind = node.kind();
     let mut pos = nodes.table.start(h);
     // `ExprId(0)` is a valid handle (bound variable node 0), so a flag says if the walk found the node.
     let mut hit = false;
-    let mut found: u32 = 0;
+    let mut found: Raw = 0;
     let mut walking = true;
     while walking {
         match nodes.table.get(pos) {
@@ -322,7 +322,7 @@ fn push_node(
     if nodes.count(kind) >= MAX_INDEX as usize {
         None
     } else {
-        let id = ExprId::new(tier, kind, nodes.count(kind) as u32);
+        let id = ExprId::new(tier, kind, nodes.count(kind) as Raw);
         nodes.push(node);
         nodes.sides[kind as usize].push(Side { hash: h, info });
         nodes.table.put(pos, h, id.0);
@@ -616,8 +616,8 @@ impl Store {
             match self.nat_table.get(pos) {
                 Probe::Free => walking = false,
                 Probe::Full(hh, v) => {
-                    if hh == h && self.nats[v as usize] == n {
-                        found = v + 1;
+                    if hh == h && self.nats[low(v) as usize] == n {
+                        found = low(v) + 1;
                         walking = false;
                     } else {
                         pos = self.nat_table.next(pos);
@@ -634,7 +634,7 @@ impl Store {
             let id = self.nats.len() as u32;
             self.nats.push(n);
             self.nat_hash.push(h);
-            self.nat_table.put(pos, h, id);
+            self.nat_table.put(pos, h, raw(id));
             NatId(id)
         }
     }

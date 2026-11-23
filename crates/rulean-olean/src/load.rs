@@ -799,13 +799,18 @@ enum Slot {
     Induct(NameId),
     /// The block of unsafe or partial definitions with this `all` list.
     Mutual(Vec<NameId>),
+    /// The group of unsafe or partial definitions that are not in their own `all` list, with this key.
+    Copies(CopyKey),
 }
+
+/// The key of a group of copies: the `all` list, true for unsafe and false for partial, and the level parameters. The members of one group have the same safety and the same level parameters, as `add_mutual` requires.
+type CopyKey = (Vec<NameId>, bool, Vec<NameId>);
 
 /// Makes one `Decl` for each inductive block, at the position of the first type of the block. Each type, constructor and recursor must be in exactly one block.
 ///
 /// An unsafe or a partial definition goes into a mutual block with the other definitions of its `all` list, at the position of the first of them. Lean adds a recursive unsafe or partial definition with `mutualDefnDecl`, and the kernel then adds all the headers before it checks the values. The olean does not keep the declaration form, so the loader uses the mutual form for each unsafe or partial definition. For a block with one definition, `add_mutual` accepts each definition that `add_definition` accepts, and also a definition that refers to itself.
 ///
-/// An unsafe or a partial definition that is not in its own `all` list did not come from `mutualDefnDecl`, because the elaborator puts each member of a block in the `all` list. So it stays a single definition, and `add_definition` checks it as the kernel checks a `defnDecl`. The `compile_inductive` command of Mathlib makes such a definition: it copies a definition with a new name and keeps the `all` list of the original.
+/// An unsafe or a partial definition that is not in its own `all` list goes into a group with the other such definitions that have the same `all` list, the same safety and the same level parameters, at the position of the first of them. The group is one `Mutual` declaration. The `compile_inductive` command of Mathlib makes such definitions: it adds copies of the recursors with new names through one `mutualDefnDecl`, each copy keeps the `all` list of its recursor, and the value of a copy refers to the copies. The `add_mutual` of the kernel does not look at `all`, so the olean does not tell which definitions came from one declaration. A group accepts each definition that `add_definition` accepts, and also a definition that refers to itself or to another member.
 fn blocks(st: &Store, items: Vec<Item>) -> Result<Vec<Decl>, Fault> {
     let text = |n: NameId| String::from_utf8_lossy(&st.name_text(n)).into_owned();
     let bad = |msg: String| Fault::new(FaultKind::Malformed, 0, msg);
@@ -814,12 +819,17 @@ fn blocks(st: &Store, items: Vec<Item>) -> Result<Vec<Decl>, Fault> {
     let mut recs: BTreeMap<NameId, Vec<Rec>> = BTreeMap::new();
     let mut heads = Vec::new();
     let mut mutual: BTreeMap<Vec<NameId>, Vec<Defn>> = BTreeMap::new();
+    let mut copies: BTreeMap<CopyKey, Vec<Defn>> = BTreeMap::new();
     // The position of each declaration and each block in the module.
     let mut seq: Vec<Slot> = Vec::new();
     for it in items {
         match it {
             Item::Decl(Decl::Defn(d)) if d.safety != Safety::Safe && !d.all.contains(&d.name) => {
-                seq.push(Slot::Decl(Decl::Defn(d)));
+                let key = (d.all.clone(), d.safety == Safety::Unsafe, d.lparams.clone());
+                if !copies.contains_key(&key) {
+                    seq.push(Slot::Copies(key.clone()));
+                }
+                copies.entry(key).or_default().push(d);
             }
             Item::Decl(Decl::Defn(d)) if d.safety != Safety::Safe => {
                 let key = d.all.clone();
@@ -940,6 +950,8 @@ fn blocks(st: &Store, items: Vec<Item>) -> Result<Vec<Decl>, Fault> {
                 }
                 out.push(Decl::Mutual(ds));
             }
+            // The members keep the order of the module.
+            Slot::Copies(key) => out.extend(copies.remove(&key).map(Decl::Mutual)),
         }
     }
     Ok(out)
@@ -1081,23 +1093,64 @@ mod tests {
     }
 
     #[test]
-    fn a_definition_outside_its_all_list_is_a_single_definition() {
-        // This is the form of the copies that `compile_inductive` of Mathlib makes: the copy keeps the `all` list of the original.
+    fn definitions_outside_their_all_list_make_a_group() {
+        // This is the form of the copies that `compile_inductive` of Mathlib makes: each copy keeps the `all` list of its recursor.
         let mut st = Store::new();
-        let (f, g) = (name(&mut st, "f"), name(&mut st, "g"));
+        let (f, g, h, r) = (
+            name(&mut st, "f"),
+            name(&mut st, "g"),
+            name(&mut st, "h"),
+            name(&mut st, "r"),
+        );
         let p = prop(&mut st);
         for safety in [Safety::Partial, Safety::Unsafe] {
-            let mut copy = partial(f, &[g], p, p);
-            if let Item::Decl(Decl::Defn(d)) = &mut copy {
-                d.safety = safety;
-            }
-            let ds = blocks(&st, vec![copy]).expect("blocks");
-            assert_eq!(ds.len(), 1);
-            let Decl::Defn(d) = &ds[0] else {
-                panic!("not a single definition")
+            let mk = |n: NameId, s: Safety| {
+                let mut it = partial(n, &[r], p, p);
+                if let Item::Decl(Decl::Defn(d)) = &mut it {
+                    d.safety = s;
+                }
+                it
             };
-            assert_eq!((d.name, d.safety), (f, safety));
+            let other = if safety == Safety::Partial {
+                Safety::Unsafe
+            } else {
+                Safety::Partial
+            };
+            let ds = blocks(&st, vec![mk(g, safety), mk(f, safety), mk(h, other)]).expect("blocks");
+            assert_eq!(ds.len(), 2);
+            let Decl::Mutual(m) = &ds[0] else {
+                panic!("not a group")
+            };
+            let names: Vec<(NameId, Safety)> = m.iter().map(|d| (d.name, d.safety)).collect();
+            assert_eq!(names, vec![(g, safety), (f, safety)]);
+            let Decl::Mutual(m) = &ds[1] else {
+                panic!("not a group")
+            };
+            assert_eq!((m.len(), m[0].name, m[0].safety), (1, h, other));
         }
+    }
+
+    #[test]
+    fn a_copy_that_refers_to_itself_is_accepted() {
+        // `compile_inductive` of Mathlib replaces the recursor in the value of a copy with the copy. The kernel adds the copies with `mutualDefnDecl`, so the value can refer to the copy.
+        let mut c = rulean_core::tc::Checker::new(Store::new());
+        let (f, r) = (name(&mut c.st, "f"), name(&mut c.st, "r"));
+        let p = prop(&mut c.st);
+        let me = cnst(&mut c.st, f);
+        let ds = blocks(&c.st, vec![partial(f, &[r], p, me)]).expect("blocks");
+        assert!(matches!(&ds[..], [Decl::Mutual(_)]));
+        assert_eq!(c.add_decl(&ds[0]), None);
+        assert!(c.env.contains(f));
+        // As a single definition, the value refers to a constant that is not in the environment yet.
+        let mut c = rulean_core::tc::Checker::new(Store::new());
+        let (f, r) = (name(&mut c.st, "f"), name(&mut c.st, "r"));
+        let p = prop(&mut c.st);
+        let me = cnst(&mut c.st, f);
+        let Item::Decl(single) = partial(f, &[r], p, me) else {
+            panic!("not a declaration")
+        };
+        let kind = c.add_decl(&single).map(|e| e.kind);
+        assert_eq!(kind, Some(rulean_core::tc::ErrorKind::UnknownConst));
     }
 
     #[test]

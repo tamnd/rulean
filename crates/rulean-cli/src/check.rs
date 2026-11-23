@@ -4,6 +4,7 @@
 
 use std::collections::BTreeSet;
 use std::io::BufRead;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use rulean_core::axioms::Axioms;
@@ -492,21 +493,26 @@ fn check_parallel(o: &Options, c: &mut Checker, ds: &[Decl], rep: &mut Report) {
     let plan = c.plan(ds);
     let order = rulean_pool::largest_first(&plan.costs);
     let main: &Checker = c;
-    // Each worker has a copy of the store, so the budget is in equal parts for the main checker and the workers.
-    let share = match main.max_memory() {
-        limits::NO_LIMIT => limits::NO_LIMIT,
-        b => b / (o.threads + 1),
+    // The main checker and the workers share one budget. Each worker has a copy of the store, so the copies count too. The core has no shared state, so the total is here: before and after each job, a worker adds the change of its memory to the total and reads the memory of the others.
+    let total = AtomicUsize::new(main.memory());
+    let publish = |w: &mut Checker| {
+        let m = w.memory();
+        total.fetch_add(m, Ordering::Relaxed);
+        let now = total.fetch_sub(w.mem_published, Ordering::Relaxed) - w.mem_published;
+        w.mem_published = m;
+        w.mem_others = now.saturating_sub(m);
     };
     let results = rulean_pool::run_all(
         o.threads,
         STACK_BYTES,
         &order,
-        || {
-            let mut w = Checker::worker(main.st.clone(), main.env.clone(), main);
-            w.set_max_memory(share);
-            w
+        || Checker::worker(main.st.clone(), main.env.clone(), main),
+        |w: &mut Checker, k| {
+            publish(w);
+            let r = w.run_job(&plan, ds, k);
+            publish(w);
+            r
         },
-        |w: &mut Checker, k| w.run_job(&plan, ds, k),
     );
     let out = sched::merge(&plan, &results, ds.len() as u32);
     rep.accepted = out.accepted as usize;

@@ -384,6 +384,10 @@ pub struct Checker {
     pub(crate) max_memory: usize,
     // The calls of `enter`. Each `MEMORY_TICKS` calls, `enter` compares the memory with the budget.
     pub(crate) ticks: u32,
+    /// The memory of the other checkers of the run in bytes, as the driver last saw it. With `--threads`, the checkers share one budget, and the driver sets this value before each job. The core has no shared state, so the driver keeps the total.
+    pub mem_others: usize,
+    /// The memory of this checker that the driver last added to the total of the run.
+    pub mem_published: usize,
     pub(crate) fault: Option<Fault>,
     /// The extension bits that primitive pinning turned off (spec 05.8).
     pub(crate) pin_off: u32,
@@ -444,6 +448,8 @@ impl Checker {
             max_depth: MAX_DEPTH,
             max_memory: usize::MAX,
             ticks: 0,
+            mem_others: 0,
+            mem_published: 0,
             fault: None,
             pin_off: 0,
             pin_done: 0,
@@ -563,9 +569,11 @@ impl Checker {
             + self.lparams.capacity() * core::mem::size_of::<NameId>()
     }
 
-    /// True if the checker has a budget and the store is full or the memory is above the budget.
+    /// True if the checker has a budget and the store is full, or the memory of this checker and of the other checkers (`mem_others`) is above the budget.
     pub fn over_memory(&self) -> bool {
-        self.max_memory != usize::MAX && (self.st.is_full() || self.memory() > self.max_memory)
+        self.max_memory != usize::MAX
+            && (self.st.is_full()
+                || self.memory().saturating_add(self.mem_others) > self.max_memory)
     }
 
     pub(crate) fn leave(&mut self) {

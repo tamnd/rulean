@@ -309,23 +309,34 @@ fn probe(nodes: &Nodes, node: Expr, h: u32) -> (bool, Raw, usize) {
     (hit, found, pos)
 }
 
+impl Nodes {
+    /// The bytes that the next node of `kind` adds when it makes the arrays or the table grow, or 0 if nothing grows. The arrays of one kind grow to about twice their size, so the estimate adds the current size of these arrays once more: the side records of 8 bytes and at most 16 bytes for a node. The table doubles, so the estimate adds its current size.
+    fn growth(&self, kind: Kind) -> usize {
+        let sides = &self.sides[kind as usize];
+        let mut extra: usize = 0;
+        if sides.len() >= sides.capacity() {
+            extra = sides.capacity().saturating_mul(24);
+        }
+        if (self.table.len() + 1) * 2 > self.table.capacity() {
+            extra = extra.saturating_add(self.table.bytes());
+        }
+        extra
+    }
+}
+
 impl Store {
-    /// True if the arrays of `kind` in `tier` are full to their capacity, so the next node makes them grow, and the store would then be over its budget. The arrays of one kind grow to about twice their size, so the estimate adds the current size of these arrays once more: the node array and the side records of 8 bytes, with at most 16 bytes for a node.
+    /// True if the next node of `kind` in `tier` makes the arrays or the table of the tier grow, and the store would then be over its budget.
     ///
     /// A full store gives the handle of the first frozen node of the kind (see `intern_expr`). So while the frozen array of the kind is empty, the budget does not stop a new node, and the handle is always valid. The checker also compares its memory with the budget, so this gap does not let the memory grow with no limit.
     fn grow_over_budget(&self, tier: Tier, kind: Kind) -> bool {
         if self.max_bytes == usize::MAX || self.exprs.sides[kind as usize].is_empty() {
             return false;
         }
-        let nodes = match tier {
-            Tier::Frozen => &self.exprs,
-            Tier::Scratch => &self.scratch,
+        let extra = match tier {
+            Tier::Frozen => self.exprs.growth(kind),
+            Tier::Scratch => self.scratch.growth(kind),
         };
-        let sides = &nodes.sides[kind as usize];
-        if sides.len() < sides.capacity() {
-            return false;
-        }
-        self.over_budget(sides.capacity().saturating_mul(24))
+        extra != 0 && self.over_budget(extra)
     }
 }
 

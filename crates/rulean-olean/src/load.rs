@@ -735,6 +735,8 @@ enum Slot {
 /// Makes one `Decl` for each inductive block, at the position of the first type of the block. Each type, constructor and recursor must be in exactly one block.
 ///
 /// An unsafe or a partial definition goes into a mutual block with the other definitions of its `all` list, at the position of the first of them. Lean adds a recursive unsafe or partial definition with `mutualDefnDecl`, and the kernel then adds all the headers before it checks the values. The olean does not keep the declaration form, so the loader uses the mutual form for each unsafe or partial definition. For a block with one definition, `add_mutual` accepts each definition that `add_definition` accepts, and also a definition that refers to itself.
+///
+/// An unsafe or a partial definition that is not in its own `all` list did not come from `mutualDefnDecl`, because the elaborator puts each member of a block in the `all` list. So it stays a single definition, and `add_definition` checks it as the kernel checks a `defnDecl`. The `compile_inductive` command of Mathlib makes such a definition: it copies a definition with a new name and keeps the `all` list of the original.
 fn blocks(st: &Store, items: Vec<Item>) -> Result<Vec<Decl>, Fault> {
     let text = |n: NameId| String::from_utf8_lossy(&st.name_text(n)).into_owned();
     let bad = |msg: String| Fault::new(FaultKind::Malformed, 0, msg);
@@ -747,13 +749,10 @@ fn blocks(st: &Store, items: Vec<Item>) -> Result<Vec<Decl>, Fault> {
     let mut seq: Vec<Slot> = Vec::new();
     for it in items {
         match it {
+            Item::Decl(Decl::Defn(d)) if d.safety != Safety::Safe && !d.all.contains(&d.name) => {
+                seq.push(Slot::Decl(Decl::Defn(d)));
+            }
             Item::Decl(Decl::Defn(d)) if d.safety != Safety::Safe => {
-                if !d.all.contains(&d.name) {
-                    return Err(bad(format!(
-                        "the definition {} is not in its own `all` list",
-                        text(d.name)
-                    )));
-                }
                 let key = d.all.clone();
                 if !mutual.contains_key(&key) {
                     seq.push(Slot::Mutual(key.clone()));
@@ -1013,13 +1012,31 @@ mod tests {
     }
 
     #[test]
+    fn a_definition_outside_its_all_list_is_a_single_definition() {
+        // This is the form of the copies that `compile_inductive` of Mathlib makes: the copy keeps the `all` list of the original.
+        let mut st = Store::new();
+        let (f, g) = (name(&mut st, "f"), name(&mut st, "g"));
+        let p = prop(&mut st);
+        for safety in [Safety::Partial, Safety::Unsafe] {
+            let mut copy = partial(f, &[g], p, p);
+            if let Item::Decl(Decl::Defn(d)) = &mut copy {
+                d.safety = safety;
+            }
+            let ds = blocks(&st, vec![copy]).expect("blocks");
+            assert_eq!(ds.len(), 1);
+            let Decl::Defn(d) = &ds[0] else {
+                panic!("not a single definition")
+            };
+            assert_eq!((d.name, d.safety), (f, safety));
+        }
+    }
+
+    #[test]
     fn a_mutual_block_with_a_missing_definition_is_malformed() {
         let mut st = Store::new();
         let (f, g) = (name(&mut st, "f"), name(&mut st, "g"));
         let p = prop(&mut st);
         let e = blocks(&st, vec![partial(f, &[f, g], p, p)]).expect_err("g is missing");
-        assert_eq!(e.kind, FaultKind::Malformed);
-        let e = blocks(&st, vec![partial(f, &[g], p, p)]).expect_err("f is not in its block");
         assert_eq!(e.kind, FaultKind::Malformed);
         let two = vec![partial(f, &[f], p, p), partial(f, &[f], p, p)];
         let e = blocks(&st, two).expect_err("f is in its block two times");

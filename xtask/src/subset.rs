@@ -28,6 +28,9 @@ const SHARED: &[&str] = &[
     "Weak",
     "Mutex",
     "RwLock",
+    "OnceLock",
+    "LazyCell",
+    "LazyLock",
 ];
 
 /// Collection types of `std` and `alloc` other than `Vec`.
@@ -192,7 +195,8 @@ impl Lint {
     /// A path segment or a `use` item that names a banned type or module.
     fn check_name(&mut self, ident: &syn::Ident) {
         let name = ident.to_string();
-        if SHARED.contains(&name.as_str()) {
+        // An atomic type also has interior mutability. With the types of `SHARED`, this rule is the base of contract K3 (spec 10.7): a value of a core crate cannot change behind a shared reference.
+        if SHARED.contains(&name.as_str()) || name.starts_with("Atomic") {
             self.report(
                 ident.span(),
                 "S5",
@@ -530,6 +534,8 @@ mod tests {
             ("fn f(x: fn(u8) -> u8) {}", "S4"),
             ("fn f(x: Rc<u8>) {}", "S5"),
             ("fn f(x: RefCell<u8>) {}", "S5"),
+            ("fn f(x: &AtomicUsize) {}", "S5"),
+            ("static X: OnceLock<u8> = OnceLock::new();", "S5"),
             ("use alloc::collections::BTreeMap;", "S6"),
             ("use alloc::collections::{BTreeMap as M};", "S6"),
             ("fn f(x: HashMap<u8, u8>) {}", "S6"),

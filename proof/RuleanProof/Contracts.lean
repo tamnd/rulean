@@ -1,13 +1,13 @@
 /-!
 # The island contracts
 
-Spec 10.7 gives one contract for each island. Each contract is discharged outside Lean, and the capstone theorem takes it as a hypothesis. This file states the contracts K1 and K2. The fields `K1` to `K6` of `Interface` in `Statements.lean` are still free propositions. A later PR sets each field to the statement of this file.
+Spec 10.7 gives one contract for each island. Each contract is discharged outside Lean, and the capstone theorem takes it as a hypothesis. This file states the contracts K1 and K2. K3 and K4 have no statement here: K3 follows from the Rust type system and the subset lint, and K4 holds because rulean has no SIMD scanner (spec 10.7.1). The fields `K1` to `K6` of `Interface` in `Statements.lean` are still free propositions. A later PR sets each field to the statement of this file.
 
 ## K1, the thread pool
 
 The island is the crate `rulean-pool`. Its function `run_all` runs `n` jobs on a set of threads and gives an array with the result of job `k` at position `k`. The contract says that this array is the array of the sequential twin, in which job `k` gives `f k`.
 
-A Verus proof discharges the safety part of K1: if `run_all` returns, its result satisfies `ParallelAll`. The proof is in `proof/verus/pool.rs`. It holds for each value of the shared counter, so it holds for each schedule of the threads. It does not show that `run_all` returns. A test and review cover that part.
+A Verus proof discharges the safety part of K1: if `run_all` returns, its result satisfies `ParallelAll`. The proof is in `proof/verus/pool.rs`. It holds for each value of the shared counter, so it holds for each schedule of the threads. It does not show that `run_all` returns. The test `each_claim_order_runs_each_job_once` gives the worker each order of the claims of at most 3 workers on at most 5 jobs, and it checks that each job runs exactly once and that each worker stops. Review covers larger cases.
 
 ## K2, the file read
 

@@ -85,10 +85,15 @@ fn version_text() -> String {
         ids.push(p.id());
     }
     format!(
-        "rulean {}\nprofiles: {}\nhandles: {}-bit\nbuild: unverified",
+        "rulean {}\nprofiles: {}\nhandles: {}-bit\nsha256: {}\nbuild: unverified",
         env!("CARGO_PKG_VERSION"),
         ids.join(", "),
-        rulean_store::Raw::BITS
+        rulean_store::Raw::BITS,
+        if rulean_io::sha::Sha256::new().hardware() {
+            "the SHA instructions of the CPU"
+        } else {
+            "portable"
+        }
     )
 }
 

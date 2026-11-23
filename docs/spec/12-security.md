@@ -36,7 +36,8 @@ rulean does not defend against an attacker who controls the machine that runs it
 
 ## 12.4 Rules for the code
 
-- `#![forbid(unsafe_code)]` in every crate except `rulean-io` (the mapping call), `rulean-pool` (atomics) and `rulean-ffi` (the Lean ABI). Each `unsafe` block in those crates has a comment with the invariant and a Kani or Verus harness where possible.
+- `#![forbid(unsafe_code)]` in every crate except `rulean-io` (the mapping call and the SHA instructions), `rulean-pool` (atomics) and `rulean-ffi` (the Lean ABI). Each `unsafe` block in those crates has a comment with the invariant and a Kani or Verus harness where possible.
+- In `rulean-io`, only the module `sha` has `unsafe` code. It computes the SHA-256 digest of the input with the SHA extensions of x86_64 (SHA-NI) or the SHA2 extension of aarch64, and it finds the extension at run time. Without the extension, it uses the portable code of `rulean_core::sha256`. The `unsafe` blocks are the call of the functions with `#[target_feature]` and the loads and stores of the 128-bit registers. Kani does not model these instructions, so the tests compare the two codes on the test vectors of FIPS 180-4 and on each length from 0 to 1099 bytes. The CI test jobs run them on x86_64 and on aarch64. The digest is in the report and is not an input of the type checker, so a wrong digest cannot change a verdict. It can only make `confirm` (10.7, K2) see a change that did not happen, or not see a real one.
 - `panic = "abort"` in all profiles, so a bug cannot leave a half-updated state that later code reads (K6, 10.7).
 - `overflow-checks = true` in all profiles (K5).
 - No network access, no process spawning (except `--paranoid` and `rulean diff`, which run named checkers), no file writes except the report.

@@ -19,5 +19,6 @@ workspace = true
 [dependencies]
 rulean-core = { path = "../rulean-core" }
 rulean-format = { path = "../rulean-format" }
+rulean-io = { path = "../rulean-io" }
 rulean-nat = { path = "../rulean-nat" }
 rulean-store = { path = "../rulean-store" }

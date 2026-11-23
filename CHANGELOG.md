@@ -17,6 +17,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ### Fixed
 
+- `rulean olean` rejected Mathlib with `UnknownConst` on the copy `List.rec._@.Mathlib.Util.CompileInductive...` of `compile_inductive`. The fix for the `all` list in 0.0.8 gave such a copy to the checker as a single definition, but Mathlib adds the copies through `mutualDefnDecl`, and the value of a copy refers to the copy. Now the reader puts the copies with the same `all` list, safety and level parameters into one `Mutual` declaration (spec 07.3.4). The weekly corpus run found this on Mathlib (run 45180275749).
 - The CI job `arena` failed on each push to `main` from 0.0.8. `scripts/arena-threads.sh` compared the counts `steps` and `interns` of the summary between one thread and four threads, but these counts depend on the job split, because each worker has its own store and caches. The script now does not compare them, and spec 08.3.4 gives the exception. The verdicts did not change.
 - The `.olean` reader compares the types of two constants with the same name by the `==` of `Expr` in Lean, which ignores the binder names and the binder info (spec 07.3). Before, it compared the handles, so the step olean of the corpus run of Mathlib failed on the instance `CategoryTheory.Abelian.instIsStableUnderCobaseChangeMonomorphisms`, which two modules declare.
 

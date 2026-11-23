@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- The release workflow builds each target on two runners. The second runner uses a checkout at a different path. The job `verify` compares the SHA-256 hashes of the two binaries, and the release is not published if they are different (spec 12.6). The compiler replaces the checkout path and the Cargo home with fixed names, and on Windows the linker writes no time stamp and no full PDB path. A pull request that changes the build runs the two builds and the comparison, but makes no release.
+
 ## [0.0.11] - 2026-11-24
 
 ### Added

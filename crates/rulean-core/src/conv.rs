@@ -331,7 +331,7 @@ impl Checker {
     }
 
     /// True if `t` is an application of an inductive type whose own type ends in a sort with a level that is never zero.
-    fn induct_type_not_prop(&self, t: ExprId) -> bool {
+    pub(crate) fn induct_type_not_prop(&self, t: ExprId) -> bool {
         let h = expr::app_fn(&self.st, t);
         match self.st.node(h) {
             Expr::Const(i, _) => {

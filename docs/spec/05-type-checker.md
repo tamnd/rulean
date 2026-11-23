@@ -51,6 +51,12 @@ Rules:
 - Arena "either" tests are pinned per profile: the expected verdict is the verdict of the official kernel of that profile (11.3).
 - A flag is never removed. Old profiles stay supported for 12 months after the release that replaced them.
 
+Notes on the `v4.37` flags:
+
+- lean4#15372 made unit-like eta wider. It was merged on 2026-10-20 and reverted by lean4#16443 on 2026-11-17, before v4.37.0-rc1. So the `v4.37` profile has no flag for it, and unit-like eta is the same as in `v4.35`.
+- `count_64` and `inductive_loose_bvar_check` do not change the checker. rulean rejects a count at or above 2^32 (06.2) and a loose bound variable in an inductive type or a constructor type in each profile.
+- Engine F evaluates each argument, so it cannot keep a major premise that is a proof out of `whnf` (`no_whnf_prop_major`). If the type of the major premise can be in `Prop` and K did not give a constructor, engine F records the fault `FDefer`, and engine R decides the query. Engine F removes this fault, so it is never a verdict.
+
 ## 05.3 Judgments
 
 rulean implements these judgments. Γ is a local context of free variables (04.4). E is the environment cut of the declaration (08.3).

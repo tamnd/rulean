@@ -7,6 +7,12 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 ### Added
 
 - The release workflow builds each target on two runners. The second runner uses a checkout at a different path. The job `verify` compares the SHA-256 hashes of the two binaries, and the release is not published if they are different (spec 12.6). The compiler replaces the checkout path and the Cargo home with fixed names, and on Windows the linker writes no time stamp and no full PDB path. A pull request that changes the build runs the two builds and the comparison, but makes no release.
+- The semantics profile `v4.37` for Lean v4.37.0-rc1 and the later 4.37 releases (spec 05.2). It has the rules of lean4#15103 (proof irrelevance before `whnf_core`), lean4#15371 (no `whnf` of a major premise that is a proof, and structure eta of the major premise when the recursor can eliminate into `Type`) and lean4#15373 (eta of a partial constructor application). The flags of lean4#16279 and lean4#16512 do not change rulean, because rulean rejects these inputs in each profile. lean4#15372 was reverted before v4.37.0-rc1, so unit-like eta does not change. `rulean --version` lists `v4.35, v4.37`. On the 30 Arena "either" tests, the `v4.37` profile accepts `eta-ctor`, `eta-struct-major-and` and the two `no-whnf` tests, and rejects `subject-reduction-redex`, with engine R and with engine F. The `v4.35` verdicts do not change.
+- The new fault `FDefer` of engine F. Under `v4.37`, engine F gives a recursor step with a major premise that can be a proof to engine R. Engine F removes the fault, so it is never a verdict.
+
+### Changed
+
+- The CI job `olean-xval` now fully checks Init and Std of v4.37.0-rc1 with the `v4.37` profile, and does not set `NO_PROFILE` for this release.
 
 ## [0.0.11] - 2026-11-24
 

@@ -173,7 +173,7 @@ mod tests {
     fn version_names_the_package_version() {
         let t = version_text();
         assert!(t.starts_with(&format!("rulean {}", env!("CARGO_PKG_VERSION"))));
-        assert!(t.contains("profiles: v4.35"));
+        assert!(t.contains("profiles: v4.35, v4.37"));
         assert!(t.contains(&format!("handles: {}-bit", rulean_store::Raw::BITS)));
     }
 }

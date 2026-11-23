@@ -250,7 +250,9 @@ impl Checker {
         };
         let mut s_args: Vec<ExprId> = Vec::new();
         expr::app_args(&self.st, s, &mut s_args);
-        if s_args.len() != (nparams + nfields) as usize {
+        let nargs = (nparams + nfields) as usize;
+        // With `eta_partial_ctor` (lean4#15373), a constructor application with too few arguments is also allowed.
+        if s_args.len() > nargs || (s_args.len() < nargs && !self.flags.eta_partial_ctor) {
             return false;
         }
         if !self.is_non_rec_structure(induct, s) {
@@ -259,6 +261,23 @@ impl Checker {
         let tt = self.infer(t);
         let st = self.infer(s);
         if self.bad() || !self.is_def_eq(tt, st) {
+            return false;
+        }
+        // The type of a partial constructor application is the rest of the constructor type, so it is a pi type with no `whnf`. Each binder gets a free variable, and both sides are applied to it.
+        let mut t = t;
+        let mut s_type = st;
+        let mut more = true;
+        while more && s_args.len() < nargs && !self.bad() {
+            if let Expr::Pi(b) = self.st.node(s_type) {
+                let x = self.mk_local(b.name, b.info, b.dom, None);
+                t = self.st.mk_app(t, x);
+                s_args.push(x);
+                s_type = self.instantiate1(b.body, x);
+            } else {
+                more = false;
+            }
+        }
+        if s_args.len() != nargs || self.bad() {
             return false;
         }
         let mut ok = true;
@@ -307,6 +326,16 @@ impl Checker {
             return LBool::Undef;
         }
         to_lbool(self.is_def_eq(t_type, s_type))
+    }
+
+    /// The proof irrelevance step of `is_def_eq_core`, with the trace note of an equal answer.
+    fn proof_irrel_step(&mut self, t: ExprId, s: ExprId) -> LBool {
+        let r = self.is_def_eq_proof_irrel(t, s);
+        if r == LBool::True {
+            let anon = self.st.anon();
+            self.note(Rule::ProofIrrel, anon);
+        }
+        r
     }
 
     // Lazy delta reduction.
@@ -627,6 +656,13 @@ impl Checker {
                 return true;
             }
         }
+        // With `proof_irrel_first` (lean4#15103), proof irrelevance comes before `whnf_core`, so a proof is not reduced.
+        if self.flags.proof_irrel_first {
+            let r = self.proof_irrel_step(t, s);
+            if r != LBool::Undef {
+                return r == LBool::True;
+            }
+        }
         let t_n = self.whnf_core(t, false, true);
         let s_n = self.whnf_core(s, false, true);
         if self.bad() {
@@ -638,13 +674,11 @@ impl Checker {
                 return r == LBool::True;
             }
         }
-        let r = self.is_def_eq_proof_irrel(t_n, s_n);
-        if r == LBool::True {
-            let anon = self.st.anon();
-            self.note(Rule::ProofIrrel, anon);
-        }
-        if r != LBool::Undef {
-            return r == LBool::True;
+        if !self.flags.proof_irrel_first {
+            let r = self.proof_irrel_step(t_n, s_n);
+            if r != LBool::Undef {
+                return r == LBool::True;
+            }
         }
         let (r, t_n, s_n) = self.lazy_delta_reduction(t_n, s_n);
         if r != LBool::Undef {

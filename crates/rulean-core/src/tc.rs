@@ -70,6 +70,8 @@ pub enum ErrorKind {
     ArenaFull,
     /// The checker uses more memory than `--max-memory` allows (spec 12.3). This is a resource failure and not a verdict.
     MemoryLimit,
+    /// Engine F cannot follow a rule of the profile on this query, so engine R must decide it. Engine F removes this fault, so it is never a verdict.
+    FDefer,
     /// A constant of the environment does not have the expected kind. The official kernel fails with an assertion here.
     BadConst,
     /// `already_declared_exception`.

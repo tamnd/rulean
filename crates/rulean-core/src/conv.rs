@@ -457,13 +457,13 @@ impl Checker {
                         y = self.conv_delta(y);
                     } else {
                         let regular = matches!(h1, Hints::Regular(_));
-                        if c1 == c2 && self.same_value(x, y) {
-                            r = LBool::True;
-                            done = true;
-                        } else if regular
-                            && c1 == c2
-                            && self.is_def_eq_levels(us1, us2)
-                            && self.conv_spines(sp1, sp2)
+                        // Two sides of the same form are equal (row O7). Else, for a regular definition, the arguments are compared before the unfolding.
+                        let same = c1 == c2 && self.same_value(x, y);
+                        if same
+                            || (regular
+                                && c1 == c2
+                                && self.is_def_eq_levels(us1, us2)
+                                && self.conv_spines(sp1, sp2))
                         {
                             r = LBool::True;
                             done = true;

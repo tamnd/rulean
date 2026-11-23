@@ -306,6 +306,9 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo xtask all
+      # fuzz/ is a separate workspace with its own lock file. A version bump must also update it, or the weekly fuzz run fails.
+      - name: the lock file of fuzz/ is up to date
+        run: cargo metadata --manifest-path fuzz/Cargo.toml --locked --format-version 1 >/dev/null
 
   # Charon and Aeneas translate the verified core to Lean (spec 10.3). The tools come from flake.nix. hacl.cachix.org is the binary cache of Aeneas, but it does not have all of the paths of our Aeneas commit. So the job also keeps the full Nix store in one Actions cache entry, keyed by flake.lock. Only runs on main save the entry, and other branches restore it.
   extract:

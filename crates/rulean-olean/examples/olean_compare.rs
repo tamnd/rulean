@@ -1,4 +1,4 @@
-//! Compares the declarations that the olean reader gives with the declarations of an NDJSON export of the same modules. Usage: `olean_compare EXPORT DIR MODULE...`.
+//! Compares the declarations that the olean reader gives with the declarations of an NDJSON export of the same modules. Usage: `olean_compare EXPORT DIRS MODULE...`. `DIRS` is the search path of the oleans, with `:` between the directories, as in `LEAN_PATH`. The example reads the export one line at a time, so a large export, for example Mathlib, is not in memory as a whole.
 //!
 //! The two readers write into one store, so two equal terms have the same handle. lean4export shares terms that are equal up to the names and the kinds of the binders, as `BEq Expr` of Lean does, so the export can give a binder the name of another term. The comparison is thus up to binder names and binder kinds, which the kernel does not use.
 
@@ -111,16 +111,41 @@ impl Canon {
     }
 }
 
+/// Parses the export at `path` one line at a time.
+fn read_export(st: &mut Store, path: &str) -> rulean_format::Export {
+    use std::io::BufRead;
+    let f = std::fs::File::open(path).expect("open the export");
+    let mut input = std::io::BufReader::with_capacity(1 << 20, f);
+    let mut s = rulean_format::Stream::new();
+    let mut line = Vec::new();
+    let mut tail = false;
+    loop {
+        line.clear();
+        if input.read_until(b'\n', &mut line).expect("read the export") == 0 {
+            break;
+        }
+        if line.last() == Some(&b'\n') {
+            s.line(st, &line[..line.len() - 1]);
+        } else {
+            tail = true;
+        }
+    }
+    s.end(tail).expect("parse the export")
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.len() < 3 {
-        eprintln!("usage: olean_compare EXPORT DIR MODULE...");
+        eprintln!("usage: olean_compare EXPORT DIRS MODULE...");
         std::process::exit(64);
     }
     let mut st = Store::new();
-    let bytes = std::fs::read(&args[0]).expect("read the export");
-    let export = rulean_format::ndjson::parse_export(&mut st, &bytes).expect("parse the export");
-    let search = vec![std::path::PathBuf::from(&args[1])];
+    let export = read_export(&mut st, &args[0]);
+    let search: Vec<std::path::PathBuf> = args[1]
+        .split(':')
+        .filter(|d| !d.is_empty())
+        .map(std::path::PathBuf::from)
+        .collect();
     let loaded = match rulean_olean::load(&mut st, &args[2..], &search) {
         Ok(l) => l,
         Err(e) => {

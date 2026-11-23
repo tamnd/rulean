@@ -7,6 +7,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 ### Added
 
 - The work gate of the quick suite (spec 08.7.4). The JSON report has two new counts in `summary`: `steps`, the calls of `enter` of the type checker, and `interns`, the calls of `intern_expr` of the store. A sequential run gives the same counts on each machine. `rulean-bench work` compares the counts of reports with the baseline file `docs/bench/work.json` and fails on a change above 1% in either direction. `scripts/work-gate.sh` runs the gate on Init and Std of a Lean release, and the CI job `lake comparator` runs the script.
+- The weekly workflow `corpus` runs rulean on the Mathlib test of the Lean Kernel Arena (spec 11.2). It makes the export again from mathlib4 at the commit of the Arena test, runs `rulean check` on the export and `rulean olean` on the oleans from `lake exe cache get`, and cross-validates the `.olean` reader with lean4export on Mathlib (spec 07.3.6). `scripts/mathlib-corpus.sh` has the steps of the job, and the job records the time and the peak memory of each step.
 
 ### Changed
 

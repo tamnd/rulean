@@ -1,0 +1,98 @@
+name: corpus
+
+# The weekly Mathlib corpus run of spec 11.2: rulean on the Mathlib test of the Lean Kernel Arena, from the export and from the oleans, and the cross-validation of the .olean reader with lean4export (spec 07.3.6). The Arena export is too large to keep, so the job makes it again from mathlib4 at the commit of the Arena test. A step that fails does not stop the next steps, so one run gives as much data as possible.
+on:
+  schedule:
+    - cron: "17 4 * * 0"
+  workflow_dispatch:
+    inputs:
+      threads:
+        description: The number of threads of rulean check and rulean olean
+        default: "1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: corpus-${{ github.ref }}
+  cancel-in-progress: false
+
+# With shell: bash, a step also fails when a command before a pipe fails.
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  LEAN: 4.36.0
+  LEAN_SHA256: 2b7ab1ed8b92d2e6abfaf41344823b510064dbc9c0260cac73eb496ab2dea6eb
+  THREADS: ${{ inputs.threads || '1' }}
+  WORK: /mnt/corpus
+
+jobs:
+  mathlib:
+    name: rulean on Mathlib
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - name: free disk space
+        run: |
+          df -h / /mnt
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          sudo mkdir -p "$WORK"
+          sudo chown "$USER" "$WORK"
+          df -h / /mnt
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: false
+      - run: cargo build --locked --release --bin rulean
+      - run: cargo build --locked --release -p rulean-olean --example olean_compare
+      - name: the Lean release
+        run: |
+          mkdir -p _tmp/lean
+          curl -sSfL --retry 3 -o "_tmp/lean/lean.tar.zst" "https://github.com/leanprover/lean4/releases/download/v$LEAN/lean-$LEAN-linux.tar.zst"
+          echo "$LEAN_SHA256  _tmp/lean/lean.tar.zst" | sha256sum -c -
+          tar --zstd -xf "_tmp/lean/lean.tar.zst" -C _tmp/lean
+          rm "_tmp/lean/lean.tar.zst"
+          echo "$PWD/_tmp/lean/lean-$LEAN-linux/bin" >> "$GITHUB_PATH"
+      - id: fetch
+        name: mathlib4 and its oleans
+        run: scripts/mathlib-corpus.sh fetch "$WORK"
+      - id: export
+        if: ${{ !cancelled() && steps.fetch.outcome == 'success' }}
+        name: leanexport Mathlib
+        run: scripts/mathlib-corpus.sh export "$WORK"
+      - if: ${{ !cancelled() && steps.export.outcome == 'success' }}
+        name: rulean check on the export
+        run: scripts/mathlib-corpus.sh check "$WORK"
+      - if: ${{ !cancelled() && steps.fetch.outcome == 'success' }}
+        name: rulean olean on the oleans
+        run: scripts/mathlib-corpus.sh olean "$WORK"
+      - if: ${{ !cancelled() && steps.export.outcome == 'success' }}
+        name: the .olean reader and lean4export on Mathlib
+        run: scripts/mathlib-corpus.sh compare "$WORK"
+      - if: ${{ !cancelled() }}
+        name: summary
+        run: |
+          {
+            echo "## rulean on Mathlib, $THREADS threads"
+            for s in check olean compare; do
+              if [ -f "$WORK/out/$s.time" ]; then
+                echo "- $s: $(grep -E 'Elapsed|Maximum resident' "$WORK/out/$s.time" | sed 's/^[[:space:]]*//' | paste -sd ',' -)"
+              fi
+            done
+            if [ -f "$WORK/out/compare.txt" ]; then
+              echo "- $(tail -n 1 "$WORK/out/compare.txt")"
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"
+          df -h / /mnt
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: corpus
+          path: /mnt/corpus/out
+          if-no-files-found: ignore

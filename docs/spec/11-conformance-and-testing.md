@@ -22,7 +22,7 @@ The corpus is the working meaning of "every Lean program" (02.2). It grows and n
 |---|---|---|---|
 | Lean core: Init, Std, Lean, Lake | Init 332 MB, Std 557 MB exports | Lean release | every pull request (Init, Std); nightly (all) |
 | Batteries | | leanprover-community | nightly |
-| Mathlib | 5.9 GB export, 112.1 M lines | Arena, Lean 4.36.0 | nightly |
+| Mathlib | 5.9 GB export, 112.1 M lines | Arena, Lean 4.36.0 | weekly (`corpus`) |
 | CSLib | 2.3 GB export | Arena | nightly |
 | Cedar | 863 MB export, uses `native_decide` | Arena | nightly |
 | Navier-Stokes (OpenAI) | 1.5 GB export | Arena | nightly |
@@ -37,6 +37,8 @@ The corpus is the working meaning of "every Lean program" (02.2). It grows and n
 | rulean regressions and fuzz finds | grows | `tests/` | every pull request |
 
 **Pass rule.** For each entry and each profile, the verdict of every declaration equals the verdict of the official kernel of that profile, except for rows of the deviation register (05.12). A release needs a 100% pass on every entry.
+
+**Mathlib run.** The weekly workflow `corpus` makes the Mathlib export again from mathlib4 at the commit of the Arena test, because the 5.9 GB export is too large for a cache entry. It runs `scripts/mathlib-corpus.sh`, which has five steps: fetch, export, check, olean and compare. It compares the SHA-256 digest of the new export with the digest of the Arena export, and it records a difference but does not fail. The job records the time and the peak memory of each step. A GitHub-hosted runner has 16 GB of memory, and each worker has its own copy of the store, so the default is one thread. On the Init export of v4.36.0 (348 MB), `rulean check` has a peak memory of 485 MB with one thread and 1.97 GB with four threads.
 
 ## 11.3 Differential testing
 

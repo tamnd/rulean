@@ -727,17 +727,19 @@ fn digit(c: u8) -> Option<u8> {
 /// Parses the export that `input` gives, one line at a time, and computes the SHA-256 digest of all of the input. After a parse error, the function reads the rest of the input for the digest only.
 ///
 /// An input that starts with the magic of the binary format (spec 07.2) is read as a whole and decoded. Then the format version of the result is `rlb-1`, and the line of an error is 0.
+///
+/// A line that is fully in the buffer of `input` goes to the parser from that buffer, with no copy. Only a line that continues after the end of the buffer is copied into a line buffer, and the memory budget applies to that buffer.
 pub(crate) fn read_export<R: BufRead>(
     store: &mut Store,
-    mut input: R,
+    input: R,
 ) -> std::io::Result<(
     Result<rulean_format::Export, rulean_format::Error>,
     [u8; 32],
 )> {
-    let mut hasher = Sha256::new();
-    if rlb::is_binary(input.fill_buf()?) {
+    let mut rd = Hashed::new(input);
+    if rlb::is_binary(rd.fill()?) {
         let mut b = Vec::new();
-        let parsed = match next_chunk(&mut input, &mut hasher, &mut b, store, 0, false)? {
+        let parsed = match next_chunk(&mut rd, &mut b, store, 0, false)? {
             Chunk::Over => Err(rulean_format::Error {
                 line: 0,
                 kind: ErrorKind::StoreFull,
@@ -748,21 +750,88 @@ pub(crate) fn read_export<R: BufRead>(
                 format_version: BINARY_FORMAT.as_bytes().to_vec(),
             }),
         };
-        return Ok((parsed, hasher.finish()));
+        return Ok((parsed, rd.finish()));
     }
     let mut s = Stream::new();
     let mut tail = false;
     let mut line = Vec::new();
     loop {
+        let avail = rd.fill()?;
+        if avail.is_empty() {
+            break;
+        }
+        if let Some(k) = newline(avail) {
+            s.line(store, &avail[..k]);
+            rd.consume(k + 1);
+            continue;
+        }
         line.clear();
-        match next_chunk(&mut input, &mut hasher, &mut line, store, s.bytes(), true)? {
+        match next_chunk(&mut rd, &mut line, store, s.bytes(), true)? {
             Chunk::End => break,
             Chunk::Line => s.line(store, &line[..line.len() - 1]),
             Chunk::Tail => tail = true,
             Chunk::Over => s.full(),
         }
     }
-    Ok((s.end(tail), hasher.finish()))
+    Ok((s.end(tail), rd.finish()))
+}
+
+/// A `BufRead` that puts each byte of the input into a SHA-256 digest once, when the byte first comes into the buffer. So the digest gets large parts of the input, not one line at a time.
+struct Hashed<R> {
+    input: R,
+    hasher: Sha256,
+    /// The number of bytes at the start of the buffer of `input` that are in the digest.
+    seen: usize,
+}
+
+impl<R: BufRead> Hashed<R> {
+    fn new(input: R) -> Hashed<R> {
+        Hashed {
+            input,
+            hasher: Sha256::new(),
+            seen: 0,
+        }
+    }
+
+    /// The bytes in the buffer of `input`. The new bytes go into the digest.
+    fn fill(&mut self) -> std::io::Result<&[u8]> {
+        let avail = self.input.fill_buf()?;
+        if avail.len() > self.seen {
+            self.hasher.update(&avail[self.seen..]);
+            self.seen = avail.len();
+        }
+        Ok(avail)
+    }
+
+    /// Removes `n` bytes from the start of the buffer. The bytes must come from the last `fill`.
+    fn consume(&mut self, n: usize) {
+        self.input.consume(n);
+        self.seen -= n;
+    }
+
+    /// The digest of the input.
+    fn finish(&self) -> [u8; 32] {
+        self.hasher.finish()
+    }
+}
+
+/// The position of the first newline in `b`. The search reads 8 bytes at a time.
+fn newline(b: &[u8]) -> Option<usize> {
+    const ONES: u64 = 0x0101_0101_0101_0101;
+    const HIGH: u64 = 0x8080_8080_8080_8080;
+    const NL: u64 = ONES * b'\n' as u64;
+    let (words, rest) = b.as_chunks::<8>();
+    for (i, w) in words.iter().enumerate() {
+        let x = u64::from_le_bytes(*w) ^ NL;
+        // A byte of `x` is zero exactly where `w` has a newline, and the lowest zero byte sets the lowest bit of this mask.
+        let m = x.wrapping_sub(ONES) & !x & HIGH;
+        if m != 0 {
+            return Some(8 * i + (m.trailing_zeros() / 8) as usize);
+        }
+    }
+    rest.iter()
+        .position(|&c| c == b'\n')
+        .map(|k| 8 * words.len() + k)
 }
 
 /// The result of `next_chunk`.
@@ -777,10 +846,9 @@ enum Chunk {
     Over,
 }
 
-/// Reads the next line of `input` into `buf`, or all of the input if `lines` is false. All of the bytes go into `hasher`. Before the buffer grows, the function checks that the buffer and `base` more bytes fit in the memory budget of `store` (spec 05.11.1).
+/// Reads the next line of `input` into `buf`, or all of the input if `lines` is false. Before the buffer grows, the function checks that the buffer and `base` more bytes fit in the memory budget of `store` (spec 05.11.1).
 fn next_chunk<R: BufRead>(
-    input: &mut R,
-    hasher: &mut Sha256,
+    input: &mut Hashed<R>,
     buf: &mut Vec<u8>,
     store: &Store,
     base: usize,
@@ -789,7 +857,7 @@ fn next_chunk<R: BufRead>(
     let mut read = 0;
     let mut over = false;
     loop {
-        let avail = input.fill_buf()?;
+        let avail = input.fill()?;
         if avail.is_empty() {
             return Ok(if over {
                 Chunk::Over
@@ -799,13 +867,8 @@ fn next_chunk<R: BufRead>(
                 Chunk::Tail
             });
         }
-        let nl = if lines {
-            avail.iter().position(|&c| c == b'\n')
-        } else {
-            None
-        };
+        let nl = if lines { newline(avail) } else { None };
         let take = nl.map_or(avail.len(), |k| k + 1);
-        hasher.update(&avail[..take]);
         if !over {
             let need = buf.len() + take;
             if need > buf.capacity() && store.over_budget(base + need.max(buf.capacity() * 2)) {
@@ -827,6 +890,76 @@ fn next_chunk<R: BufRead>(
 mod tests {
     use super::*;
 
+    #[test]
+    fn newline_finds_the_first_newline() {
+        for len in 0..40 {
+            let mut b = vec![b'x'; len];
+            assert_eq!(newline(&b), None, "no newline, length {len}");
+            for at in 0..len {
+                b.fill(b'x');
+                b[at] = b'\n';
+                if at + 3 < len {
+                    b[at + 3] = b'\n';
+                }
+                assert_eq!(newline(&b), Some(at), "length {len}, newline at {at}");
+            }
+        }
+        // Bytes that are near a newline in value are not a newline.
+        assert_eq!(newline(&[0x0b, 0x09, 0x8a, 0xff, 0x0a]), Some(4));
+    }
+
+    /// A reader that gives the input in blocks of 7 bytes, so most lines continue after the end of the buffer.
+    struct Small<'a> {
+        b: &'a [u8],
+        pos: usize,
+        end: usize,
+    }
+
+    impl std::io::Read for Small<'_> {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            let n = out.len().min(self.b.len() - self.pos);
+            out[..n].copy_from_slice(&self.b[self.pos..self.pos + n]);
+            self.pos += n;
+            Ok(n)
+        }
+    }
+
+    impl BufRead for Small<'_> {
+        fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+            if self.end == self.pos {
+                self.end = (self.pos + 7).min(self.b.len());
+            }
+            Ok(&self.b[self.pos..self.end])
+        }
+
+        fn consume(&mut self, n: usize) {
+            self.pos += n;
+        }
+    }
+
+    #[test]
+    fn a_small_buffer_gives_the_same_result() {
+        let input = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/data/axiom.ndjson"
+        ))
+        .expect("the test export");
+        let mut store = Store::new();
+        let (big, d1) = read_export(&mut store, &input[..]).expect("read");
+        let mut store = Store::new();
+        let small = Small {
+            b: &input,
+            pos: 0,
+            end: 0,
+        };
+        let (small, d2) = read_export(&mut store, small).expect("read");
+        assert_eq!(d1, d2);
+        assert_eq!(d1, rulean_io::sha::sha256(&input));
+        let (big, small) = (big.expect("parse"), small.expect("parse"));
+        assert_eq!(big.decls.len(), small.decls.len());
+        assert_eq!(big.lean_version, small.lean_version);
+    }
+
     /// Reads `input` with a store budget of `extra` bytes above the empty store.
     fn read_in_budget(
         input: &[u8],
@@ -837,7 +970,9 @@ mod tests {
     ) {
         let mut store = Store::new();
         store.set_max_bytes(store.memory().total() + extra);
-        read_export(&mut store, input).expect("read")
+        // The buffer of the CLI reader has `READ_BYTES`. A line that is longer than the buffer goes into the line buffer, and the budget applies to it.
+        let r = std::io::BufReader::with_capacity(rulean_io::READ_BYTES, input);
+        read_export(&mut store, r).expect("read")
     }
 
     #[test]

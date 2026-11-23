@@ -8,6 +8,10 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 - The manual workflow `profile` can profile one Arena test, for example `perf/magma-list-deep-n21`, with engine R or engine F (spec 08.7.3). `scripts/profile.sh` takes the name of the test and the directory of `scripts/arena-fetch.sh` in `ARENA_DIR`, and `ENGINE` selects the engine.
 
+### Fixed
+
+- Engine F lost the rules of a step that a cache saved, so an answer could be outside the confirm set of spec 05.1 when it must be in it. The slot of a glued value and the cache of `force` live across the queries of a declaration. A slot hit did not record a delta step, and a hit in the cache of `force` did not record a type-directed rule of the saved steps. Now a slot hit sets `F_DELTA`, and the cache of `force` keeps the rules of its steps and sets them again on a hit. Two new tests in `crates/rulean-core/tests/inductive.rs` check a declaration where each case occurs, and engine F accepted the value of each with no confirm before the fix. On the Arena tests, the verdicts and the counts of the report do not change, and the perf tests use 156.4 G instructions with engine F, against 158.7 G before.
+
 ## [0.0.9] - 2026-11-23
 
 ### Added

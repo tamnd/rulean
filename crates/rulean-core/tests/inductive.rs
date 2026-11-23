@@ -1,7 +1,8 @@
 //! Tests of the inductive checks of engine R. The expected verdicts follow `inductive.cpp` of the official kernel v4.35.0.
 
+use rulean_core::conv::Engine;
 use rulean_core::tc::{Checker, ErrorKind};
-use rulean_format::{Ctor, Decl, Induct, InductType, Rec, RecRule, Safety};
+use rulean_format::{Axiom, Ctor, Decl, Defn, Hints, Induct, InductType, Rec, RecRule, Safety};
 use rulean_store::{BinderInfo, ExprId, NameId, Store};
 
 struct T {
@@ -485,4 +486,124 @@ fn nested_parameter_with_a_local_is_rejected() {
         t.add(vec![ity], vec![c], Vec::new()),
         Some(ErrorKind::BadNested)
     );
+}
+
+/// Adds the declaration `name : ty` with the value `value`, or an axiom if `value` is `None`.
+fn add_const(t: &mut T, name: &str, ty: ExprId, value: Option<ExprId>) {
+    let name = t.name(name);
+    let d = match value {
+        Some(value) => Decl::Defn(Defn {
+            name,
+            lparams: Vec::new(),
+            ty,
+            value,
+            hints: Hints::Regular(1),
+            safety: Safety::Safe,
+            all: vec![name],
+        }),
+        None => Decl::Axiom(Axiom {
+            name,
+            lparams: Vec::new(),
+            ty,
+            safety: Safety::Safe,
+        }),
+    };
+    assert_eq!(t.c.add_decl(&d).map(|f| f.kind), None);
+}
+
+/// The constants of the confirm-set tests: `Bx`, `A : Type`, `F : A -> Type` and `I : A -> A := fun y => y`, with engine F.
+fn confirm_env() -> T {
+    let mut t = T::new();
+    add_box(&mut t);
+    t.c.engine = Engine::F;
+    let ty = t.sort(1);
+    add_const(&mut t, "A", ty, None);
+    let a = t.k("A");
+    let fty = t.pi("y", a, ty);
+    add_const(&mut t, "F", fty, None);
+    let aa = t.pi("y", a, a);
+    let v0 = t.bv(0);
+    let idf = t.lam("y", a, v0);
+    add_const(&mut t, "I", aa, Some(idf));
+    t
+}
+
+/// `F (Bx.rec.{1} A (fun _ => A) (fun y => y) x)`, where `x` is the bound variable `x`. Structure eta on `x` reduces the recursor to `x.0`.
+fn f_rec(t: &mut T, x: u32) -> ExprId {
+    let (a, f) = (t.k("A"), t.k("F"));
+    let bx = t.k("Bx");
+    let bx_a = t.app(bx, &[a]);
+    let one = t.c.st.level_zero();
+    let one = t.c.st.level_succ(one);
+    let n = t.name("Bx.rec");
+    let ls = t.c.st.level_list(&[one]);
+    let rec = t.c.st.mk_const(n, ls);
+    let motive = t.lam("t", bx_a, a);
+    let v0 = t.bv(0);
+    let idf = t.lam("y", a, v0);
+    let vx = t.bv(x);
+    let r = t.app(rec, &[a, motive, idf, vx]);
+    t.app(f, &[r])
+}
+
+/// `F x.0`, or `F (I x.0)` if `delta` is true.
+fn f_proj(t: &mut T, x: u32, delta: bool) -> ExprId {
+    let n = t.name("Bx");
+    let vx = t.bv(x);
+    let mut p = t.c.st.mk_proj(n, 0, vx);
+    if delta {
+        let i = t.k("I");
+        p = t.app(i, &[p]);
+    }
+    let f = t.k("F");
+    t.app(f, &[p])
+}
+
+/// Adds `d : (x : Bx A) -> (h : H) -> (k1 : K1 -> A) -> (k2 : K2 -> A) -> A := fun x h k1 k2 => let b : A := k1 h; k2 h`. `H` is in the context [x], `K1` in [x, h] and `K2` in [x, h, k1]. The check of `k1 h` is the first query, and the check of `k2 h` is the second query, and both use the value of `H`. The result is the number of the checks of `d` that engine F accepts.
+fn add_d(t: &mut T, h_ty: ExprId, k1_dom: ExprId, k2_dom: ExprId) -> u64 {
+    let a = t.k("A");
+    let bx = t.k("Bx");
+    let bx_a = t.app(bx, &[a]);
+    let k1_ty = t.pi("z", k1_dom, a);
+    let k2_ty = t.pi("z", k2_dom, a);
+    let (v1, v2, v3) = (t.bv(1), t.bv(2), t.bv(3));
+    let k1h = t.app(v1, &[v2]);
+    let k2h = t.app(v1, &[v3]);
+    let bn = t.name("b");
+    let body = t.c.st.mk_let(bn, a, k1h, k2h);
+    let value = t.lam("k2", k2_ty, body);
+    let value = t.lam("k1", k1_ty, value);
+    let value = t.lam("h", h_ty, value);
+    let value = t.lam("x", bx_a, value);
+    let dty = t.pi("k2", k2_ty, a);
+    let dty = t.pi("k1", k1_ty, dty);
+    let dty = t.pi("h", h_ty, dty);
+    let dty = t.pi("x", bx_a, dty);
+    let before = t.c.f_stats;
+    add_const(t, "d", dty, Some(value));
+    let s = t.c.f_stats;
+    assert_eq!(s.infer - before.infer, 2);
+    s.infer_ok - before.infer_ok
+}
+
+// The confirm set of spec 05.1: engine R confirms an answer of engine F that uses a delta step and a type-directed rule. In the two tests below, one of the two rules is in the first query, and the second query gets its result from a cache. Engine F accepts the type of `d`, and the check of the value is in the confirm set, so engine F stops and engine R checks the declaration.
+
+#[test]
+fn a_force_cache_hit_keeps_the_rules_of_its_steps() {
+    // The first query uses structure eta on the recursor in `H` and puts the result into the cache of `force`. The second query has a hit in that cache and unfolds `I`.
+    let mut t = confirm_env();
+    let h = f_rec(&mut t, 0);
+    let k1 = f_proj(&mut t, 1, false);
+    let k2 = f_proj(&mut t, 2, true);
+    assert_eq!(add_d(&mut t, h, k1, k2), 1);
+}
+
+#[test]
+fn a_slot_hit_is_a_delta_step() {
+    // The first query unfolds `I` in `H` and puts the unfolding into the slot. The second query uses the slot and structure eta on the recursor in `K2`.
+    let mut t = confirm_env();
+    let h = f_proj(&mut t, 0, true);
+    let k1 = f_proj(&mut t, 1, false);
+    let k2 = f_rec(&mut t, 2);
+    assert_eq!(add_d(&mut t, h, k1, k2), 1);
 }

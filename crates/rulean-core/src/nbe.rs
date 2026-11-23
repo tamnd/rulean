@@ -159,6 +159,8 @@ impl Checker {
     }
 
     /// The unfolding of a glued value. It is computed once and kept in the slot of the value.
+    ///
+    /// A slot lives until the arena is cleared, so a later query can use an unfolding that an earlier query computed. The unfolding is a delta step of the later query too, so a slot hit also sets `F_DELTA`. Without this, the later query can use a delta step and a type-directed rule, and engine R does not confirm it (the confirm set of spec 05.1).
     pub(crate) fn unfold_glued(
         &mut self,
         c: NameId,
@@ -167,7 +169,10 @@ impl Checker {
         s: SlotId,
     ) -> ValueId {
         match self.va.slot_get(s) {
-            Some(u) => u,
+            Some(u) => {
+                self.f_bits |= F_DELTA;
+                u
+            }
             None => {
                 let e = self.st.mk_const(c, us);
                 let body = match self.unfold_definition_core(e) {
@@ -191,13 +196,18 @@ impl Checker {
     /// `force(v)`: reduces `v` until its head is not a redex: delta on glued heads, iota on recursors, the quotient rules and the `Nat` extension (spec 05.4.2). The result is in weak head normal form.
     ///
     /// The result goes into the cache `c_force`. A neutral application of a recursor has no slot, and without the cache each `force` of the same value does the iota steps again. For example, `N.add (ldepth2 l) 1` with `N.add` by recursion on its first argument forces the value below it once for each level above it, and the time is quadratic in the depth.
+    ///
+    /// The bits of `f_bits` that the steps set go into `c_force` at key (value, 2). A cache hit sets these bits again, because the cache lives across the queries of a declaration, and the query that has the hit depends on the same steps.
     pub fn force(&mut self, v0: ValueId) -> ValueId {
         let cached = self.force_cached(v0);
         if cached {
             if let Some(w) = self.c_force.get(raw(v0.0), 0) {
+                self.force_bits(v0, 2);
                 return ValueId(low(w));
             }
         }
+        let saved = self.f_bits;
+        self.f_bits = 0;
         let mut v = v0;
         let mut done = false;
         while !done && !self.bad() {
@@ -206,10 +216,20 @@ impl Checker {
                 None => done = true,
             }
         }
+        let got = self.f_bits;
+        self.f_bits = saved | got;
         if cached && !self.bad() {
             self.c_force.put(raw(v0.0), 0, raw(v.0));
+            self.c_force.put(raw(v0.0), 2, raw(got));
         }
         v
+    }
+
+    /// Sets the bits of `f_bits` that `c_force` keeps for `v` at key (v, `k`).
+    fn force_bits(&mut self, v: ValueId, k: u32) {
+        if let Some(b) = self.c_force.get(raw(v.0), raw(k)) {
+            self.f_bits |= low(b);
+        }
     }
 
     /// True if `force` and `force_core` keep the result of `v` in `c_force`: a glued value or a neutral application of a constant. The other values are already in weak head normal form.
@@ -220,14 +240,17 @@ impl Checker {
         )
     }
 
-    /// `force` without delta: iota, the quotient rules and the `Nat` extension on heads that do not unfold (`whnf_core` of engine R). Engine F uses it in `conv`, so that lazy delta can compare two folded definitions before it unfolds them.
+    /// `force` without delta: iota, the quotient rules and the `Nat` extension on heads that do not unfold (`whnf_core` of engine R). Engine F uses it in `conv`, so that lazy delta can compare two folded definitions before it unfolds them. As in `force`, the bits of the steps go into `c_force`, here at key (value, 3).
     pub(crate) fn force_core(&mut self, v0: ValueId) -> ValueId {
         let cached = matches!(self.va.get(v0), Value::Neu(Head::Const(..), _));
         if cached {
             if let Some(w) = self.c_force.get(raw(v0.0), 1) {
+                self.force_bits(v0, 3);
                 return ValueId(low(w));
             }
         }
+        let saved = self.f_bits;
+        self.f_bits = 0;
         let mut v = v0;
         let mut done = false;
         while !done && !self.bad() {
@@ -247,8 +270,11 @@ impl Checker {
                 None => done = true,
             }
         }
+        let got = self.f_bits;
+        self.f_bits = saved | got;
         if cached && !self.bad() {
             self.c_force.put(raw(v0.0), 1, raw(v.0));
+            self.c_force.put(raw(v0.0), 3, raw(got));
         }
         v
     }
@@ -289,7 +315,7 @@ impl Checker {
         }
     }
 
-    /// The content of the slot of a glued value, or else the `Nat` extension on it. The result of the `Nat` extension goes into the slot, so that the next `force` of the same value does not compute it again. Without this, each `force` of `Nat.mod (Nat.mul a b) 3` computes the product again, and on a term with shared subterms the time grows with each level. The slot then holds a literal and not the unfolding of the definition. Both are values of the same term, and the `Nat` extension is tried before delta at each place, so the answer does not change.
+    /// The content of the slot of a glued value, or else the `Nat` extension on it. The result of the `Nat` extension goes into the slot, so that the next `force` of the same value does not compute it again. Without this, each `force` of `Nat.mod (Nat.mul a b) 3` computes the product again, and on a term with shared subterms the time grows with each level. The slot then holds a literal and not the unfolding of the definition. Both are values of the same term, and the `Nat` extension is tried before delta at each place, so the answer does not change. A slot hit sets `F_DELTA`, because the slot can hold an unfolding that an earlier query computed (see `unfold_glued`). If the slot holds a literal, the bit is not necessary, but it only makes engine R confirm more answers.
     pub(crate) fn glued_nat(
         &mut self,
         c: NameId,
@@ -298,6 +324,7 @@ impl Checker {
         s: SlotId,
     ) -> Option<ValueId> {
         if let Some(u) = self.va.slot_get(s) {
+            self.f_bits |= F_DELTA;
             return Some(u);
         }
         let r = self.nat_value(c, us, sp);

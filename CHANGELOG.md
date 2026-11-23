@@ -7,6 +7,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 ### Changed
 
 - A slot of the hash table of the store is one record with the hash, the handle and the epoch, and an entry of a memo map of the checker is one record with the keys and the value (spec 04.2.4). Before, each field was in its own array, so one step of a walk read up to six cache lines. On the Init export of v4.36.0, `rulean check` used 236.3 G instructions and now uses 226.5 G, and the peak memory went from 471 MB to 424 MB. The verdict and the counts of the report do not change.
+- When two modules declare the same constant and neither constant subsumes the other, the error of `rulean olean` now gives the kind of each constant, the module of the first constant and the first reason that the test of the import of Lean fails, for example that the types are not the same. The weekly corpus run found such a clash on Mathlib, and the old text did not give enough data to find the cause.
+- A manual run of the workflow `corpus` can skip the step check with the input `steps` set to `olean` (spec 11.2).
 
 ## [0.0.8] - 2026-11-23
 

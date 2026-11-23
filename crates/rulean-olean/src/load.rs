@@ -138,6 +138,8 @@ struct Loader<'a> {
     hash: Sha256,
     /// The first position of `out.decls` that `load` must sort again after a replacement.
     resort: Option<usize>,
+    /// The position in `out.modules` of the module of each declaration of `out.decls`, for the error text of a clash. A module goes into `out.modules` after its declarations, so the position is the length of `out.modules` when the declaration is added.
+    origin: Vec<usize>,
 }
 
 /// Loads the modules `roots` and their import closure from the directories `search`. The first directory that has the `.olean` file of a module wins.
@@ -210,6 +212,7 @@ impl<'a> Loader<'a> {
             first: true,
             hash: Sha256::new(),
             resort: None,
+            origin: Vec::new(),
         }
     }
 
@@ -223,6 +226,7 @@ impl<'a> Loader<'a> {
                 index.insert(n, self.out.decls.len());
             }
             self.out.decls.push(d);
+            self.origin.push(self.out.modules.len());
             return Ok(());
         };
         let text = String::from_utf8_lossy(&self.st.name_text(n)).into_owned();
@@ -231,15 +235,25 @@ impl<'a> Loader<'a> {
                 self.resort = Some(self.resort.map_or(i, |r| r.min(i)));
             }
             self.out.decls[i] = d;
+            self.origin[i] = self.out.modules.len();
             return Ok(());
         }
         if self.subsumes(&self.out.decls[i], &d, index) {
             return Ok(());
         }
+        let old = &self.out.decls[i];
+        let from = self
+            .out
+            .modules
+            .get(self.origin[i])
+            .map_or(m, |x| x.as_str());
         Err(plain(
             FaultKind::Malformed,
             format!(
-                "the module {m} declares {text} again, and neither constant subsumes the other"
+                "the module {m} declares {text} again, and neither constant subsumes the other: the new constant is {}, the constant from {from} is {}, and {}",
+                kind_text(&d),
+                kind_text(old),
+                clash_reason(&d, old)
             ),
         ))
     }
@@ -559,6 +573,53 @@ fn order(st: &Store, items: Vec<Item>) -> Result<Vec<Decl>, Fault> {
 }
 
 /// The names that a declaration adds.
+/// The kind of a declaration, for an error text.
+fn kind_text(d: &Decl) -> &'static str {
+    match d {
+        Decl::Axiom(x) if x.safety == Safety::Safe => "an axiom",
+        Decl::Axiom(_) => "an unsafe axiom",
+        Decl::Defn(_) => "a definition",
+        Decl::Thm(_) => "a theorem",
+        Decl::Opaque(_) => "an opaque constant",
+        Decl::Quot(_) => "a quotient constant",
+        Decl::Induct(_) => "a member of an inductive block",
+        Decl::Mutual(_) => "a member of a mutual block",
+    }
+}
+
+/// The level parameters and the type of a declaration that is not a block.
+fn header(d: &Decl) -> Option<(&[NameId], ExprId)> {
+    match d {
+        Decl::Axiom(x) => Some((&x.lparams, x.ty)),
+        Decl::Defn(x) => Some((&x.lparams, x.ty)),
+        Decl::Thm(x) => Some((&x.lparams, x.ty)),
+        Decl::Opaque(x) => Some((&x.lparams, x.ty)),
+        _ => None,
+    }
+}
+
+/// The first reason of `subsumes` that two declarations with the same name fail, for an error text.
+fn clash_reason(a: &Decl, b: &Decl) -> &'static str {
+    let (Some((la, ta)), Some((lb, tb))) = (header(a), header(b)) else {
+        return "only a theorem or an axiom can be declared again";
+    };
+    if la != lb {
+        return "the level parameters are not the same";
+    }
+    if ta != tb {
+        return "the types are not the same";
+    }
+    match (a, b) {
+        (Decl::Thm(x), Decl::Thm(y)) if x.all != y.all => "the `all` lists are not the same",
+        (Decl::Thm(_), Decl::Axiom(_)) | (Decl::Axiom(_), Decl::Thm(_)) => {
+            "the `all` list of the theorem is not the name, or the axiom is unsafe"
+        }
+        (Decl::Axiom(x), Decl::Axiom(y)) if x.safety != y.safety => "the safety is not the same",
+        (Decl::Axiom(_), Decl::Axiom(_)) => "the type is not a proposition by `isPropCheap`",
+        _ => "only a theorem or an axiom can be declared again",
+    }
+}
+
 fn members(d: &Decl) -> Vec<NameId> {
     match d {
         Decl::Induct(b) => b
@@ -1117,6 +1178,7 @@ mod tests {
             first: true,
             hash: Sha256::new(),
             resort: None,
+            origin: Vec::new(),
         }
     }
 
@@ -1131,14 +1193,22 @@ mod tests {
         let mut index = BTreeMap::new();
         l.add("A", axiom(q, p), &mut index).expect("q");
         l.add("A", thm(h, tq, ta), &mut index).expect("first");
+        l.out.modules.push("A".into());
         l.add("B", thm(h, tq, tq), &mut index)
             .expect("same statement");
+        l.out.modules.push("B".into());
         assert_eq!(l.out.decls.len(), 2);
         assert_eq!(l.out.decls[1], thm(h, tq, tq));
         let e = l
             .add("E", thm(h, p, tq), &mut index)
             .expect_err("different statement");
         assert_eq!(e.kind, FaultKind::Malformed);
+        // The text gives the module of the copy that won, which is B.
+        assert!(
+            e.msg.ends_with("the new constant is a theorem, the constant from B is a theorem, and the types are not the same"),
+            "{}",
+            e.msg
+        );
         // An axiom with a type `q`, where `q : Prop`, can occur two times, and a theorem replaces it.
         l.add("A", axiom(a, tq), &mut index).expect("axiom");
         l.add("C", axiom(a, tq), &mut index).expect("equal axiom");
@@ -1154,6 +1224,12 @@ mod tests {
             .add("G", axiom(q, p), &mut index)
             .expect_err("axiom of type Prop");
         assert_eq!(e.kind, FaultKind::Malformed);
+        assert!(
+            e.msg
+                .ends_with("and the type is not a proposition by `isPropCheap`"),
+            "{}",
+            e.msg
+        );
     }
 
     #[test]

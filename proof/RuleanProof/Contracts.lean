@@ -1,7 +1,13 @@
 /-!
 # The island contracts
 
-Spec 10.7 gives one contract for each island. Each contract is discharged outside Lean, and the capstone theorem takes it as a hypothesis. This file states the contracts that have an island in the code. The fields `K1` to `K6` of `Interface` in `Statements.lean` are still free propositions. A later PR sets each field to the statement of this file.
+Spec 10.7 gives one contract for each island. Each contract is discharged outside Lean, and the capstone theorem takes it as a hypothesis. This file states the contracts K1 and K2. The fields `K1` to `K6` of `Interface` in `Statements.lean` are still free propositions. A later PR sets each field to the statement of this file.
+
+## K1, the thread pool
+
+The island is the crate `rulean-pool`. Its function `run_all` runs `n` jobs on a set of threads and gives an array with the result of job `k` at position `k`. The contract says that this array is the array of the sequential twin, in which job `k` gives `f k`.
+
+A Verus proof discharges the safety part of K1: if `run_all` returns, its result satisfies `ParallelAll`. The proof is in `proof/verus/pool.rs`. It holds for each value of the shared counter, so it holds for each schedule of the threads. It does not show that `run_all` returns. A test and review cover that part.
 
 ## K2, the file read
 
@@ -11,6 +17,25 @@ Review discharges K2. Two checks at run time support the review. The file is ope
 -/
 
 namespace RuleanProof.Contracts
+
+/-- **Contract K1.** `out` has `n` values, and the value at each job index `i < n` is `f i`, the result of job `i` in the sequential twin. -/
+def ParallelAll {α : Type} (n : Nat) (f : Nat → α) (out : Array α) : Prop :=
+  out.size = n ∧ ∀ (i : Nat) (h : i < out.size), out[i] = f i
+
+/-- The sequential twin satisfies K1: it computes job `i` at position `i`. -/
+theorem parallelAll_ofFn {α : Type} (n : Nat) (f : Nat → α) :
+    ParallelAll n f (Array.ofFn fun (i : Fin n) => f i) := by
+  refine ⟨Array.size_ofFn, ?_⟩
+  intro i h
+  simp
+
+/-- Two arrays that satisfy K1 for the same jobs are equal. So the result does not depend on the thread count or the schedule (theorem T5). -/
+theorem parallelAll_unique {α : Type} {n : Nat} {f : Nat → α} {a b : Array α}
+    (ha : ParallelAll n f a) (hb : ParallelAll n f b) : a = b := by
+  apply Array.ext
+  · rw [ha.1, hb.1]
+  · intro i h1 h2
+    rw [ha.2 i h1, hb.2 i h2]
 
 /-- The file system at one time: the content of each path that is a regular file. A path with no regular file gives `none`. -/
 abbrev FileSystem := String → Option ByteArray

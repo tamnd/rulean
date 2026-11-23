@@ -8,12 +8,16 @@
 //! Standard input and a file that is not a regular file, for example a pipe, cannot be read again. For these inputs `confirm` gives `Confirm::NotAFile`, and only check 1 applies.
 //!
 //! This crate does not map the file into memory. A mapping needs `unsafe` code (spec 12), and the block reader is fast enough for the parser of spec 07.
+//!
+//! The module `sha` computes the digest with the SHA instructions of the CPU if it has them. It is the only module with `unsafe` code.
 
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
-use rulean_core::sha256::Hasher;
+pub mod sha;
+
+use sha::Sha256;
 
 /// The size of a read block.
 pub const READ_BYTES: usize = 1 << 20;
@@ -88,7 +92,7 @@ fn open_file(path: &Path) -> std::io::Result<File> {
 
 /// The SHA-256 digest of all bytes of `r`.
 pub fn digest<R: Read>(mut r: R) -> std::io::Result<[u8; 32]> {
-    let mut h = Hasher::new();
+    let mut h = Sha256::new();
     let mut buf = vec![0u8; READ_BYTES];
     loop {
         let n = r.read(&mut buf)?;

@@ -12,9 +12,9 @@ use rulean_core::conv::Engine;
 use rulean_core::env::ConstKind;
 use rulean_core::profile::{self, Profile};
 use rulean_core::sched;
-use rulean_core::sha256::Hasher;
 use rulean_core::tc::{Checker, ErrorKind as CheckError};
 use rulean_format::{Decl, ErrorKind, Stream, rlb};
+use rulean_io::sha::Sha256;
 use rulean_store::Store;
 
 use crate::exit::Code;
@@ -734,7 +734,7 @@ pub(crate) fn read_export<R: BufRead>(
     Result<rulean_format::Export, rulean_format::Error>,
     [u8; 32],
 )> {
-    let mut hasher = Hasher::new();
+    let mut hasher = Sha256::new();
     if rlb::is_binary(input.fill_buf()?) {
         let mut b = Vec::new();
         let parsed = match next_chunk(&mut input, &mut hasher, &mut b, store, 0, false)? {
@@ -780,7 +780,7 @@ enum Chunk {
 /// Reads the next line of `input` into `buf`, or all of the input if `lines` is false. All of the bytes go into `hasher`. Before the buffer grows, the function checks that the buffer and `base` more bytes fit in the memory budget of `store` (spec 05.11.1).
 fn next_chunk<R: BufRead>(
     input: &mut R,
-    hasher: &mut Hasher,
+    hasher: &mut Sha256,
     buf: &mut Vec<u8>,
     store: &Store,
     base: usize,
@@ -850,7 +850,7 @@ mod tests {
         let e = parsed.expect_err("over the budget");
         assert_eq!((e.line, e.kind), (2, ErrorKind::StoreFull));
         // The digest is of all of the input.
-        let mut h = Hasher::new();
+        let mut h = Sha256::new();
         h.update(&input);
         assert_eq!(digest, h.finish());
     }

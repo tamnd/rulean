@@ -128,7 +128,10 @@ jobs:
       - name: help and version
         run: |
           target/debug/rulean help
+          # The line sha256 shows if the runner has the SHA instructions, so the log shows which code the tests of rulean-io ran.
+          target/debug/rulean version
           target/debug/rulean version | grep -E '^rulean [0-9]+\.[0-9]+\.[0-9]+'
+          target/debug/rulean version | grep -E '^sha256: '
       - name: an unknown command exits with code 64
         run: |
           code=0

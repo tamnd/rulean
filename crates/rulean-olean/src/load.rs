@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use rulean_core::sha256::Hasher;
 use rulean_format::{Decl, Defn, Induct, InductType, Rec, Safety};
+use rulean_io::sha::Sha256;
 use rulean_store::{Expr, ExprId, Level, Name, NameId, Store};
 
 use crate::decode::{Decoder, Item};
@@ -37,7 +37,7 @@ pub struct Loaded {
 
 /// The SHA-256 digest of all the bytes of `files`, in order. A caller reads the files again after the run with this function and compares the result with `Loaded::sha256`.
 pub fn digest(files: &[PathBuf]) -> std::io::Result<[u8; 32]> {
-    let mut h = Hasher::new();
+    let mut h = Sha256::new();
     for f in files {
         h.update(&std::fs::read(f)?);
     }
@@ -135,7 +135,7 @@ struct Loader<'a> {
     mem: Option<BTreeMap<PathBuf, Vec<u8>>>,
     out: Loaded,
     first: bool,
-    hash: Hasher,
+    hash: Sha256,
     /// The first position of `out.decls` that `load` must sort again after a replacement.
     resort: Option<usize>,
 }
@@ -208,7 +208,7 @@ impl<'a> Loader<'a> {
                 sha256: [0; 32],
             },
             first: true,
-            hash: Hasher::new(),
+            hash: Sha256::new(),
             resort: None,
         }
     }
@@ -1098,7 +1098,7 @@ mod tests {
                 sha256: [0; 32],
             },
             first: true,
-            hash: Hasher::new(),
+            hash: Sha256::new(),
             resort: None,
         }
     }

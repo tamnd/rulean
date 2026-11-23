@@ -103,6 +103,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rulean-io"
+version = "0.0.7"
+dependencies = [
+ "rulean-core",
+]
+
+[[package]]
 name = "rulean-nat"
 version = "0.0.7"
 
@@ -112,6 +119,7 @@ version = "0.0.7"
 dependencies = [
  "rulean-core",
  "rulean-format",
+ "rulean-io",
  "rulean-nat",
  "rulean-store",
 ]

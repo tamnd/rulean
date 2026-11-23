@@ -21,6 +21,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `rulean_olean::decode_parts` decodes the three parts of one module from bytes in memory, with the same checks as the load from files. The fuzz target `olean` uses it.
 - The directory `fuzz/` has three `cargo fuzz` targets of spec 11.5.1: `olean` (the parts of one module), `ndjson` (the NDJSON scanner and parser) and `rlb` (the `.rlb` decoder). The binary `seeds` makes the first corpus from the test files. The workflow `fuzz` runs each target for 60 s on a pull request that changes the readers, and for 20 minutes each week.
 - `tests/fuzz.rs` of `rulean-format` decodes each find of the fuzzer in `tests/fuzz/`, and each find must give an error.
+- The JSON report has the field `slowest`, with the 10 slowest declarations of a sequential run and the wall time of each in microseconds. The schema in `docs/report.schema.json` has the field.
 
 ### Fixed
 

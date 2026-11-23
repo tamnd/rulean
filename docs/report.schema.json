@@ -71,6 +71,18 @@
         "evictions": { "type": "integer", "minimum": 0, "description": "The entries that the CLOCK policy removed." },
         "promoted": { "type": "integer", "minimum": 0, "description": "The scratch nodes that were copied into the frozen tier." }
       }
+    },
+    "slowest": {
+      "type": "array",
+      "description": "The slowest declarations of a sequential run, the slowest first, at most 10. The list is empty with `--threads` above 1. The times are wall times, so they change from run to run.",
+      "items": {
+        "type": "object",
+        "required": ["name", "us"],
+        "properties": {
+          "name": { "type": "string", "description": "The name of the declaration." },
+          "us": { "type": "integer", "minimum": 0, "description": "The time of the check of the declaration, in microseconds." }
+        }
+      }
     }
   }
 }

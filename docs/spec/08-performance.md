@@ -143,6 +143,12 @@ State of the harness:
 - `rulean check --profile` writes the counters and the 100 most expensive declarations.
 - Instruction-level profiling uses `perf record` on Linux and Instruments on macOS. The build keeps frame pointers (`-C force-frame-pointers=yes`). They cost about 1% and make every profile usable.
 
+State of the profiling:
+
+- The option `--profile` of `rulean check` selects the semantics profile (05.2), so the counters need another option name. The counters are not written yet.
+- The JSON report has the field `slowest`, with the 10 slowest declarations of a sequential run and the wall time of each (09.4).
+- On the slow `perf/` tests, one to three declarations take nearly all of the time. On `perf/app-lam`, the declaration `dag_app_binder` takes 6.0 s, and the trace has no conversion rule. So the time is in the type inference of engine R, which puts a new local into each lambda body by substitution, as the official kernel does. Engine F does not do type inference yet, so `--engine F` does not change this time.
+
 ## 08.8 Performance rules for contributors
 
 1. No allocation in a hot loop. Use the arenas.

@@ -4,6 +4,11 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- `proof/RuleanProof/Contracts.lean` states the island contracts K3 to K6 of spec 10.7, each with one theorem: `Frozen` for the frozen tier, `ScanAgrees` for the SIMD scanner, `NoWrap` for overflow and `AllOrNothing` for allocation failure.
+- `cargo xtask profile` checks the build profiles of K5 and K6: `panic = "abort"` and `overflow-checks = true` in the release and dev profiles, and no global allocator in `crates/`. `cargo xtask all` runs it, so the CI job `policy` runs it too.
+
 ### Changed
 
 - Engine F compares two values by their form before each step of `conv` and before lazy delta unfolds both sides (row O7 of spec 05.7.3). Engine R gets this for free, because the store shares equal terms, but engine F makes a new value at each evaluation. Before, lazy delta unfolded both sides of two equal applications of an abbreviation. On `Lean.Grind.Linarith.lt_norm`, engine F did 6,022 delta steps against 55 for engine R. The check visits at most 64 nodes. On the Init export of v4.36.0, engine F uses 431 G instructions, against 543 G before. On the 42 Arena perf tests, the verdicts do not change, and engine F uses 1138.5 G instructions, against 1148.7 G before. The new twin lemmas `same_true` and `lazyDelta_same` are in `proof/RuleanProof/Twin/Order.lean`.

@@ -239,10 +239,76 @@ impl Checker {
         } else {
             let ty = self.env.at(slot).ty;
             let t = self.pi_codomain(ty);
-            self.codomain_never_prop(t)
+            self.codomain_never_prop(t) || self.bvar_codomain_never_prop(ty)
         };
         self.c_never_proof.put(raw(c.0), 0, if r { 1 } else { 2 });
         r
+    }
+
+    /// True if the type `ty` of a constant ends in a bound variable `α` of its own Pi binders, maybe applied, and the type of `α` ends in a sort with a level that is never zero. This is the case of a projection function such as `HAdd.hAdd : {α β γ : Type} → [HAdd α β γ] → α → β → γ`. The type of `α` can be `outParam (Type u)` or another application of a definition whose value is `fun x => x`, and then the step uses the argument.
+    fn bvar_codomain_never_prop(&self, ty: ExprId) -> bool {
+        let mut n: u32 = 0;
+        let mut cur = ty;
+        let mut walking = true;
+        while walking {
+            match self.st.node(cur) {
+                Expr::Pi(b) => {
+                    n += 1;
+                    cur = b.body;
+                }
+                _ => walking = false,
+            }
+        }
+        let i = match self.st.node(expr::app_fn(&self.st, cur)) {
+            Expr::BVar(i) => i,
+            _ => return false,
+        };
+        if i >= n {
+            return false;
+        }
+        // The binder of `α` is binder n - 1 - i, counted from 0 at the outside.
+        let mut k = n - 1 - i;
+        let mut d = ty;
+        cur = ty;
+        walking = true;
+        while walking {
+            match self.st.node(cur) {
+                Expr::Pi(b) => {
+                    if k == 0 {
+                        d = b.dom;
+                        walking = false;
+                    } else {
+                        k -= 1;
+                        cur = b.body;
+                    }
+                }
+                _ => walking = false,
+            }
+        }
+        let d = self.strip_identity_def(d);
+        match self.st.node(self.pi_codomain(d)) {
+            Expr::Sort(l) => level::is_not_zero(&self.st, l),
+            _ => false,
+        }
+    }
+
+    /// `t` without an application `f x` of a definition `f` whose value is `fun y => y`, such as `outParam` and `semiOutParam`. Other terms do not change.
+    fn strip_identity_def(&self, t: ExprId) -> ExprId {
+        if let Expr::App(f, x) = self.st.node(t) {
+            if let Expr::Const(c, _) = self.st.node(f) {
+                let slot = self.env.find(c);
+                if slot != 0 {
+                    if let Some(v) = self.env.at(slot).value() {
+                        if let Expr::Lam(b) = self.st.node(v) {
+                            if let Expr::BVar(0) = self.st.node(b.body) {
+                                return x;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        t
     }
 
     /// The term after the Pi binders of `t`, with no reduction.

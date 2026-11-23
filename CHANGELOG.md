@@ -8,6 +8,10 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 - A slot of the hash table of the store is one record with the hash, the handle and the epoch, and an entry of a memo map of the checker is one record with the keys and the value (spec 04.2.4). Before, each field was in its own array, so one step of a walk read up to six cache lines. On the Init export of v4.36.0, `rulean check` used 236.3 G instructions and now uses 226.5 G, and the peak memory went from 471 MB to 424 MB. The verdict and the counts of the report do not change.
 
+### Fixed
+
+- The CI job `arena` failed on each push to `main` from 0.0.8. `scripts/arena-threads.sh` compared the counts `steps` and `interns` of the summary between one thread and four threads, but these counts depend on the job split, because each worker has its own store and caches. The script now does not compare them, and spec 08.3.4 gives the exception. The verdicts did not change.
+
 ## [0.0.8] - 2026-11-23
 
 ### Added

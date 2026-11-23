@@ -3,7 +3,7 @@
 #
 # Usage: scripts/arena-threads.sh TESTS [N] [RULEAN]
 #
-# TESTS is the tests directory of scripts/arena-fetch.sh or the output directory of scripts/arena-build.py. N is the thread count, and the default is 4. RULEAN is the rulean binary, and the default is target/release/rulean. The script compares the exit code, the verdict, the error, the rejected declaration, the summary without `wall_ms`, the quarantine and the pin mismatches. It does not compare the session and engine counts, because they depend on the job split. It prints one line for each export with a difference, and exits with 1 if there is one. Each export has a limit of ARENA_TIMEOUT seconds (default 600) if the `timeout` command is installed. The script does not run a test with the pinned verdict either in docs/arena/either-v4.35.tsv, as scripts/arena-check.sh does.
+# TESTS is the tests directory of scripts/arena-fetch.sh or the output directory of scripts/arena-build.py. N is the thread count, and the default is 4. RULEAN is the rulean binary, and the default is target/release/rulean. The script compares the exit code, the verdict, the error, the rejected declaration, the summary without `wall_ms`, `steps` and `interns`, the quarantine and the pin mismatches. It does not compare the step and intern counts of the summary or the session and engine counts, because each worker has its own store and caches, so these counts depend on the job split. It prints one line for each export with a difference, and exits with 1 if there is one. Each export has a limit of ARENA_TIMEOUT seconds (default 600) if the `timeout` command is installed. The script does not run a test with the pinned verdict either in docs/arena/either-v4.35.tsv, as scripts/arena-check.sh does.
 
 set -euo pipefail
 
@@ -24,7 +24,7 @@ if command -v timeout >/dev/null; then
 fi
 
 # The fields of the report that must not change with the thread count.
-fields='[.verdict, .error, .failed_decl, (.summary | del(.wall_ms)), .quarantine, .pin_mismatch]'
+fields='[.verdict, .error, .failed_decl, (.summary | del(.wall_ms, .steps, .interns)), .quarantine, .pin_mismatch]'
 
 total=0
 diff=0

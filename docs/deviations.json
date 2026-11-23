@@ -27,7 +27,7 @@
       "rulean": "the verdict of the profile",
       "option": null,
       "status": "implemented",
-      "tests": ["docs/arena/either-v4.35.tsv", "scripts/arena-check.sh"]
+      "tests": ["docs/arena/either-v4.35.tsv", "docs/arena/either-v4.37.tsv", "scripts/arena-check.sh", "scripts/arena-official.sh"]
     },
     {
       "id": "D4",

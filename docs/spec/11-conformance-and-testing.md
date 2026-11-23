@@ -55,7 +55,8 @@ The corpus is the working meaning of "every Lean program" (02.2). It grows and n
 ### 11.3.3 Arena corner cases
 
 - The 30 "either" tests have no fixed answer in the Arena. rulean pins the answer per profile to the official verdict (05.2). For v4.35.0 and the nightly of 2026-11-14, the official verdicts differ on 8 of these tests (A§1.15). So the expected verdict file is per profile.
-- Two corner cases time out on v4.35.0 at 60 s (eta-struct-major-and-no-whnf and eta-struct-major-no-whnf, A§1.15). For those, the expected outcome is "resource" for the official kernel. rulean's verdict is recorded as deviation D2 if it accepts.
+- Two corner cases time out on v4.35.0 at 60 s (eta-struct-major-and-no-whnf and eta-struct-major-no-whnf, A§1.15). For those, the expected outcome is "resource" for the official kernel. rulean's verdict is recorded as deviation D2 if it accepts. The official kernel of v4.37.0-rc1 accepts both tests, so they are pinned for the `v4.37` profile.
+- For `v4.37`, the expected verdicts are the verdicts of `leanchecker --from-export` of v4.37.0-rc1 on the exports that Lean v4.36.0 makes (`docs/arena/either-v4.37.tsv`). The CI job `arena-either` runs that leanchecker on each run, so a wrong pin fails the job. The nightly of 2026-11-14 accepts the four `eta-unit-like-*` tests because of lean4#15372, which was reverted before v4.37.0-rc1, so v4.37 rejects them.
 
 ### 11.3.4 Engines F and R
 

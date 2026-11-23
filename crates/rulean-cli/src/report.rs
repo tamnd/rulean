@@ -41,6 +41,10 @@ pub struct Report {
     pub s_entries: usize,
     /// The slowest declarations of a sequential run, with the time of each in microseconds, the slowest first (at most `SLOWEST`).
     pub slowest: Vec<(String, u64)>,
+    /// The work count of the check: the calls of `enter` of the type checker (spec 08.7.4). With `--threads`, this is the sum over the workers, and it can change from one run to the next.
+    pub steps: u64,
+    /// The calls of `intern_expr` of the store, with the parse. With `--threads`, this is the sum over the stores of the workers.
+    pub interns: u64,
 }
 
 /// The number of declarations in `slowest`.
@@ -109,14 +113,16 @@ pub fn json(r: &Report) -> String {
         }
     ));
     s.push_str(&format!(
-        "  \"summary\": {{ \"declarations\": {}, \"accepted\": {}, \"rejected\": {}, \"quarantine\": {}, \"axioms_used\": {}, \"deviations\": {}, \"wall_ms\": {} }},\n",
+        "  \"summary\": {{ \"declarations\": {}, \"accepted\": {}, \"rejected\": {}, \"quarantine\": {}, \"axioms_used\": {}, \"deviations\": {}, \"wall_ms\": {}, \"steps\": {}, \"interns\": {} }},\n",
         r.declarations,
         r.accepted,
         r.rejected,
         r.quarantine.len(),
         list(&r.axioms_used),
         list(&r.deviations),
-        r.wall_ms
+        r.wall_ms,
+        r.steps,
+        r.interns
     ));
     s.push_str(&format!("  \"quarantine\": {},\n", list(&r.quarantine)));
     s.push_str(&format!("  \"pin_mismatch\": {},\n", list(&r.pin_mismatch)));

@@ -451,6 +451,7 @@ impl Store {
     }
 
     fn intern_expr(&mut self, node: Expr, h: u32, info: u32) -> ExprId {
+        self.interns += 1;
         // A frozen node has only frozen fields, so a node with a scratch field is not in the frozen tier.
         let scratch_field = has_scratch_field(node);
         let mut fpos: usize = 0;

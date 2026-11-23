@@ -134,7 +134,7 @@ State of the harness:
 
 - `rulean-bench gate` checks limits on each result of a run: the verdict, the instructions in virtual seconds, the peak memory and the wall time. It exits with code 1 if a limit fails.
 - The workflow `nightly` runs rulean on the 225 Arena tests each night with the cachegrind counter. It then checks two gates: each verdict is correct with at most 4 GiB of peak memory, and no `perf/` test is above 1 virtual second (P1.d).
-- The Init and Std gate of the quick suite, the full suite and the scale suite are not written yet.
+- The Init and Std gate of the quick suite uses the work count of 08.7.4 and not the instructions. The full suite and the scale suite are not written yet.
 - In November 2026, on an Apple M-series machine, rulean gives the correct verdict on all 225 tests, but 16 of the 42 `perf/` tests take more than 2 s of wall time. The largest is `perf/magma-list-deep-n36`, with 243.7 G instructions (about 40 virtual seconds) and 3.2 GB of peak memory. So P1.d is not met.
 
 ### 08.7.3 Profiling
@@ -147,7 +147,17 @@ State of the profiling:
 
 - The option `--profile` of `rulean check` selects the semantics profile (05.2), so the counters need another option name. The counters are not written yet.
 - The JSON report has the field `slowest`, with the 10 slowest declarations of a sequential run and the wall time of each (09.4).
-- On the slow `perf/` tests, one to three declarations take nearly all of the time. On `perf/app-lam`, the declaration `dag_app_binder` takes 6.0 s, and the trace has no conversion rule. So the time is in the type inference of engine R, which puts a new local into each lambda body by substitution, as the official kernel does. Engine F does not do type inference yet, so `--engine F` does not change this time.
+- On the slow `perf/` tests, one to three declarations take nearly all of the time. On `perf/app-lam`, the declaration `dag_app_binder` takes 6.0 s, and the trace has no conversion rule. So the time is in the type inference of engine R, which puts a new local into each lambda body by substitution, as the official kernel does. Engine F has type inference now (05.4.5). With `--engine F`, this test uses 0.55 G instructions and not 50 G. Engine R is still the default engine, so the default time does not change.
+
+### 08.7.4 Work gate
+
+The quick suite gate of 08.7.2 must run on each pull request, on a GitHub-hosted runner. Such a runner has no hardware counters, and cachegrind is about 50 times slower than the checker. A check of Init takes about 296 G instructions, so cachegrind on Init and Std takes too long for a pull request. For this reason, the gate measures the work of the checker with counts in the code and not with instructions.
+
+- **Work count.** The JSON report has two counts in `summary` (09.4). `steps` is the number of calls of `enter` of the type checker. Each level of infer, whnf, the definitional equality, the evaluation of engine F and the inference of engine F calls `enter` once. `interns` is the number of calls of `intern_expr` of the store, with the calls that find the node. It follows the substitution and the parse, which `steps` does not show. For example, `perf/app-lam` gives 57 355 steps and 40 029 106 interns. The work count is `steps` plus `interns`.
+- **Determinism.** The core has no hash function with a random seed and no shared state, so a sequential run gives the same counts on each machine and on each run. The gate has no noise for this reason. With `--threads` above 1, the jobs of the workers start from different caches, so the counts can change from one run to the next. The gate uses `--threads 1`.
+- **Baseline.** The file `docs/bench/work.json` has the work count and the Lean version of each export of the gate. The gate does not compare with a build of `main`. It compares with this file, which follows `main`, because each pull request that changes the work by more than the tolerance must change the file too.
+- **Gate.** `scripts/work-gate.sh` exports Init and Std of the Lean release of CI with leanexport, checks each export with one thread, and runs `rulean-bench work`. The gate fails if a work count differs from the baseline by more than 1% in either direction, if the Lean version is not the version of the baseline, or if the verdict is not accept. A decrease fails too, because a baseline that stays above the real count hides a later regression of the same size. On a failure, the script prints the new baseline, so that a pull request that changes the work on purpose can put it in the file. With `WRITE=1`, the script writes the file.
+- **Limits.** The work count is not the time. A change can make each step slower and keep the count. The nightly bench with the instruction counter (08.7.2) finds such a change. The CI job `lake comparator` runs the gate. This job depends on the Lean release, so it is not a required check.
 
 ## 08.8 Performance rules for contributors
 

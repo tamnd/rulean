@@ -5,3 +5,4 @@ pub mod gate;
 pub mod measure;
 pub mod record;
 pub mod suite;
+pub mod work;

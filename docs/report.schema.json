@@ -40,7 +40,9 @@
         "quarantine": { "type": "integer", "minimum": 0, "description": "The number of unsafe and partial constants (spec 05.10)." },
         "axioms_used": { "type": "array", "items": { "type": "string" }, "description": "The axioms that the accepted theorems use, sorted by name. The axioms of a theorem are the axioms that #print axioms shows (spec 09.4)." },
         "deviations": { "type": "array", "items": { "type": "string" }, "description": "The rows of docs/deviations.json that changed this run." },
-        "wall_ms": { "type": "integer", "minimum": 0 }
+        "wall_ms": { "type": "integer", "minimum": 0 },
+        "steps": { "type": "integer", "minimum": 0, "description": "The work count: the calls of enter of the type checker (spec 08.7.4). A sequential run gives the same count on each machine." },
+        "interns": { "type": "integer", "minimum": 0, "description": "The calls of intern_expr of the store, with the parse (spec 08.7.4). The work count of the gate is steps plus interns." }
       }
     },
     "quarantine": { "type": "array", "items": { "type": "string" }, "description": "The names of the unsafe and partial constants." },

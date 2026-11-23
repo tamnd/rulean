@@ -10,6 +10,7 @@ use rulean_bench::gate;
 use rulean_bench::measure::{self, Counter, Limits};
 use rulean_bench::record::{self, RunInfo};
 use rulean_bench::suite;
+use rulean_bench::work;
 
 const USAGE: &str = "\
 usage: rulean-bench <command> [options]
@@ -46,6 +47,15 @@ commands:
       --max-rss-mib N        at most N MiB of peak memory on each test
       --max-wall SECONDS     at most this wall time on each test
 
+  work [options] <BASELINE> <NAME>=<REPORT>...
+      Compare the work count (`summary.steps` plus `summary.interns`) of
+      each JSON report of `rulean check` with the entry NAME of the
+      baseline file. Use a sequential check, because its count is the same
+      on each machine.
+      --tolerance PERCENT  fail if a count differs by more than PERCENT in
+                           either direction (default: 1)
+      --write              write the counts into BASELINE and do not compare
+
   help
       print this text
 
@@ -60,6 +70,7 @@ fn main() -> ExitCode {
         Some("run") => run(&args[1..]),
         Some("compare") => compare_cmd(&args[1..]),
         Some("gate") => gate_cmd(&args[1..]),
+        Some("work") => work_cmd(&args[1..]),
         Some("help" | "-h" | "--help") => {
             println!("{USAGE}");
             Ok(0)
@@ -389,6 +400,142 @@ fn gate_cmd(args: &[String]) -> Result<u8, Failure> {
     Ok(u8::from(!outcome.passed()))
 }
 
+/// The options of `work`.
+#[derive(Debug, PartialEq)]
+struct WorkArgs {
+    tolerance: f64,
+    write: bool,
+    baseline: PathBuf,
+    reports: Vec<(String, PathBuf)>,
+}
+
+fn parse_work(args: &[String]) -> Result<WorkArgs, Failure> {
+    let mut tolerance = 1.0;
+    let mut write = false;
+    let mut rest = Vec::new();
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--tolerance" => {
+                let text = it
+                    .next()
+                    .ok_or_else(|| Failure::Usage("`--tolerance` needs a value".into()))?;
+                tolerance = text
+                    .parse()
+                    .ok()
+                    .filter(|t: &f64| t.is_finite() && *t >= 0.0)
+                    .ok_or_else(|| {
+                        Failure::Usage(format!("bad value `{text}` for `--tolerance`"))
+                    })?;
+            }
+            "--write" => write = true,
+            flag if flag.starts_with("--") => {
+                return Err(Failure::Usage(format!("unknown option `{flag}`")));
+            }
+            other => rest.push(other.to_owned()),
+        }
+    }
+    let mut rest = rest.into_iter();
+    let baseline = rest
+        .next()
+        .map(PathBuf::from)
+        .ok_or_else(|| Failure::Usage("`work` needs a baseline file".into()))?;
+    let mut reports = Vec::new();
+    for r in rest {
+        let (name, path) = r
+            .split_once('=')
+            .filter(|(n, p)| !n.is_empty() && !p.is_empty())
+            .ok_or_else(|| Failure::Usage(format!("`{r}` is not NAME=REPORT")))?;
+        reports.push((name.to_owned(), PathBuf::from(path)));
+    }
+    if reports.is_empty() {
+        return Err(Failure::Usage(
+            "`work` needs at least one NAME=REPORT".into(),
+        ));
+    }
+    Ok(WorkArgs {
+        tolerance,
+        write,
+        baseline,
+        reports,
+    })
+}
+
+fn read_json(path: &std::path::Path) -> Result<serde_json::Value, Failure> {
+    let text = std::fs::read_to_string(path)?;
+    serde_json::from_str(&text).map_err(|e| {
+        Failure::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{}: {e}", path.display()),
+        ))
+    })
+}
+
+fn work_cmd(args: &[String]) -> Result<u8, Failure> {
+    let args = parse_work(args)?;
+    let mut baseline = if args.write && !args.baseline.exists() {
+        serde_json::Value::Null
+    } else {
+        read_json(&args.baseline)?
+    };
+    let mut failed = 0;
+    for (name, path) in &args.reports {
+        let new = match work::from_report(&read_json(path)?) {
+            Ok(c) => c,
+            Err(e) => {
+                println!("{name}: {}: {e}", path.display());
+                failed += 1;
+                continue;
+            }
+        };
+        if args.write {
+            work::set_baseline(&mut baseline, name, &new);
+            println!(
+                "{name}: wrote a work count of {}, Lean {}",
+                new.work, new.lean_version
+            );
+            continue;
+        }
+        let base = work::from_baseline(&baseline, name);
+        let verdict = work::compare(base.as_ref(), &new, args.tolerance);
+        let base_work = base.as_ref().map_or(0, |b| b.work);
+        let line = match verdict {
+            work::Verdict::Pass(c) => {
+                format!("work {base_work} to {} ({c:+.3}%), pass", new.work)
+            }
+            work::Verdict::More(c) => format!(
+                "work {base_work} to {} ({c:+.3}%), more work than the tolerance of {}%",
+                new.work, args.tolerance
+            ),
+            work::Verdict::Less(c) => format!(
+                "work {base_work} to {} ({c:+.3}%), less work than the tolerance of {}%, so update the baseline with --write",
+                new.work, args.tolerance
+            ),
+            work::Verdict::Version => format!(
+                "the report is for Lean {} and the baseline is for Lean {}, so update the baseline with --write",
+                new.lean_version,
+                base.as_ref().map_or("", |b| b.lean_version.as_str())
+            ),
+            work::Verdict::Missing => format!(
+                "a work count of {}, Lean {}, but the baseline has no entry, so add it with --write",
+                new.work, new.lean_version
+            ),
+        };
+        println!("{name}: {line}");
+        if !verdict.passed() {
+            failed += 1;
+        }
+    }
+    if args.write {
+        let mut text = serde_json::to_string_pretty(&baseline)
+            .map_err(|e| Failure::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+        text.push('\n');
+        std::fs::write(&args.baseline, text)?;
+    }
+    println!("work: {} exports, {failed} failures", args.reports.len());
+    Ok(u8::from(failed > 0))
+}
+
 fn print_report(report: &compare::Report) {
     println!("{:<50} {:>14} {:>14} {:>8}", "test", "base", "new", "ratio");
     for row in &report.rows {
@@ -439,6 +586,40 @@ mod tests {
 
     fn strs(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn work_reads_its_options() {
+        let a = parse_work(&strs(&[
+            "b.json",
+            "Init=i.json",
+            "--tolerance",
+            "0.5",
+            "Std=s.json",
+        ]))
+        .expect("valid");
+        assert_eq!(
+            a,
+            WorkArgs {
+                tolerance: 0.5,
+                write: false,
+                baseline: PathBuf::from("b.json"),
+                reports: vec![
+                    ("Init".to_owned(), PathBuf::from("i.json")),
+                    ("Std".to_owned(), PathBuf::from("s.json")),
+                ],
+            }
+        );
+        assert!(
+            parse_work(&strs(&["b.json", "--write", "Init=i.json"]))
+                .expect("valid")
+                .write
+        );
+        assert!(parse_work(&strs(&["b.json"])).is_err());
+        assert!(parse_work(&strs(&["b.json", "i.json"])).is_err());
+        assert!(parse_work(&strs(&["b.json", "=i.json"])).is_err());
+        assert!(parse_work(&strs(&["b.json", "Init=i.json", "--tolerance", "-1"])).is_err());
+        assert!(parse_work(&strs(&["b.json", "Init=i.json", "--other"])).is_err());
     }
 
     #[test]

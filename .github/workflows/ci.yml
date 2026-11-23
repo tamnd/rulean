@@ -220,7 +220,7 @@ jobs:
       - name: engine F and engine R on the either tests
         run: scripts/arena-confirm.sh _tmp/arena-extra
 
-  # rulean as an external kernel of lake comparator, with the bwrap sandbox of lake (spec 09.5), and the cross-validation of the `.olean` reader with lean4export on Init of the release (spec 07.3.6). Ubuntu 24.04 blocks the user namespaces that bwrap needs, so the job allows them first. The job depends on the Lean release, so it is not a required check.
+  # rulean as an external kernel of lake comparator, with the bwrap sandbox of lake (spec 09.5), the cross-validation of the `.olean` reader with lean4export on Init of the release (spec 07.3.6), and the work gate of the quick suite on Init and Std (spec 08.7.4). Ubuntu 24.04 blocks the user namespaces that bwrap needs, so the job allows them first. The job depends on the Lean release, so it is not a required check.
   lake:
     name: lake comparator
     runs-on: ubuntu-latest
@@ -236,7 +236,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: false
-      - run: cargo build --locked --release --bin rulean
+      - run: cargo build --locked --release --bin rulean --bin rulean-bench
       - run: cargo build --locked --release -p rulean-olean --example olean_compare
       - name: bwrap
         run: |
@@ -254,6 +254,8 @@ jobs:
         run: scripts/lake-comparator.sh
       - name: the .olean reader and lean4export on Init of the release
         run: scripts/olean-xval.sh _tmp/lean/lean-4.36.0-linux/lib/lean
+      - name: the work gate on Init and Std of the release
+        run: scripts/work-gate.sh docs/bench/work.json
 
   # The repository rules of the spec: the dependency rule (03.3), the no-C policy (13.3) and the Aeneas subset (10.6). `cargo xtask all` also scans the vendored source of each dependency.
   policy:

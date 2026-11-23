@@ -384,6 +384,8 @@ pub struct Checker {
     pub(crate) max_memory: usize,
     // The calls of `enter`. Each `MEMORY_TICKS` calls, `enter` compares the memory with the budget.
     pub(crate) ticks: u32,
+    /// The calls of `enter` since the checker was made. This is the work count of the report (spec 08.7.4). It does not depend on the machine, so a gate can compare it with a fixed baseline.
+    pub steps: u64,
     /// The memory of the other checkers of the run in bytes, as the driver last saw it. With `--threads`, the checkers share one budget, and the driver sets this value before each job. The core has no shared state, so the driver keeps the total.
     pub mem_others: usize,
     /// The memory of this checker that the driver last added to the total of the run.
@@ -448,6 +450,7 @@ impl Checker {
             max_depth: MAX_DEPTH,
             max_memory: usize::MAX,
             ticks: 0,
+            steps: 0,
             mem_others: 0,
             mem_published: 0,
             fault: None,
@@ -521,6 +524,7 @@ impl Checker {
             self.fail(ErrorKind::DeepRecursion, at);
             return false;
         }
+        self.steps += 1;
         if self.max_memory != usize::MAX {
             self.ticks = self.ticks.wrapping_add(1);
             if (self.ticks.is_multiple_of(MEMORY_TICKS) || self.st.is_full()) && self.over_memory()

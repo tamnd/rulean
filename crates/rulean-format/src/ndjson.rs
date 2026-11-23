@@ -12,7 +12,7 @@ use crate::decl::{
     Safety, Thm,
 };
 use crate::error::{Error, ErrorKind};
-use crate::json::{MISSING, NONE, Obj, Range, Scanner, at, skip_ws, utf8_valid};
+use crate::json::{NONE, Obj, Range, Scanner, at, skip_ws, utf8_valid};
 use crate::keys;
 
 /// The newest minor version of format 3 that the parser knows.
@@ -141,7 +141,8 @@ impl Parser {
             self.fail(ErrorKind::BadUtf8);
             return None;
         }
-        let (o, end) = self.scan.object(b, 0);
+        let mut o = Obj::empty();
+        let end = self.scan.object(b, 0, &mut o);
         if self.ok() && skip_ws(b, end) != b.len() {
             self.fail(ErrorKind::BadJson);
         }
@@ -247,12 +248,11 @@ impl Parser {
     }
 
     fn object_at(&mut self, b: &[u8], r: Range) -> Obj {
+        let mut o = Obj::empty();
         if self.ok() {
-            let (inner, _) = self.scan.object(b, r.start);
-            inner
-        } else {
-            empty_obj()
+            self.scan.object(b, r.start, &mut o);
         }
+        o
     }
 
     fn array(&mut self, b: &[u8], o: &Obj, k: usize) -> Vec<Range> {
@@ -872,16 +872,6 @@ fn count(o: &Obj, ks: &[usize]) -> usize {
         i += 1;
     }
     n
-}
-
-fn empty_obj() -> Obj {
-    let mut vals = Vec::with_capacity(keys::COUNT);
-    let mut i = 0;
-    while i < keys::COUNT {
-        vals.push(MISSING);
-        i += 1;
-    }
-    Obj { vals }
 }
 
 /// The major and minor numbers of a version string `major.minor.patch`. The third result is false if the string has another form.

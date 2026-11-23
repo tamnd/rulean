@@ -657,6 +657,7 @@ pub fn code_of_check(kind: CheckError) -> Code {
         CheckError::DeepRecursion => Code::Resource,
         CheckError::ArenaFull => Code::Resource,
         CheckError::MemoryLimit => Code::Resource,
+        CheckError::FDefer => Code::Resource,
         CheckError::Unsupported => Code::Decline,
         _ => Code::Reject,
     }
@@ -1094,6 +1095,7 @@ mod tests {
         assert_eq!(code_of_check(CheckError::AppTypeMismatch), Code::Reject);
         assert_eq!(code_of_check(CheckError::DeepRecursion), Code::Resource);
         assert_eq!(code_of_check(CheckError::ArenaFull), Code::Resource);
+        assert_eq!(code_of_check(CheckError::FDefer), Code::Resource);
         assert_eq!(code_of_check(CheckError::MemoryLimit), Code::Resource);
         let o = options(&strs(&["x", "--max-memory", "8G", "--timeout=90s"])).expect("valid");
         assert_eq!(o.max_memory, Some(8 << 30));

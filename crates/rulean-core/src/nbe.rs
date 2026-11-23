@@ -438,8 +438,26 @@ impl Checker {
         }
     }
 
+    /// True if the type of the major premise of the recursor of the slot is an inductive type that is never in `Prop`.
+    fn major_not_prop(&self, slot: u32, major_idx: u32) -> bool {
+        let mut t = self.env.at(slot).ty;
+        let mut i = 0;
+        while i < major_idx {
+            if let Expr::Pi(b) = self.st.node(t) {
+                t = b.body;
+                i += 1;
+            } else {
+                i = major_idx;
+            }
+        }
+        match self.st.node(t) {
+            Expr::Pi(b) => self.induct_type_not_prop(b.dom),
+            _ => false,
+        }
+    }
+
     /// The major premise for structure eta (`to_cnstr_when_structure`). As `k_major`, it reads the value back and uses engine R.
-    fn struct_major(&mut self, induct: NameId, major: ValueId) -> ValueId {
+    fn struct_major(&mut self, rec_slot: u32, induct: NameId, major: ValueId) -> ValueId {
         if self.f_under > 0 {
             return major;
         }
@@ -450,7 +468,7 @@ impl Checker {
         }
         let base = self.lctx_ty.len() as u32;
         let t = self.quote(base, base, major);
-        let t2 = self.cnstr_when_structure(induct, t, false, false);
+        let t2 = self.cnstr_when_structure(rec_slot, induct, t, false, false);
         if t2 == t || self.bad() {
             major
         } else {
@@ -492,8 +510,17 @@ impl Checker {
         }
         let induct = self.major_induct(slot, r.major_idx);
         let mut major = args[major_idx];
+        let first = major;
         if r.k {
             major = self.k_major(induct, r.nparams, major);
+        }
+        // With `no_whnf_prop_major` (lean4#15371), engine R does not reduce a major premise that is a proof. A value of engine F is already evaluated, so engine F cannot follow this rule. If the type of the major premise can be in `Prop` and K did not give a constructor, engine R must decide the query.
+        if self.flags.no_whnf_prop_major
+            && major == first
+            && !self.major_not_prop(slot, r.major_idx)
+        {
+            self.fail(ErrorKind::FDefer, self.dummy);
+            return None;
         }
         major = self.force(major);
         if self.bad() {
@@ -510,7 +537,7 @@ impl Checker {
                 let w = self.eval(EnvId::NIL, t);
                 self.force(w)
             }
-            _ => self.struct_major(induct, major),
+            _ => self.struct_major(slot, induct, major),
         };
         if self.bad() {
             return None;

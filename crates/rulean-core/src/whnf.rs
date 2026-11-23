@@ -252,6 +252,7 @@ impl Checker {
     /// `to_cnstr_when_structure` of the official kernel.
     pub(crate) fn cnstr_when_structure(
         &mut self,
+        rec_slot: u32,
         induct: NameId,
         e: ExprId,
         cheap_rec: bool,
@@ -269,10 +270,30 @@ impl Checker {
         if !self.is_constant_named(f, induct) {
             return e;
         }
-        if self.is_prop(e_type) || self.bad() {
+        // With `eta_subsingleton_major` (lean4#15371), the test is on the recursor and not on the type: a recursor that has no extra universe parameter eliminates only into `Prop`, and its major premise does not get eta. A structure in `Prop` with large elimination, such as `And`, now gets eta.
+        let no_eta = if self.flags.eta_subsingleton_major {
+            self.rec_into_prop_only(rec_slot)
+        } else {
+            self.is_prop(e_type)
+        };
+        if no_eta || self.bad() {
             return e;
         }
         self.expand_eta_struct(e_type, e)
+    }
+
+    /// True if the recursor of the slot has the same number of universe parameters as the first type of its group, so its motive is in `Prop` only. A missing type gives true, so the caller does no eta.
+    fn rec_into_prop_only(&self, rec_slot: u32) -> bool {
+        let c = self.env.at(rec_slot);
+        let first = match &c.kind {
+            ConstKind::Rec(r) => r.all.first().copied(),
+            _ => None,
+        };
+        let s = match first {
+            Some(n) => self.env.find(n),
+            None => 0,
+        };
+        s == 0 || c.lparams.len() == self.env.at(s).lparams.len()
     }
 
     /// `recursor_val::get_major_induct`: the head of the domain of the major premise in the type of the recursor.
@@ -346,7 +367,16 @@ impl Checker {
         if r.k {
             major = self.cnstr_when_k(induct, r.nparams, major, cheap_rec, cheap_proj);
         }
-        major = self.rec_whnf(major, cheap_rec, cheap_proj);
+        // With `no_whnf_prop_major` (lean4#15371), a major premise that is a proof does not get `whnf`. Proof irrelevance makes such a step not needed, and the step can be slow.
+        let whnf_major = if self.flags.no_whnf_prop_major {
+            let ty = self.infer(major);
+            !self.bad() && !self.is_prop(ty)
+        } else {
+            true
+        };
+        if whnf_major {
+            major = self.rec_whnf(major, cheap_rec, cheap_proj);
+        }
         if self.bad() {
             return None;
         }
@@ -359,7 +389,7 @@ impl Checker {
                 let c = self.string_lit_to_constructor(s);
                 self.rec_whnf(c, cheap_rec, cheap_proj)
             }
-            _ => self.cnstr_when_structure(induct, major, cheap_rec, cheap_proj),
+            _ => self.cnstr_when_structure(slot, induct, major, cheap_rec, cheap_proj),
         };
         if self.bad() {
             return None;

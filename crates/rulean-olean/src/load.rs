@@ -374,6 +374,7 @@ impl<'a> Loader<'a> {
         let first = self.part(&files[0])?;
         rg.push(first).map_err(|f| at_file(&files[0], f))?;
         // Read the public part first. For a module of the module system, also read the other parts.
+        self.fit(&rg, &files[0])?;
         let public = {
             let mut d = Decoder::new(&rg, self.st);
             d.module_data(0).map_err(|f| at_part(files, f, 0))?
@@ -398,6 +399,7 @@ impl<'a> Loader<'a> {
                 msg: "the module uses the module system, but its private part is missing, so its proofs cannot be checked".into(),
             });
         }
+        self.fit(&rg, &files[0])?;
         let (public, private) = {
             let mut d = Decoder::new(&rg, self.st);
             let public = d.module_data(0).map_err(|f| at_part(files, f, 0))?;
@@ -422,6 +424,20 @@ impl<'a> Loader<'a> {
         let imports = self.imports(&public.imports, &files[0])?;
         let decls = order(self.st, private.constants).map_err(|f| at_part(files, f, last))?;
         Ok(Module { imports, decls })
+    }
+
+    /// Fails with `StoreFull` if the parts of a module and the tables of its decoder do not fit in the memory budget of the store. The check comes before the decoder allocates its tables, so a large olean file cannot go above the budget (spec 05.11.1).
+    fn fit(&self, rg: &Region, file: &Path) -> Result<(), Error> {
+        if self.st.over_budget(rg.held() + Decoder::table_bytes(rg)) {
+            return Err(Error {
+                kind: FaultKind::StoreFull,
+                file: Some(file.to_path_buf()),
+                offset: 0,
+                msg: "the module and the tables of its decoder do not fit in the memory budget"
+                    .into(),
+            });
+        }
+        Ok(())
     }
 
     fn imports(&self, ns: &[NameId], file: &Path) -> Result<Vec<String>, Error> {

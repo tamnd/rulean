@@ -355,6 +355,8 @@ pub(crate) fn check_export(
     rep.declarations = export.decls.len();
     let mut c = Checker::new(store);
     c.set_max_memory(o.memory_budget());
+    // The declarations of the export stay in memory during the check, so they count in the budget (spec 05.11.1).
+    c.mem_others = export.decls.capacity() * core::mem::size_of::<Decl>();
     c.flags = prof.flags();
     c.trust_primitives = o.trust_primitives;
     c.engine = engine_of(o);
@@ -496,7 +498,7 @@ fn check_parallel(o: &Options, c: &mut Checker, ds: &[Decl], rep: &mut Report) {
     let order = rulean_pool::largest_first(&plan.costs);
     let main: &Checker = c;
     // The main checker and the workers share one budget. Each worker has a copy of the store, so the copies count too. The core has no shared state, so the total is here: before and after each job, a worker adds the change of its memory to the total and reads the memory of the others.
-    let total = AtomicUsize::new(main.memory());
+    let total = AtomicUsize::new(main.memory() + main.mem_others);
     let publish = |w: &mut Checker| {
         let m = w.memory();
         total.fetch_add(m, Ordering::Relaxed);
@@ -732,41 +734,138 @@ pub(crate) fn read_export<R: BufRead>(
     Result<rulean_format::Export, rulean_format::Error>,
     [u8; 32],
 )> {
+    let mut hasher = Hasher::new();
     if rlb::is_binary(input.fill_buf()?) {
         let mut b = Vec::new();
-        input.read_to_end(&mut b)?;
-        let mut hasher = Hasher::new();
-        hasher.update(&b);
-        let parsed = rlb::decode(store, &b).map(|x| rulean_format::Export {
-            decls: x.decls,
-            lean_version: x.header.lean_version,
-            format_version: BINARY_FORMAT.as_bytes().to_vec(),
-        });
+        let parsed = match next_chunk(&mut input, &mut hasher, &mut b, store, 0, false)? {
+            Chunk::Over => Err(rulean_format::Error {
+                line: 0,
+                kind: ErrorKind::StoreFull,
+            }),
+            _ => rlb::decode(store, &b).map(|x| rulean_format::Export {
+                decls: x.decls,
+                lean_version: x.header.lean_version,
+                format_version: BINARY_FORMAT.as_bytes().to_vec(),
+            }),
+        };
         return Ok((parsed, hasher.finish()));
     }
     let mut s = Stream::new();
-    let mut hasher = Hasher::new();
     let mut tail = false;
     let mut line = Vec::new();
     loop {
         line.clear();
-        let n = input.read_until(b'\n', &mut line)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&line);
-        if line.last() == Some(&b'\n') {
-            s.line(store, &line[..line.len() - 1]);
-        } else {
-            tail = true;
+        match next_chunk(&mut input, &mut hasher, &mut line, store, s.bytes(), true)? {
+            Chunk::End => break,
+            Chunk::Line => s.line(store, &line[..line.len() - 1]),
+            Chunk::Tail => tail = true,
+            Chunk::Over => s.full(),
         }
     }
     Ok((s.end(tail), hasher.finish()))
 }
 
+/// The result of `next_chunk`.
+enum Chunk {
+    /// The input has no more bytes.
+    End,
+    /// The buffer has a line and its newline.
+    Line,
+    /// The buffer has the last bytes of the input, with no newline.
+    Tail,
+    /// The buffer must grow above the memory budget of the store. The function read the rest of the line or of the input into the digest only, and the buffer is empty.
+    Over,
+}
+
+/// Reads the next line of `input` into `buf`, or all of the input if `lines` is false. All of the bytes go into `hasher`. Before the buffer grows, the function checks that the buffer and `base` more bytes fit in the memory budget of `store` (spec 05.11.1).
+fn next_chunk<R: BufRead>(
+    input: &mut R,
+    hasher: &mut Hasher,
+    buf: &mut Vec<u8>,
+    store: &Store,
+    base: usize,
+    lines: bool,
+) -> std::io::Result<Chunk> {
+    let mut read = 0;
+    let mut over = false;
+    loop {
+        let avail = input.fill_buf()?;
+        if avail.is_empty() {
+            return Ok(if over {
+                Chunk::Over
+            } else if read == 0 {
+                Chunk::End
+            } else {
+                Chunk::Tail
+            });
+        }
+        let nl = if lines {
+            avail.iter().position(|&c| c == b'\n')
+        } else {
+            None
+        };
+        let take = nl.map_or(avail.len(), |k| k + 1);
+        hasher.update(&avail[..take]);
+        if !over {
+            let need = buf.len() + take;
+            if need > buf.capacity() && store.over_budget(base + need.max(buf.capacity() * 2)) {
+                over = true;
+                *buf = Vec::new();
+            } else {
+                buf.extend_from_slice(&avail[..take]);
+            }
+        }
+        read += take;
+        input.consume(take);
+        if nl.is_some() {
+            return Ok(if over { Chunk::Over } else { Chunk::Line });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Reads `input` with a store budget of `extra` bytes above the empty store.
+    fn read_in_budget(
+        input: &[u8],
+        extra: usize,
+    ) -> (
+        Result<rulean_format::Export, rulean_format::Error>,
+        [u8; 32],
+    ) {
+        let mut store = Store::new();
+        store.set_max_bytes(store.memory().total() + extra);
+        read_export(&mut store, input).expect("read")
+    }
+
+    #[test]
+    fn a_long_line_is_in_the_budget() {
+        let meta = r#"{"meta":{"exporter":{"name":"t","version":"0"},"format":{"version":"3.1.0"},"lean":{"githash":"","version":""}}}"#;
+        let mut input = format!("{meta}\n").into_bytes();
+        input.extend(std::iter::repeat_n(b' ', 4 << 20));
+        input.extend_from_slice(b"{}\nmore\n");
+        let (parsed, digest) = read_in_budget(&input, 1 << 20);
+        let e = parsed.expect_err("over the budget");
+        assert_eq!((e.line, e.kind), (2, ErrorKind::StoreFull));
+        // The digest is of all of the input.
+        let mut h = Hasher::new();
+        h.update(&input);
+        assert_eq!(digest, h.finish());
+    }
+
+    #[test]
+    fn a_binary_input_is_in_the_budget() {
+        let mut input = rlb::MAGIC.to_vec();
+        input.extend(std::iter::repeat_n(0u8, 4 << 20));
+        assert!(rlb::is_binary(&input), "the magic of the test");
+        let (parsed, _) = read_in_budget(&input, 1 << 20);
+        assert_eq!(
+            parsed.expect_err("over the budget").kind,
+            ErrorKind::StoreFull
+        );
+    }
 
     fn strs(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| (*s).to_owned()).collect()

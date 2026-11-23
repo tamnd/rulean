@@ -238,3 +238,17 @@ fn a_wrong_cached_hash_in_the_constant_trie_is_malformed() {
     assert_eq!(decode(&d, &parts), Err(FaultKind::Malformed));
     std::fs::remove_dir_all(d).expect("remove");
 }
+
+#[test]
+fn a_module_above_the_budget_is_store_full() {
+    // The reader checks the parts and the tables of the decoder before it allocates the tables (spec 05.11.1).
+    for r in RELEASES {
+        let mut st = Store::new();
+        st.set_max_bytes(st.memory().total() + 1024);
+        let e = read_module(&mut st, &[fixtures(r)], MODULE).expect_err("over the budget");
+        assert_eq!(e.kind, FaultKind::StoreFull, "{r}");
+        let mut st = Store::new();
+        st.set_max_bytes(st.memory().total() + (256 << 20));
+        assert!(read_module(&mut st, &[fixtures(r)], MODULE).is_ok(), "{r}");
+    }
+}

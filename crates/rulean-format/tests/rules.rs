@@ -389,3 +389,31 @@ fn changed_bytes_never_panic() {
         let _ = run(&t);
     }
 }
+
+/// A parse with a memory budget of `extra` bytes above the empty store.
+fn error_in_budget(input: &[u8], extra: usize) -> (u64, ErrorKind) {
+    let mut store = Store::new();
+    store.set_max_bytes(store.memory().total() + extra);
+    let e = parse(&mut store, input).expect_err("the input must fail");
+    (e.line, e.kind)
+}
+
+#[test]
+fn the_parser_tables_are_in_the_budget() {
+    // One short line asks for an index table of 200 million slots. The budget sees the table before it grows (spec 05.11.1).
+    assert_eq!(
+        error_in_budget(&doc(&[r#"{"ie":200000000,"sort":0}"#]), 1 << 20),
+        (2, ErrorKind::StoreFull)
+    );
+    assert_eq!(
+        error_in_budget(
+            &doc(&[r#"{"in":200000000,"str":{"pre":0,"str":"a"}}"#]),
+            1 << 20
+        ),
+        (2, ErrorKind::StoreFull)
+    );
+    // A small export fits in the same budget.
+    let mut store = Store::new();
+    store.set_max_bytes(store.memory().total() + (1 << 20));
+    assert!(parse(&mut store, &doc(&[NAME, SORT, AXIOM])).is_ok());
+}

@@ -152,8 +152,8 @@ impl Store {
         self.max_bytes
     }
 
-    /// True if the store would use more than its budget after `extra` more bytes. With no budget, this is always false. The cost is a few additions, so a caller can use it at each growth of an array.
-    pub(crate) fn over_budget(&self, extra: usize) -> bool {
+    /// True if the store would use more than its budget after `extra` more bytes. With no budget, this is always false. The cost is a few additions, so a caller can use it at each growth of an array. A reader uses it for its own tables, which are not in the store (spec 05.11.1).
+    pub fn over_budget(&self, extra: usize) -> bool {
         self.max_bytes != usize::MAX && self.memory().total().saturating_add(extra) > self.max_bytes
     }
 

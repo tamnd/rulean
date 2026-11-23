@@ -84,6 +84,14 @@ fn decline(at: At, msg: impl Into<String>) -> Fault {
 }
 
 impl<'a> Decoder<'a> {
+    /// The bytes of the tables that `new` allocates for `rg`: one handle and one type byte for each word of each part.
+    pub fn table_bytes(rg: &Region) -> usize {
+        rg.parts
+            .iter()
+            .map(|p| p.bytes.len() / WORD * (core::mem::size_of::<Raw>() + 1))
+            .sum()
+    }
+
     pub fn new(rg: &'a Region, st: &'a mut Store) -> Decoder<'a> {
         let ids = rg
             .parts

@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use rulean_olean::{FaultKind, read_module};
+use rulean_olean::{FaultKind, decode_parts, read_module};
 use rulean_store::Store;
 
 const MODULE: &str = "Init.Control.Do";
@@ -80,6 +80,37 @@ fn the_fixture_decodes() {
         assert!(
             names.iter().any(|n| n == b"EarlyReturnT.return"),
             "{r}: EarlyReturnT.return is missing"
+        );
+    }
+}
+
+#[test]
+fn bytes_in_memory_decode_as_the_files() {
+    for r in RELEASES {
+        let mut st = Store::new();
+        let files = read_module(&mut st, &[fixtures(r)], MODULE).expect("the fixture decodes");
+        let mut st2 = Store::new();
+        let o = originals(r);
+        let mem = decode_parts(
+            &mut st2,
+            [Some(o[0].clone()), Some(o[1].clone()), Some(o[2].clone())],
+        )
+        .expect("the bytes decode");
+        assert_eq!(mem.imports, files.imports, "{r}");
+        let names = |st: &Store, ds: &[rulean_format::Decl]| -> Vec<Vec<u8>> {
+            ds.iter().map(|d| st.name_text(d.name())).collect()
+        };
+        assert_eq!(names(&st2, &mem.decls), names(&st, &files.decls), "{r}");
+        let e = decode_parts(
+            &mut Store::new(),
+            [Some(o[0].clone()), Some(o[1].clone()), None],
+        )
+        .expect_err("no private part");
+        assert_eq!(e.kind, FaultKind::Missing, "{r}");
+        assert_eq!(
+            e.file.as_deref(),
+            Some(Path::new("mem.olean.private")),
+            "{r}"
         );
     }
 }

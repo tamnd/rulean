@@ -1,0 +1,50 @@
+# The fuzz targets of spec 11.5.1. libFuzzer is C++, so this package is a workspace of its own. It is not in the dependency graph of rulean, and the no-C check of `cargo xtask nonc` does not apply to it. Run it with `cargo +nightly fuzz run TARGET`. See README.md.
+[package]
+name = "rulean-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+members = ["."]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+rulean-format = { path = "../crates/rulean-format" }
+rulean-olean = { path = "../crates/rulean-olean" }
+rulean-store = { path = "../crates/rulean-store" }
+
+[[bin]]
+name = "olean"
+path = "fuzz_targets/olean.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ndjson"
+path = "fuzz_targets/ndjson.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rlb"
+path = "fuzz_targets/rlb.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "seeds"
+path = "src/bin/seeds.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1

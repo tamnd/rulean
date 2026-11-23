@@ -1,0 +1,79 @@
+name: fuzz
+
+# The byte fuzzing of spec 11.5.1: the .olean reader, the NDJSON parser and the .rlb decoder, with cargo-fuzz. libFuzzer is C++, so it is only in this job and never in the shipped build. The job runs each week, by hand, and on a pull request that changes fuzz/.
+on:
+  schedule:
+    - cron: "23 4 * * 0"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: The run time of each target, in seconds
+        default: "1200"
+  pull_request:
+    paths:
+      - .github/workflows/fuzz.yml
+      - fuzz/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+# With shell: bash, a step also fails when a command before a pipe fails.
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_FUZZ_VERSION: 0.13.2
+
+jobs:
+  fuzz:
+    name: fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [olean, ndjson, rlb]
+    env:
+      # A pull request only checks that the target builds and runs.
+      SECONDS_EACH: ${{ github.event_name == 'pull_request' && '60' || inputs.seconds || '1200' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install nightly --profile minimal
+      - run: cargo install --locked cargo-fuzz --version "$CARGO_FUZZ_VERSION"
+      - run: cargo test --locked --manifest-path fuzz/Cargo.toml --lib
+      - name: seeds
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p fuzz/corpus/olean fuzz/corpus/ndjson fuzz/corpus/rlb
+          (cd fuzz && cargo +nightly run --locked --release --bin seeds -- corpus/olean)
+          cp crates/rulean-cli/tests/data/*.ndjson fuzz/corpus/ndjson/
+          scripts/arena-fetch.sh _tmp/arena
+          find _tmp/arena/tests -path '*tutorial*' -name '*.ndjson' -size -64k -exec cp {} fuzz/corpus/ndjson/ \;
+          if [ "$TARGET" = rlb ]; then
+            cargo build --locked --release -p rulean-cli
+            for f in fuzz/corpus/ndjson/*.ndjson; do
+              target/release/rulean pack --profile v4.35 "$f" -o "fuzz/corpus/rlb/$(basename "$f" .ndjson).rlb" || true
+            done
+          fi
+          find fuzz/corpus -type f | wc -l
+      - name: run
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          cd fuzz
+          cargo +nightly fuzz run "$TARGET" "corpus/$TARGET" -- -max_total_time="$SECONDS_EACH" -rss_limit_mb=2048 -timeout=10 -print_final_stats=1
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: fuzz/artifacts
+          if-no-files-found: ignore

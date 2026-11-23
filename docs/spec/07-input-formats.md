@@ -150,7 +150,7 @@ The official loader does no structural validation (I#16542). The rulean reader t
 The `.olean` reader is not in theorem T1 for release 1.0 (10.1). It is in the "hardened, tested" class:
 
 - It is written in safe Rust, with `#![forbid(unsafe_code)]` except for the mapping call in `rulean-io`.
-- It is fuzzed (11.5) and runs under the resource limits of 12.3.
+- It is fuzzed (11.5) and runs under the resource limits of 12.3. The fuzz target `olean` in `fuzz/` gives the bytes of the parts of one module to `decode_parts`, which has the same checks as the load from files.
 - It is cross-validated (07.3.6).
 
 ### 07.3.6 Cross-validation

@@ -79,6 +79,7 @@ Codes 0, 1 and 2 are the codes of the [Lean Kernel Arena](https://arena.lean-lan
 
 - [Specification](docs/spec/00-README.md): the design, the research of 2026, the proof plan and the milestones.
 - [Changelog](CHANGELOG.md)
+- [Soundness](SOUNDNESS.md): what the proofs say, what you must trust, and the known soundness bugs.
 - [Deviations](DEVIATIONS.md): the known differences from the official kernel.
 - [Security policy](SECURITY.md): how to report a soundness bug.
 - [Contributing](CONTRIBUTING.md)

@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-11-23
+
 ### Added
 
 - `scripts/olean-xval.sh` cross-validates the `.olean` reader with lean4export on Init of a Lean release (spec 07.3.6). It requires that `rulean check` accepts the NDJSON export, that `rulean olean` accepts the oleans, and that the example `olean_compare` finds each declaration of the export in the oleans with the same content. The `lake` job of CI runs it on Init of v4.36.0. Locally, the script takes about 170 s.
@@ -148,7 +150,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.5...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.6...HEAD
+[0.0.6]: https://github.com/tamnd/rulean/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/tamnd/rulean/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/tamnd/rulean/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/tamnd/rulean/compare/v0.0.2...v0.0.3

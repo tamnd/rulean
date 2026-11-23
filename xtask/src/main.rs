@@ -5,6 +5,7 @@ use std::process::ExitCode;
 mod deps;
 mod metadata;
 mod nonc;
+mod profile;
 mod subset;
 
 const USAGE: &str = "\
@@ -14,6 +15,7 @@ commands:
   deps      check the dependency rule of spec 03.3
   nonc      check the no-C policy of spec 13.3 (add --vendor to scan the vendored sources)
   subset    check that the core crates stay in the Aeneas subset of spec 10.6
+  profile   check the build profiles of contracts K5 and K6 of spec 10.7
   all       run every check, with --vendor for nonc";
 
 /// Runs every check and joins the problems, so that one run shows all of them.
@@ -23,6 +25,7 @@ fn all() -> Result<(), Vec<String>> {
         deps::run as fn() -> Result<(), Vec<String>>,
         || nonc::run(true),
         subset::run,
+        profile::run,
     ] {
         if let Err(p) = check() {
             problems.extend(p);
@@ -42,6 +45,7 @@ fn main() -> ExitCode {
         Some("deps") => deps::run(),
         Some("nonc") => nonc::run(vendor),
         Some("subset") => subset::run(),
+        Some("profile") => profile::run(),
         Some("all") => all(),
         Some("help" | "-h" | "--help") => {
             println!("{USAGE}");

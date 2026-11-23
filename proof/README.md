@@ -7,7 +7,7 @@ This directory is the Lean package of the rulean proofs (spec 10). It will hold 
 | Module | Contents |
 |---|---|
 | `RuleanProof.Basic` | the link to `ConLeche.IsModel` of con-leche |
-| `RuleanProof.Contracts` | the island contracts of spec 10.7 that have an island in the code: K1 of `rulean-pool` and K2 of `rulean-io` |
+| `RuleanProof.Contracts` | the island contracts K1 to K6 of spec 10.7: K1 of `rulean-pool`, K2 of `rulean-io`, K3 of the frozen tier, K4 of the SIMD scanner, K5 of overflow and K6 of allocation failure |
 | `RuleanProof.Statements` | the draft statements of the theorems T1 to T6 of spec 10.1, and the contracts K1 and K2 on the models of the two islands |
 | `RuleanProof.Twin.Order` | a twin of the step order of the conversion loop, and the reordering lemmas O1, O2, O3, O5 and O7 of spec 05.7.3 |
 | `RuleanProof.Twin.Zeta` | the reordering lemma O4 (lazy `let`) of spec 05.7.3 |

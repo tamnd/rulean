@@ -1,0 +1,82 @@
+name: nightly
+
+# The nightly bench of spec 08.7.2: rulean on the tests of the Lean Kernel Arena, with the gates of `rulean-bench gate`. GitHub-hosted runners have no hardware counters, so the instruction counts come from cachegrind. They show a trend and are not the Arena measure.
+on:
+  schedule:
+    - cron: "41 2 * * *"
+  workflow_dispatch:
+    inputs:
+      cachegrind-max:
+        description: Count only the tests whose first run took at most this many seconds
+        default: "5"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+# With shell: bash, a step also fails when a command before a pipe fails.
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  arena:
+    name: rulean on the Arena tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      CACHEGRIND_MAX: ${{ inputs.cachegrind-max || '5' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: false
+      - run: cargo build --locked --release -p rulean-cli -p rulean-bench
+      - name: install valgrind
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -q -y --no-install-recommends valgrind
+          valgrind --version
+      - run: scripts/arena-fetch.sh _tmp/arena
+      # The step records the results. The gates below give the verdict of the job.
+      - name: run rulean
+        id: run
+        run: |
+          mkdir -p _tmp/bench
+          target/release/rulean-bench run --checker rulean --counter cachegrind --cachegrind-max "$CACHEGRIND_MAX" --timeout 1200 --out _tmp/bench/rulean.json _tmp/arena/tests -- scripts/arena-run.sh {} || true
+          test -s _tmp/bench/rulean.json
+      - name: ratios to the official kernel (trend only)
+        if: steps.run.outcome == 'success'
+        run: |
+          target/release/rulean-bench compare --base-checker official --new-checker rulean _tmp/arena/results.json _tmp/bench/rulean.json | tee _tmp/bench/compare.txt || true
+      - name: "gate: each verdict is correct, peak memory at most 4 GiB"
+        if: ${{ !cancelled() && steps.run.outcome == 'success' }}
+        run: target/release/rulean-bench gate --correct --max-rss-mib 4096 _tmp/bench/rulean.json | tee _tmp/bench/gate-correct.txt
+      - name: "gate: no perf/ test above 1 virtual second (P1.d)"
+        if: ${{ !cancelled() && steps.run.outcome == 'success' }}
+        run: target/release/rulean-bench gate --filter perf/ --max-virtual-seconds 1 _tmp/bench/rulean.json | tee _tmp/bench/gate-perf.txt
+      - name: summary
+        if: ${{ !cancelled() && steps.run.outcome == 'success' }}
+        run: |
+          {
+            echo '```'
+            tail -n 1 _tmp/bench/gate-correct.txt _tmp/bench/gate-perf.txt
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nightly
+          path: |
+            _tmp/bench
+            _tmp/arena/sources.txt
+          if-no-files-found: ignore

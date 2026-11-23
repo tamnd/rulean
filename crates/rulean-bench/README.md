@@ -36,3 +36,16 @@ target/release/rulean-bench compare --base-checker official --tolerance 2 result
 ```
 
 `compare` prints the ratio of the counts for each test that has a count on both sides. It exits with code 1 if a test gives a different status on the two sides, or if a ratio differs from 1 by more than the tolerance in percent.
+
+## Gate
+
+```sh
+target/release/rulean-bench gate --correct --max-rss-mib 4096 rulean.json
+target/release/rulean-bench gate --filter perf/ --max-virtual-seconds 1 rulean.json
+```
+
+`gate` reads a run file of `run` and checks limits on each result. It prints one line for each failed limit and exits with code 1 if a limit failed or if no test matched the filter. `--correct` requires the expected verdict. `--max-virtual-seconds S` requires at most S times 6.0 G instructions, and a test without a count fails this limit. `--max-rss-mib N` limits the peak memory and `--max-wall SECONDS` limits the wall time. The second command above is the P1.d gate of spec 08.7.2.
+
+The workflow `.github/workflows/nightly.yml` runs rulean through `scripts/arena-run.sh` on the Arena tests each night with the `cachegrind` counter, and then runs the two gates above. With `--cachegrind-max 5`, a test that takes more than 5 s has no count, so it fails the P1.d gate. This is correct, because such a test is far above 1 virtual second.
+
+On macOS, the `rusage` counter counts only the process that `run` starts. If this process is a script that starts the checker, the count does not include the checker. Run the checker directly when you use `rusage`.

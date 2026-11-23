@@ -6,6 +6,7 @@ use std::process::ExitCode;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rulean_bench::compare;
+use rulean_bench::gate;
 use rulean_bench::measure::{self, Counter, Limits};
 use rulean_bench::record::{self, RunInfo};
 use rulean_bench::suite;
@@ -34,6 +35,17 @@ commands:
       --new-checker NAME   use only the results of NAME in NEW
       --tolerance PERCENT  fail if a test differs by more than PERCENT
 
+  gate [options] <RUN>
+      Check limits on each result of a run file of `run`.
+      --filter TEXT          check only the tests whose name contains TEXT
+      --correct              each test must give the expected verdict
+      --max-virtual-seconds S
+                             at most S virtual seconds (S times 6.0 G
+                             instructions) on each test; a test without a
+                             count fails
+      --max-rss-mib N        at most N MiB of peak memory on each test
+      --max-wall SECONDS     at most this wall time on each test
+
   help
       print this text
 
@@ -47,6 +59,7 @@ fn main() -> ExitCode {
     let code = match args.first().map(String::as_str) {
         Some("run") => run(&args[1..]),
         Some("compare") => compare_cmd(&args[1..]),
+        Some("gate") => gate_cmd(&args[1..]),
         Some("help" | "-h" | "--help") => {
             println!("{USAGE}");
             Ok(0)
@@ -310,6 +323,72 @@ fn compare_cmd(args: &[String]) -> Result<u8, Failure> {
     Ok(u8::from(failed))
 }
 
+fn parse_gate(args: &[String]) -> Result<(gate::Limits, PathBuf), Failure> {
+    let mut limits = gate::Limits::default();
+    let mut paths = Vec::new();
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        let mut value = || {
+            it.next()
+                .cloned()
+                .ok_or_else(|| Failure::Usage(format!("`{arg}` needs a value")))
+        };
+        match arg.as_str() {
+            "--filter" => limits.filter = Some(value()?),
+            "--correct" => limits.correct = true,
+            "--max-virtual-seconds" => {
+                let s = seconds(arg, &value()?)?.as_secs_f64();
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    clippy::cast_precision_loss,
+                    reason = "the value is positive and far below 2^64"
+                )]
+                let n = (s * gate::VIRTUAL_SECOND as f64) as u64;
+                limits.max_instructions = Some(n);
+            }
+            "--max-rss-mib" => {
+                let text = value()?;
+                let n: u64 = text
+                    .parse()
+                    .map_err(|_| Failure::Usage(format!("bad value `{text}` for `{arg}`")))?;
+                limits.max_rss = Some(n.saturating_mul(1024 * 1024));
+            }
+            "--max-wall" => limits.max_wall = Some(seconds(arg, &value()?)?.as_secs_f64()),
+            flag if flag.starts_with("--") => {
+                return Err(Failure::Usage(format!("unknown option `{flag}`")));
+            }
+            path => paths.push(PathBuf::from(path)),
+        }
+    }
+    let [path] = &paths[..] else {
+        return Err(Failure::Usage("`gate` needs one run file".into()));
+    };
+    Ok((limits, path.clone()))
+}
+
+fn gate_cmd(args: &[String]) -> Result<u8, Failure> {
+    let (limits, path) = parse_gate(args)?;
+    let text = std::fs::read_to_string(&path)?;
+    let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{}: {e}", path.display()),
+        )
+    })?;
+    let records = value["results"].as_array().cloned().unwrap_or_default();
+    let outcome = gate::check(&records, &limits);
+    for f in &outcome.failures {
+        println!("{f}");
+    }
+    println!(
+        "gate: {} tests checked, {} failures",
+        outcome.checked,
+        outcome.failures.len()
+    );
+    Ok(u8::from(!outcome.passed()))
+}
+
 fn print_report(report: &compare::Report) {
     println!("{:<50} {:>14} {:>14} {:>8}", "test", "base", "new", "ratio");
     for row in &report.rows {
@@ -392,6 +471,28 @@ mod tests {
         assert!(parse_run(&strs(&["tests", "--"])).is_err());
         assert!(parse_run(&strs(&["--timeout", "-1", "tests", "--", "x"])).is_err());
         assert!(parse_run(&strs(&["--counter", "cycles", "tests", "--", "x"])).is_err());
+    }
+
+    #[test]
+    fn gate_options() {
+        let (l, p) = parse_gate(&strs(&[
+            "--filter",
+            "perf/",
+            "--correct",
+            "--max-virtual-seconds",
+            "1",
+            "--max-rss-mib",
+            "4096",
+            "run.json",
+        ]))
+        .expect("parse");
+        assert_eq!(p, PathBuf::from("run.json"));
+        assert_eq!(l.filter.as_deref(), Some("perf/"));
+        assert!(l.correct);
+        assert_eq!(l.max_instructions, Some(6_000_000_000));
+        assert_eq!(l.max_rss, Some(4 << 30));
+        assert!(parse_gate(&strs(&["a.json", "b.json"])).is_err());
+        assert!(parse_gate(&strs(&["--max-rss-mib", "x", "a.json"])).is_err());
     }
 
     #[test]

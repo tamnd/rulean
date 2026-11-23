@@ -130,6 +130,13 @@ Instruction counts are deterministic to within about 0.1% for a single-threaded 
 
 GitHub-hosted runners do not expose the hardware counters, so `perf` cannot count instructions on them. `rulean-bench` has three counters for that reason: `perf` (the Arena measure), the `I refs` of valgrind cachegrind (no hardware counter, about 50 times slower), and `instructions retired` of `/usr/bin/time -l` on macOS (includes the system calls). The P1 numbers and the baseline use `perf`. The other counters are for a trend on one machine and must not be compared with Arena numbers.
 
+State of the harness:
+
+- `rulean-bench gate` checks limits on each result of a run: the verdict, the instructions in virtual seconds, the peak memory and the wall time. It exits with code 1 if a limit fails.
+- The workflow `nightly` runs rulean on the 225 Arena tests each night with the cachegrind counter. It then checks two gates: each verdict is correct with at most 4 GiB of peak memory, and no `perf/` test is above 1 virtual second (P1.d).
+- The Init and Std gate of the quick suite, the full suite and the scale suite are not written yet.
+- In November 2026, on an Apple M-series machine, rulean gives the correct verdict on all 225 tests, but 16 of the 42 `perf/` tests take more than 2 s of wall time. The largest is `perf/magma-list-deep-n36`, with 243.7 G instructions (about 40 virtual seconds) and 3.2 GB of peak memory. So P1.d is not met.
+
 ### 08.7.3 Profiling
 
 - Each engine phase has a counter (number of calls, nodes made, cache hits and misses). Counters are compiled in and cost one increment each.

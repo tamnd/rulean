@@ -49,6 +49,7 @@ If the official kernel adopts NbE or a handle store, the 10x target may become i
 | Q4 | If the official kernel becomes too fast for 10x, is P1 restated or kept? | keep the rule and publish the ratio (15.2) |
 | Q5 | What is the bounty for an accepted proof of `False` (11.6)? | decide before M7 |
 | Q6 | Is in-process mode (P2.d) required for 1.0, or can it follow? | required for 1.0 as written (M6) |
+| Q7 | FLT (Anthropic) and the RH project use Lean v4.33.1, and rulean supports releases from v4.35.0 on (02.5). The M4 item "FLT (Anthropic) and RH checked" therefore needs a v4.33.1 profile, or a port of each project to a supported release, or a change of the item. Which one? | keep the item open; check each project when a port to a supported release is public, and do not add a profile before v4.35.0 |
 
 ## 15.5 Things that are not risks
 

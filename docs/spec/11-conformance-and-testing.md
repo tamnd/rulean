@@ -28,8 +28,8 @@ The corpus is the working meaning of "every Lean program" (02.2). It grows and n
 | Navier-Stokes (OpenAI) | 1.5 GB export | Arena, Lean 4.34.0-rc2, which is out of scope (02.5) | none |
 | con-leche's own export | 669 MB | Arena | nightly |
 | FLT (Imperial, human-led) | | GitHub | weekly |
-| FLT (Anthropic) | 37.8 GB export, 1,052,234 declarations | GitHub | weekly, on a large self-hosted machine (08.7.2) |
-| RH project | about 17.5 M lines, about 1.06 M declarations | public archive | weekly, on a large self-hosted machine (08.7.2) |
+| FLT (Anthropic) | 37.8 GB export, 1,052,234 declarations | GitHub, `anthropics/fermats-last-theorem` at 6e837e75, Lean v4.33.1, which is out of scope (02.5, Q7 of 15.4) | weekly, on a large self-hosted machine (08.7.2) |
+| RH project | about 17.5 M lines, about 1.06 M declarations | public archive, Lean v4.33.1, which is out of scope (02.5, Q7 of 15.4) | weekly, on a large self-hosted machine (08.7.2) |
 | Arena tests | 265 tests: 145 accept, 90 reject, 30 either | Arena repo | every pull request |
 | Lean test suite | `tests/lean/run`, `tests/lean` with kernel tests | lean4 repo | nightly |
 | 2026 regression tests | the tests of each soundness PR (A§2.2, 06.8) | lean4 repo at v4.36.0 | every pull request |

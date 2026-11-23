@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ### Changed
 
+- Engine F does not make a new store node for each constant that it evaluates. `eval` gives the constant node that it reads to the delta test. On the Init export of v4.36.0, engine F uses 709 G instructions, against 787 G before. The verdicts and the counts of the report do not change on the Arena tests.
 - In the Lean statements of `proof/`, the contracts K1 and K2 are not free propositions now. `Interface` has the models `runAll` of `rulean-pool` and `readInput` of `rulean-io`, and `Interface.K1` and `Interface.K2` use the statements `ParallelAll` and `ReadsAs` of `Contracts.lean` on them. The new theorem `Interface.runAll_eq` shows that under K1 the result of the pool does not depend on the thread count or the schedule.
 
 ## [0.0.10] - 2026-11-23

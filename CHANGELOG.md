@@ -9,6 +9,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `proof/RuleanProof/Contracts.lean` states the island contracts K3 to K6 of spec 10.7, each with one theorem: `Frozen` for the frozen tier, `ScanAgrees` for the SIMD scanner, `NoWrap` for overflow and `AllOrNothing` for allocation failure.
 - `cargo xtask profile` checks the build profiles of K5 and K6: `panic = "abort"` and `overflow-checks = true` in the release and dev profiles, and no global allocator in `crates/`. `cargo xtask all` runs it, so the CI job `policy` runs it too.
 - `DEVIATIONS.md` gives the deviation register of spec 05.12 with the state and the tests of each row, and a note on each row. The README links to it.
+- `SOUNDNESS.md` tells what the theorems T1 to T6 say and what they do not say, gives the state of each part of the proof, gives the trusted base table of spec 10.8 with the state of each mitigation, lists the island contracts K1 to K6, and has the history of soundness bugs. No soundness bug is known in a release.
 
 ### Changed
 

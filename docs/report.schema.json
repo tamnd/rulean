@@ -56,7 +56,9 @@
         "f_fallback": { "type": "integer", "minimum": 0, "description": "The queries where engine F did not find an equality, so engine R decided them." },
         "f_faults": { "type": "integer", "minimum": 0, "description": "The queries where engine F stopped with a fault, so engine R decided them." },
         "r_confirmed": { "type": "integer", "minimum": 0, "description": "The equalities of engine F that engine R confirmed." },
-        "r_disagree": { "type": "integer", "minimum": 0, "description": "The equalities of engine F that engine R did not confirm." }
+        "r_disagree": { "type": "integer", "minimum": 0, "description": "The equalities of engine F that engine R did not confirm, and the type checks and value checks that engine F accepted and engine R rejected." },
+        "f_infer": { "type": "integer", "minimum": 0, "description": "The type checks and value checks of declarations that engine F inference tried." },
+        "f_infer_ok": { "type": "integer", "minimum": 0, "description": "The type checks and value checks that engine F inference accepted. Engine R did the others." }
       }
     },
     "session": {

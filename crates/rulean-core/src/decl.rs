@@ -80,7 +80,7 @@ impl Checker {
         }
     }
 
-    /// `check_constant_val`: the name, the level parameters and the type of a constant. The caller has called `begin`.
+    /// `check_constant_val`: the name, the level parameters and the type of a constant. The caller has called `begin`. Engine F tries the type check first, as in `check_value`.
     fn check_constant_val(&mut self, n: NameId, lparams: &[NameId], ty: ExprId) {
         self.check_name(n, ty);
         self.check_duplicated_univ_params(lparams, ty);
@@ -88,16 +88,35 @@ impl Checker {
         if self.bad() {
             return;
         }
+        let f = self.f_check_type(ty);
+        if f && !self.confirm_all {
+            return;
+        }
         let sort = self.check(ty);
         self.ensure_sort(sort, ty);
+        if f && self.bad() {
+            self.f_stats.disagree += 1;
+        }
     }
 
-    /// The value check of a definition, a theorem or an opaque constant: `check(value)` and `is_def_eq(type of value, type)`.
+    /// The value check of a definition, a theorem or an opaque constant: `check(value)` and `is_def_eq(type of value, type)`. Engine F tries it first (spec 05.4.5). If engine F does not accept, engine R does the check. With `--confirm all`, engine R also does the check after engine F accepts, and a reject of engine R then counts as a disagreement.
     fn check_value(&mut self, value: ExprId, ty: ExprId) {
         self.check_no_fvar(value);
         if self.bad() {
             return;
         }
+        let f = self.f_check_value(value, ty);
+        if f && !self.confirm_all {
+            return;
+        }
+        self.check_value_r(value, ty);
+        if f && self.bad() {
+            self.f_stats.disagree += 1;
+        }
+    }
+
+    /// The value check of engine R.
+    fn check_value_r(&mut self, value: ExprId, ty: ExprId) {
         let val_type = self.check(value);
         if self.bad() {
             return;

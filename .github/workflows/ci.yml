@@ -328,6 +328,29 @@ jobs:
           axiom-audit-root: RuleanProof
       - run: scripts/leanchecker.sh
 
+  # The Verus proof of contract K1 for rulean-pool (spec 10.7), in proof/verus/pool.rs. The job uses a pinned Verus release. This release needs Rust 1.100.0, which is the toolchain of rust-toolchain.toml.
+  verus:
+    name: verus
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VERUS_RELEASE: 0.2026.11.22.1ce6a59
+      # The digest of verus-0.2026.11.22.1ce6a59-x86-linux.zip on the release page of verus-lang/verus.
+      VERUS_SHA256: c955d5958877f4f907cce80aa996d4239a481984829d82e325938c7bf242b0db
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain || rustup toolchain install
+      - name: install Verus
+        run: |
+          curl -sSfL --retry 3 -o _verus.zip "https://github.com/verus-lang/verus/releases/download/release/${VERUS_RELEASE}/verus-${VERUS_RELEASE}-x86-linux.zip"
+          echo "${VERUS_SHA256}  _verus.zip" | sha256sum -c -
+          mkdir -p _tmp
+          unzip -q _verus.zip -d _tmp
+          _tmp/verus-x86-linux/verus --version
+      - run: _tmp/verus-x86-linux/verus proof/verus/pool.rs
+
   # cargo-deny checks the advisories, the licences, the sources and the banned crates of deny.toml.
   deny:
     name: cargo-deny

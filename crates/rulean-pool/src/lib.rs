@@ -3,6 +3,8 @@
 //! Contract K1 is `ParallelAll n f out`: for each job index `i < n`, `out[i] = f i`. The pool runs each job exactly once. A worker takes the next job from a shared counter, so a fast worker takes more jobs. The results go into a slot array indexed by job, so the order in which the workers finish does not change the output.
 //!
 //! The pool does not use `unsafe` code. It uses scoped threads of `std` and one atomic counter.
+//!
+//! `proof/verus/pool.rs` is a model of `run_all`, `worker` and `check_order` with a Verus proof of the safety part of K1: if `run_all` returns, the result at each position `k` is the result of job `k`. The proof holds for each value of the counter, so it holds for each schedule of the threads. A change to one of these functions needs the same change in the model.
 
 #![forbid(unsafe_code)]
 

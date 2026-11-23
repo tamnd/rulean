@@ -209,6 +209,8 @@ If an island is wrong, the theorem does not apply. The mitigation is kernel dive
 
 ### 10.7.1 Status in rulean 0.0.5
 
+- K1 is stated in Lean as `ParallelAll` in `proof/RuleanProof/Contracts.lean`, with two theorems: the sequential twin satisfies it, and two results that satisfy it for the same jobs are equal. The field `K1` of `Interface` is still a free proposition.
+- `proof/verus/pool.rs` is a Verus model of `run_all` of `rulean-pool`. The proof shows that if `run_all` returns, the result has `n` values and the value at each job index `k` is `f k`. The shared counter has no contract in the model, so the proof holds for each schedule of the threads. The proof does not show that `run_all` returns. A test and review cover that part, and the loom model test of the table is not written. The CI job `verus` runs the proof with a pinned Verus release.
 - K2 is stated in Lean as `ReadsAs` in `proof/RuleanProof/Contracts.lean`. The field `K2` of `Interface` in `Statements.lean` is still a free proposition.
 - `rulean-io` opens the input read-only and reads it in blocks of 1 MiB. `rulean check` and `rulean pack` read the input through it. The report gives the SHA-256 digest of the bytes that the core got.
 - After the run, `rulean-io` reads the file again and computes its digest. If the digest is not the same, `rulean check` gives exit code 4 and no verdict, and `rulean pack` writes no file. Standard input and a file that is not a regular file cannot be read again, so this check does not apply to them.

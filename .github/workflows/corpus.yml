@@ -14,6 +14,11 @@ on:
         type: choice
         options: [all, mathlib, cslib, cedar]
         default: all
+      steps:
+        description: The steps to run. With olean, the job does not run rulean check on the export, so a test of the .olean reader takes less time.
+        type: choice
+        options: [all, olean]
+        default: all
 
 permissions:
   contents: read
@@ -78,7 +83,8 @@ jobs:
         if: ${{ !cancelled() && steps.fetch.outcome == 'success' }}
         name: leanexport
         run: scripts/corpus.sh "$TEST" export "$WORK"
-      - if: ${{ !cancelled() && steps.export.outcome == 'success' }}
+      # The weekly run has no inputs, and an empty input is not 'olean', so the weekly run has this step.
+      - if: ${{ !cancelled() && steps.export.outcome == 'success' && inputs.steps != 'olean' }}
         name: rulean check on the export
         run: scripts/corpus.sh "$TEST" check "$WORK"
       - if: ${{ !cancelled() && steps.fetch.outcome == 'success' }}

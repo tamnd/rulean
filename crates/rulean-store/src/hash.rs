@@ -74,6 +74,54 @@ pub fn bytes(seed: u32, b: &[u8]) -> u32 {
     finish(h ^ (n as u32))
 }
 
+/// The product of `a` and `b` modulo 2^64.
+fn mul64(a: u64, b: u64) -> u64 {
+    ((a as u128 * b as u128) & 0xffff_ffff_ffff_ffff) as u64
+}
+
+/// The rotation of `x` by `r` bits to the left, for `0 < r < 64`.
+#[allow(clippy::manual_rotate)]
+fn rotl64(x: u64, r: u32) -> u64 {
+    (x << r) | (x >> (64 - r))
+}
+
+/// One step of a lane of `limbs`: mixes the limb `x` into the lane `s`.
+fn lane(s: u64, x: u64) -> u64 {
+    rotl64(mul64(s ^ x, 0x9e37_79b9_7f4a_7c15), 31)
+}
+
+/// The hash of the limbs of a large natural number. The step of `word64` has a chain of six multiplications for each limb, so on a number of many limbs it takes more time than an addition or a multiplication by one limb. This hash has four lanes, and each limb goes into the lane of its position modulo 4 with one multiplication of 64 bits. The four lanes do not depend on each other, so the processor runs them at the same time. At the end, the step of MurmurHash3 mixes the halves of the four lanes and the count.
+pub fn limbs(seed: u32, xs: &[u64]) -> u32 {
+    let n = xs.len();
+    let mut s0: u64 = seed as u64;
+    let mut s1: u64 = 0x243f_6a88_85a3_08d3;
+    let mut s2: u64 = 0x1319_8a2e_0370_7344;
+    let mut s3: u64 = 0xa409_3822_299f_31d0;
+    let mut i = 0;
+    while i + 4 <= n {
+        s0 = lane(s0, xs[i]);
+        s1 = lane(s1, xs[i + 1]);
+        s2 = lane(s2, xs[i + 2]);
+        s3 = lane(s3, xs[i + 3]);
+        i += 4;
+    }
+    if i < n {
+        s0 = lane(s0, xs[i]);
+    }
+    if i + 1 < n {
+        s1 = lane(s1, xs[i + 1]);
+    }
+    if i + 2 < n {
+        s2 = lane(s2, xs[i + 2]);
+    }
+    let mut h = mix(seed, n as u32);
+    h = word64(h, s0);
+    h = word64(h, s1);
+    h = word64(h, s2);
+    h = word64(h, s3);
+    finish(h)
+}
+
 /// The hash of a 64-bit word.
 pub fn word64(h: u32, x: u64) -> u32 {
     mix(mix(h, x as u32), (x >> 32) as u32)
@@ -99,5 +147,24 @@ mod tests {
         assert_ne!(bytes(0, b"Nat"), bytes(0, b"Nat\0"));
         assert_ne!(bytes(0, b"ab"), bytes(0, b"ba"));
         assert_ne!(word64(1, 1 << 32), word64(1, 1));
+    }
+
+    #[test]
+    fn the_limb_hash_uses_each_limb_and_the_count() {
+        let base: [u64; 9] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+        let h = limbs(3, &base);
+        // A change of one bit in any limb, in any lane and in the tail, changes the hash.
+        let mut i = 0;
+        while i < base.len() {
+            let mut v = base;
+            v[i] ^= 1 << 63;
+            assert_ne!(limbs(3, &v), h, "limb {i}");
+            i += 1;
+        }
+        // The count is in the hash, so a zero limb at the end changes it.
+        assert_ne!(limbs(3, &[1, 2]), limbs(3, &[1, 2, 0]));
+        // Limbs in other lanes do not cancel.
+        assert_ne!(limbs(3, &[1, 2, 3, 4]), limbs(3, &[2, 1, 3, 4]));
+        assert_ne!(limbs(3, &base), limbs(4, &base));
     }
 }

@@ -1,11 +1,14 @@
 import RuleanProof.Basic
+import RuleanProof.Contracts
 
 /-!
 # The statements of the theorems T1 to T6
 
 This file states the theorems of spec 10.1. It is a protected file (spec 10.9). A change needs the approval of two maintainers.
 
-This is a draft. The objects that the theorems talk about do not exist yet. The Aeneas model of `rulean_core::check_stream`, the specification of the input format and the island contracts come in later milestones. So the draft collects these objects in the structure `Interface`, and each theorem is a `Prop` over an `Interface`. A later PR replaces each field of `Interface` with the real definition, and then each `Prop` becomes a `theorem`.
+This is a draft. Most objects that the theorems talk about do not exist yet. The Aeneas model of `rulean_core::check_stream` and the specification of the input format come in later milestones. So the draft collects these objects in the structure `Interface`, and each theorem is a `Prop` over an `Interface`. A later PR replaces each field of `Interface` with the real definition, and then each `Prop` becomes a `theorem`.
+
+The island contracts K1 and K2 are not fields. They are the definitions `Interface.K1` and `Interface.K2` below, and they use the statements of `Contracts.lean` on the models of the two islands. K3 to K6 are not hypotheses of a theorem (spec 10.7.1).
 
 The draft has no proofs, so it has no holes. It only shows that the statements are well formed, and it gives a person one place to read them.
 
@@ -54,14 +57,32 @@ structure Interface where
   axiomsOf : Env → Name → List Name
   /-- The constant `c` refers to the constant named `n` in its type or its value. -/
   refersTo : ConstantInfo → Name → Prop
-  /-- Contract K1 of the thread pool (spec 10.7). -/
-  K1 : Prop
-  /-- Contract K2 of the file read (spec 10.7). -/
-  K2 : Prop
+  /-- The result of one job of the parallel stage (spec 08.3). -/
+  JobResult : Type
+  /-- The model of `rulean_pool::run_all`: with `threads` worker threads and the schedule `sched`, it runs the jobs `0` to `n - 1`, where job `k` gives `f k`, and it gives the array of the results. -/
+  runAll : (threads : Nat) → (sched : Nat → Nat) → (n : Nat) → (Nat → JobResult) → Array JobResult
+  /-- The model of the read of the input by `rulean-io`: the bytes that the core gets from the file at `path`, in the file system `fs` at open time, or an error. -/
+  readInput : Contracts.FileSystem → (path : String) → Except Error ByteArray
   /-- The declaration `d` is accepted by lean4lean within the fuel `fuel` (spec 10.11). -/
   lean4leanAccepts : Declaration → (fuel : Nat) → Prop
   /-- The run is within the resource limits of spec 05.11 for the fuel `fuel`. -/
   withinLimits : Declaration → (fuel : Nat) → Prop
+
+/-- **Contract K1** of the thread pool (spec 10.7). For each thread count, each schedule and each set of jobs, the array of `runAll` is the array of the sequential twin. -/
+def Interface.K1 (I : Interface) : Prop :=
+  ∀ (threads : Nat) (sched : Nat → Nat) (n : Nat) (f : Nat → I.JobResult),
+    0 < threads → Contracts.ParallelAll n f (I.runAll threads sched n f)
+
+/-- **Contract K2** of the file read (spec 10.7). If the read gives bytes, they are the content of the file at open time. -/
+def Interface.K2 (I : Interface) : Prop :=
+  ∀ (fs : Contracts.FileSystem) (path : String) (bytes : ByteArray),
+    I.readInput fs path = .ok bytes → Contracts.ReadsAs fs path bytes
+
+/-- Under K1, two runs of the pool on the same jobs give the same array, for each thread count and each schedule. This is the part of theorem T5 that is about the pool. -/
+theorem Interface.runAll_eq (I : Interface) (hk : I.K1) {t₁ t₂ : Nat} (s₁ s₂ : Nat → Nat)
+    (n : Nat) (f : Nat → I.JobResult) (h₁ : 0 < t₁) (h₂ : 0 < t₂) :
+    I.runAll t₁ s₁ n f = I.runAll t₂ s₂ n f :=
+  Contracts.parallelAll_unique (hk t₁ s₁ n f h₁) (hk t₂ s₂ n f h₂)
 
 /-- The name `a.b.c` from its parts. -/
 def mkName (parts : List String) : Name :=

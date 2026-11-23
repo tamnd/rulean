@@ -10,6 +10,13 @@ on:
         description: "the tag to build, for example v0.1.1"
         required: true
         type: string
+  # A pull request that changes the build gets the two builds and the comparison of the hashes, but no packages and no release.
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
 
 permissions:
   contents: read
@@ -21,31 +28,84 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # The build must not depend on the time or the machine. Spec 12.6 requires that two independent builders get the same binary hash before a release is published.
+  SOURCE_DATE_EPOCH: 0
 
 jobs:
   build:
-    name: build (${{ matrix.target }})
+    name: build (${{ matrix.target }}, builder ${{ matrix.builder }})
     strategy:
       fail-fast: true
       matrix:
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, aarch64-apple-darwin, x86_64-pc-windows-msvc]
+        # Builder 1 tests the code and makes the package. Builder 2 is a second runner that builds from a checkout at a different path. The job verify compares the two binaries.
+        builder: [1, 2]
         include:
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, archive: tar.gz }
-          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, archive: tar.gz }
-          - { os: macos-latest, target: aarch64-apple-darwin, archive: tar.gz }
-          - { os: windows-latest, target: x86_64-pc-windows-msvc, archive: zip }
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest, archive: tar.gz }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm, archive: tar.gz }
+          - { target: aarch64-apple-darwin, os: macos-latest, archive: tar.gz }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest, archive: zip }
+          - { builder: 1, src: rulean }
+          - { builder: 2, src: other/src/rulean }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ matrix.src }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          path: ${{ matrix.src }}
       # No build cache in a release. A cache that a pull request wrote must not go into a release binary.
       - run: rustup show active-toolchain || rustup toolchain install
-      - run: cargo test --workspace --locked
+      # The two builders use the same target directory, so the paths of the object files are the same. The checkout path and the Cargo home are different on each machine, so the compiler replaces them with fixed names. On Windows, /Brepro removes the time stamp and /PDBALTPATH keeps only the file name of the PDB.
+      - name: build flags
+        env:
+          TARGET: ${{ matrix.target }}
+          TARGET_DIR: ${{ runner.temp }}/target
+        run: |
+          src="$(pwd -P)"
+          home="${CARGO_HOME:-$HOME/.cargo}"
+          if [ "$TARGET" = x86_64-pc-windows-msvc ]; then
+            src="$(cygpath -w "$src")"
+            home="$(cygpath -w "$home")"
+          fi
+          flags="--remap-path-prefix=${src}=/rulean --remap-path-prefix=${home}=/cargo"
+          if [ "$TARGET" = x86_64-pc-windows-msvc ]; then
+            flags="$flags -Clink-arg=/Brepro -Clink-arg=/PDBALTPATH:%_PDB%"
+          fi
+          {
+            echo "RUSTFLAGS=$flags"
+            echo "CARGO_TARGET_DIR=$TARGET_DIR"
+          } >> "$GITHUB_ENV"
+      - if: matrix.builder == 1
+        run: cargo test --workspace --locked
       - run: cargo build --locked --release --bin rulean
+      - name: hash
+        env:
+          TARGET: ${{ matrix.target }}
+          BUILDER: ${{ matrix.builder }}
+        run: |
+          ext=""
+          if [ "$TARGET" = x86_64-pc-windows-msvc ]; then ext=".exe"; fi
+          mkdir -p "$RUNNER_TEMP/hash"
+          cp "$CARGO_TARGET_DIR/release/rulean${ext}" "$RUNNER_TEMP/hash/rulean-${TARGET}-${BUILDER}${ext}"
+          cd "$RUNNER_TEMP/hash"
+          # macOS has shasum and not sha256sum.
+          if command -v sha256sum >/dev/null; then sum="sha256sum"; else sum="shasum -a 256"; fi
+          $sum "rulean-${TARGET}-${BUILDER}${ext}" | tee "rulean-${TARGET}-${BUILDER}.sha256"
+      # The job verify reads the hash. The binary is kept for 3 days, so that a person can compare the two binaries when the hashes are different.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: hash-${{ matrix.target }}-${{ matrix.builder }}
+          path: ${{ runner.temp }}/hash/*
+          if-no-files-found: error
+          retention-days: 3
       - name: package
-        shell: bash
+        if: matrix.builder == 1 && github.event_name != 'pull_request'
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
           TARGET: ${{ matrix.target }}
@@ -55,7 +115,7 @@ jobs:
           mkdir -p "dist/$name"
           ext=""
           if [ "$ARCHIVE" = zip ]; then ext=".exe"; fi
-          cp "target/release/rulean${ext}" "dist/$name/"
+          cp "$CARGO_TARGET_DIR/release/rulean${ext}" "dist/$name/"
           cp README.md CHANGELOG.md LICENSE-APACHE LICENSE-MIT "dist/$name/"
           "dist/$name/rulean${ext}" version | grep -F "rulean ${TAG#v}"
           cd dist
@@ -65,16 +125,47 @@ jobs:
             tar -czf "$name.tar.gz" "$name"
           fi
           rm -rf "$name"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - if: matrix.builder == 1 && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rulean-${{ matrix.target }}
-          path: dist/*
+          path: ${{ matrix.src }}/dist/*
           if-no-files-found: error
           retention-days: 7
 
+  verify:
+    name: verify (same binary hash)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: hash
+          pattern: hash-*
+          merge-multiple: true
+      - name: compare
+        working-directory: hash
+        run: |
+          status=0
+          for one in rulean-*-1.sha256; do
+            target="${one#rulean-}"
+            target="${target%-1.sha256}"
+            a="$(cut -d' ' -f1 "$one")"
+            b="$(cut -d' ' -f1 "rulean-${target}-2.sha256")"
+            if [ "$a" = "$b" ]; then
+              echo "$target: the two builders have the same hash $a"
+            else
+              echo "::error::$target: builder 1 has $a and builder 2 has $b"
+              status=1
+            fi
+          done
+          exit "$status"
+
   publish:
     name: publish
-    needs: build
+    needs: verify
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

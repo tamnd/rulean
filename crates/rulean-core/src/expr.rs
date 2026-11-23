@@ -5,6 +5,7 @@
 //! The official functions use `replace` with a cache for shared nodes. Here each function has its own recursion and a `Memo` keyed by the node and the binder offset. A free variable is an atom: the functions do not go into its type.
 
 use alloc::vec::Vec;
+use rulean_store::ids::raw;
 use rulean_store::{Expr, ExprId, Flags, LevelId, NameId, SATURATED, Store};
 
 use crate::level;
@@ -133,11 +134,11 @@ fn inst_rec(
         }
         return bvar_at(st, iv - n);
     }
-    match x.inst.get(e.0, offset) {
+    match x.inst.get(e.0, raw(offset)) {
         Some(r) => ExprId(r),
         None => {
             let r = inst_node(st, x, e, offset, s, subst, rev);
-            x.inst.put(e.0, offset, r.0);
+            x.inst.put(e.0, raw(offset), r.0);
             r
         }
     }
@@ -234,11 +235,11 @@ fn shift_rec(
         };
         return bvar_at(st, k);
     }
-    match m.get(e.0, offset) {
+    match m.get(e.0, raw(offset)) {
         Some(r) => ExprId(r),
         None => {
             let r = shift_node(st, m, e, offset, s, d, up);
-            m.put(e.0, offset, r.0);
+            m.put(e.0, raw(offset), r.0);
             r
         }
     }
@@ -313,11 +314,11 @@ fn abs_rec(st: &mut Store, x: &mut Scratch, e: ExprId, offset: u32, fvars: &[Exp
         }
         return bvar_at(st, offset as u64 + (n - hit - 1) as u64);
     }
-    match x.abs.get(e.0, offset) {
+    match x.abs.get(e.0, raw(offset)) {
         Some(r) => ExprId(r),
         None => {
             let r = abs_node(st, x, e, offset, fvars);
-            x.abs.put(e.0, offset, r.0);
+            x.abs.put(e.0, raw(offset), r.0);
             r
         }
     }
@@ -374,10 +375,10 @@ fn occ_rec(st: &Store, m: &mut Memo, e: ExprId, i: u64, offset: u32) -> bool {
         return j as u64 == k;
     }
     // A node seen before at this offset did not have the variable, else the walk would have stopped.
-    if m.contains(e.0, offset) {
+    if m.contains(e.0, raw(offset)) {
         return false;
     }
-    m.put(e.0, offset, 1);
+    m.put(e.0, raw(offset), 1);
     match st.node(e) {
         Expr::App(f, a) => occ_rec(st, m, f, i, offset) || occ_rec(st, m, a, i, offset),
         Expr::Lam(b) => occ_rec(st, m, b.dom, i, offset) || occ_rec(st, m, b.body, i, offset + 1),

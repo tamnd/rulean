@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use rulean_format::crc::crc32c;
 use rulean_format::rlb::*;
 use rulean_format::{Decl, Defn, Hints, InductType, QuotKind, Rec, Safety};
-use rulean_store::{BinderInfo, Expr, ExprId, Level, Literal, Name, NameId, Store, Tier};
+use rulean_store::{BinderInfo, Expr, ExprId, Level, Literal, Name, NameId, Raw, Store, Tier};
 
 /// The facts of the source export that go into the header.
 #[derive(Clone, Debug, Default)]
@@ -134,7 +134,7 @@ pub fn encode(store: &Store, decls: &[Decl], src: &Source) -> Result<(Vec<u8>, C
 struct Encoder<'a> {
     store: &'a Store,
     /// The file index of each expression that is written.
-    index: HashMap<u32, u32>,
+    index: HashMap<Raw, u32>,
     exprs: Vec<u8>,
     count: u64,
 }

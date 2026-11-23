@@ -49,11 +49,36 @@ pub enum Tier {
     Scratch,
 }
 
-/// The number of bits of the index field of an `ExprId`.
-pub const INDEX_BITS: u32 = 27;
+/// The integer type of an `ExprId`: `u32`, or `u64` with the `wide` feature.
+#[cfg(not(feature = "wide"))]
+pub type Raw = u32;
+/// The integer type of an `ExprId`: `u32`, or `u64` with the `wide` feature.
+#[cfg(feature = "wide")]
+pub type Raw = u64;
 
-/// The largest number of nodes of one kind in one tier: 2^27.
-pub const MAX_INDEX: u32 = 1 << INDEX_BITS;
+/// `x` as a value of the handle type.
+#[allow(
+    clippy::unnecessary_cast,
+    reason = "`Raw` is `u32` without the `wide` feature"
+)]
+pub const fn raw(x: u32) -> Raw {
+    x as Raw
+}
+
+/// The low 32 bits of `x`. The caller knows that `x` is a `u32` value, for example a value that `raw` gave.
+#[allow(
+    clippy::unnecessary_cast,
+    reason = "`Raw` is `u32` without the `wide` feature"
+)]
+pub const fn low(x: Raw) -> u32 {
+    x as u32
+}
+
+/// The number of bits of the index field of an `ExprId`.
+pub const INDEX_BITS: u32 = Raw::BITS - 5;
+
+/// The largest number of nodes of one kind in one tier: 2^27, or 2^59 with the `wide` feature.
+pub const MAX_INDEX: Raw = 1 << INDEX_BITS;
 
 /// A handle to an expression.
 ///
@@ -63,26 +88,26 @@ pub const MAX_INDEX: u32 = 1 << INDEX_BITS;
 /// bits 0..26  : index into the array of that kind in that tier
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ExprId(pub u32);
+pub struct ExprId(pub Raw);
 
 impl ExprId {
     /// The handle of node `index` of `kind` in `tier`. The caller makes sure that `index < MAX_INDEX`.
-    pub fn new(tier: Tier, kind: Kind, index: u32) -> ExprId {
-        let t: u32 = match tier {
+    pub fn new(tier: Tier, kind: Kind, index: Raw) -> ExprId {
+        let t: Raw = match tier {
             Tier::Frozen => 0,
             Tier::Scratch => 1,
         };
-        ExprId((t << 31) | ((kind as u32) << INDEX_BITS) | index)
+        ExprId((t << (Raw::BITS - 1)) | ((kind as Raw) << INDEX_BITS) | index)
     }
 
     /// The kind of the node. It needs no memory load.
     pub fn kind(self) -> Kind {
-        kind_of_bits((self.0 >> INDEX_BITS) & 0xf)
+        kind_of_bits(low((self.0 >> INDEX_BITS) & 0xf))
     }
 
     /// The tier of the node.
     pub fn tier(self) -> Tier {
-        if self.0 >> 31 == 0 {
+        if self.0 >> (Raw::BITS - 1) == 0 {
             Tier::Frozen
         } else {
             Tier::Scratch
@@ -135,5 +160,20 @@ mod tests {
             (f.kind(), f.tier(), f.index()),
             (Kind::FVar, Tier::Frozen, 0)
         );
+    }
+
+    #[test]
+    fn the_index_field_fills_the_handle() {
+        assert_eq!(INDEX_BITS + 5, Raw::BITS);
+        #[cfg(feature = "wide")]
+        {
+            // An index above 2^32 keeps its high bits.
+            let i: Raw = (1 << 40) + 3;
+            let e = ExprId::new(Tier::Frozen, Kind::App, i);
+            assert_eq!(
+                (e.kind(), e.tier(), e.index()),
+                (Kind::App, Tier::Frozen, i as usize)
+            );
+        }
     }
 }

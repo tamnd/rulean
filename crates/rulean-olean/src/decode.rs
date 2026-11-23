@@ -11,7 +11,8 @@ use rulean_format::{
 use rulean_nat::Nat;
 use std::collections::{BTreeMap, BTreeSet};
 
-use rulean_store::{BinderInfo, ExprId, LevelId, Name, NameId, Store};
+use rulean_store::ids::{low, raw};
+use rulean_store::{BinderInfo, ExprId, LevelId, Name, NameId, Raw, Store};
 
 use crate::region::{self, At, Field, Region, WORD, tag};
 use crate::{Fault, FaultKind, lean_hash};
@@ -59,7 +60,7 @@ pub struct Decoder<'a> {
     rg: &'a Region,
     st: &'a mut Store,
     /// For each part and each word of the part: the handle plus one, or zero.
-    ids: Vec<Vec<u32>>,
+    ids: Vec<Vec<Raw>>,
     /// For each part and each word of the part: the `Ty` of the position, or zero.
     tys: Vec<Vec<u8>>,
 }
@@ -87,7 +88,7 @@ impl<'a> Decoder<'a> {
         let ids = rg
             .parts
             .iter()
-            .map(|p| vec![0u32; p.bytes.len() / WORD])
+            .map(|p| vec![0; p.bytes.len() / WORD])
             .collect();
         let tys = rg
             .parts
@@ -98,7 +99,7 @@ impl<'a> Decoder<'a> {
     }
 
     /// The handle of `at` if the decoder has read it as `ty`. A position that has a different type is an error.
-    fn seen(&self, at: At, ty: Ty) -> Result<Option<u32>, Fault> {
+    fn seen(&self, at: At, ty: Ty) -> Result<Option<Raw>, Fault> {
         let i = at.off / WORD;
         let t = self.tys[at.part][i];
         if t == 0 {
@@ -110,7 +111,7 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    fn record(&mut self, at: At, ty: Ty, id: u32) -> Result<(), Fault> {
+    fn record(&mut self, at: At, ty: Ty, id: Raw) -> Result<(), Fault> {
         if self.st.is_full() {
             return Err(Fault::new(
                 FaultKind::StoreFull,
@@ -231,7 +232,7 @@ impl<'a> Decoder<'a> {
         let mut id = self.st.anon();
         loop {
             if let Some(k) = self.seen(cur, Ty::Name)? {
-                id = NameId(k);
+                id = NameId(low(k));
                 break;
             }
             self.rg.ctor(cur, 1..=2, 2, 8, "name")?;
@@ -258,7 +259,7 @@ impl<'a> Decoder<'a> {
                     None => return Err(decline(at, "a number in a name does not fit in 64 bits")),
                 }
             };
-            self.record(at, Ty::Name, id.0)?;
+            self.record(at, Ty::Name, raw(id.0))?;
         }
         Ok(id)
     }
@@ -316,10 +317,10 @@ impl<'a> Decoder<'a> {
                     ));
                 }
             };
-            self.record(at, Ty::Level, id.0)?;
+            self.record(at, Ty::Level, raw(id.0))?;
         }
         match self.seen(root, Ty::Level)? {
-            Some(k) => Ok(LevelId(k)),
+            Some(k) => Ok(LevelId(low(k))),
             None => Err(bad(root, "a level is not decoded")),
         }
     }
@@ -349,7 +350,7 @@ impl<'a> Decoder<'a> {
             return Ok(LevelId(0));
         };
         match self.seen(child, Ty::Level)? {
-            Some(k) => Ok(LevelId(k)),
+            Some(k) => Ok(LevelId(low(k))),
             None => Err(bad(child, "a level is not decoded")),
         }
     }

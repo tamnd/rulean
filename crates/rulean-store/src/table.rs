@@ -1,6 +1,6 @@
 //! The open-addressing table of spec 04.2.4 and 10.6.
 //!
-//! A table maps a 32-bit hash to one or more `u32` values. It does not know the keys. The caller walks the probe sequence with `start`, `get` and `next`, compares its own key at each value with the same hash, and calls `put` at the free position where the walk stopped. So the table has no closure and no trait, and a lookup never trusts a hash alone (spec 04.2.3).
+//! A table maps a 32-bit hash to one or more values of the handle type `Raw` (`u32`, or `u64` with the `wide` feature). It does not know the keys. The caller walks the probe sequence with `start`, `get` and `next`, compares its own key at each value with the same hash, and calls `put` at the free position where the walk stopped. So the table has no closure and no trait, and a lookup never trusts a hash alone (spec 04.2.3).
 //!
 //! A table can carry an epoch for each slot. Then `clear` is O(1): it moves to the next epoch, and every slot of an older epoch counts as free (spec 04.8). The frozen tier has no epochs.
 //!
@@ -34,20 +34,22 @@
 
 use alloc::vec::Vec;
 
+use crate::ids::Raw;
+
 /// The state of one slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Probe {
     /// The slot is free. A walk stops here.
     Free,
     /// The slot holds a value with this hash.
-    Full(u32, u32),
+    Full(u32, Raw),
 }
 
-/// An open-addressing table from 32-bit hashes to `u32` values, with linear probing.
+/// An open-addressing table from 32-bit hashes to values of the handle type `Raw`, with linear probing.
 #[derive(Clone, Debug)]
 pub struct Table {
     hashes: Vec<u32>,
-    values: Vec<u32>,
+    values: Vec<Raw>,
     /// The epoch of each slot, or no slots if the table has no epochs.
     epochs: Vec<u32>,
     use_epochs: bool,
@@ -60,7 +62,7 @@ pub struct Table {
 const FIRST_CAPACITY: usize = 16;
 
 /// A value that marks a free slot in a table without epochs.
-const FREE: u32 = u32::MAX;
+const FREE: Raw = Raw::MAX;
 
 impl Table {
     /// A new empty table. With `use_epochs`, `clear` is O(1).
@@ -115,7 +117,12 @@ impl Table {
 
     /// The number of bytes of the slots.
     pub fn bytes(&self) -> usize {
-        let per_slot = if self.use_epochs { 12 } else { 8 };
+        let value = (Raw::BITS / 8) as usize;
+        let per_slot = if self.use_epochs {
+            8 + value
+        } else {
+            4 + value
+        };
         self.capacity() * per_slot
     }
 
@@ -144,7 +151,7 @@ impl Table {
     }
 
     /// Puts `value` with `hash` in the free slot at `pos`, which is the slot where a walk for `hash` stopped. The table can grow, so the position is not valid after the call.
-    pub fn put(&mut self, pos: usize, hash: u32, value: u32) {
+    pub fn put(&mut self, pos: usize, hash: u32, value: Raw) {
         self.hashes[pos] = hash;
         self.values[pos] = value;
         if self.use_epochs {
@@ -158,7 +165,7 @@ impl Table {
     }
 
     /// Puts `value` with `hash` in the table without a lookup. The caller knows that no equal key is in the table.
-    pub fn put_new(&mut self, hash: u32, value: u32) {
+    pub fn put_new(&mut self, hash: u32, value: Raw) {
         let mut pos = self.start(hash);
         while self.get(pos) != Probe::Free {
             pos = self.next(pos);
@@ -204,7 +211,7 @@ impl Table {
 mod tests {
     use super::*;
 
-    fn find(t: &Table, keys: &[u64], key: u64, hash: u32) -> (Option<u32>, usize) {
+    fn find(t: &Table, keys: &[u64], key: u64, hash: u32) -> (Option<Raw>, usize) {
         let mut pos = t.start(hash);
         loop {
             match t.get(pos) {
@@ -226,12 +233,12 @@ mod tests {
                 let (found, pos) = find(&t, &keys, k, hash);
                 assert_eq!(found, None);
                 keys.push(k);
-                t.put(pos, hash, (keys.len() - 1) as u32);
+                t.put(pos, hash, (keys.len() - 1) as Raw);
             }
             assert_eq!(t.len(), 1000);
             assert!(t.capacity() >= 2000);
             for k in 0..1000u64 {
-                assert_eq!(find(&t, &keys, k, (k % 7) as u32).0, Some(k as u32));
+                assert_eq!(find(&t, &keys, k, (k % 7) as u32).0, Some(k as Raw));
             }
             t.clear();
             assert!(t.is_empty());

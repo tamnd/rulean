@@ -5,6 +5,7 @@
 //! `conv` opens a binder with a local declaration of the checker, as engine R does. So each free variable of a value is in the local context, and each value can be read back.
 
 use rulean_format::Hints;
+use rulean_store::ids::raw;
 use rulean_store::{BinderInfo, Expr, ExprId, LevelListId, NameId};
 
 use crate::env::compare_hints;
@@ -110,10 +111,12 @@ impl Checker {
         if self.bad() {
             return false;
         }
-        if self.c_conv_failure.contains(a.0, b.0) || self.c_conv_failure.contains(b.0, a.0) {
+        if self.c_conv_failure.contains(raw(a.0), raw(b.0))
+            || self.c_conv_failure.contains(raw(b.0), raw(a.0))
+        {
             return false;
         }
-        if self.c_conv_success.contains(a.0, b.0) {
+        if self.c_conv_success.contains(raw(a.0), raw(b.0)) {
             return true;
         }
         if !self.enter(self.dummy) {
@@ -123,9 +126,9 @@ impl Checker {
         self.leave();
         if !self.bad() {
             if r {
-                self.c_conv_success.put(a.0, b.0, 1);
+                self.c_conv_success.put(raw(a.0), raw(b.0), 1);
             } else {
-                self.c_conv_failure.put(a.0, b.0, 1);
+                self.c_conv_failure.put(raw(a.0), raw(b.0), 1);
             }
         }
         r && !self.bad()
@@ -223,7 +226,7 @@ impl Checker {
 
     /// `never_proof` for an application of the constant `c`, with a memo in `c_never_proof`. The function removes the Pi binders of the type of `c`. If the rest is a sort, an application of `c` is a type. If the rest is an application of an inductive type whose own type ends in a sort with a level that is never zero, an application of `c` is a value of a type that is not a proposition. A partial application of `c` has a Pi type whose codomain is that type, and it is also not a proposition. The function does not unfold the rest, so a type such as a definition that unfolds to a proposition gives false.
     fn const_never_proof(&mut self, c: NameId) -> bool {
-        if let Some(x) = self.c_never_proof.get(c.0, 0) {
+        if let Some(x) = self.c_never_proof.get(raw(c.0), 0) {
             return x == 1;
         }
         let slot = self.env.find(c);
@@ -234,7 +237,7 @@ impl Checker {
             let t = self.pi_codomain(ty);
             self.codomain_never_prop(t)
         };
-        self.c_never_proof.put(c.0, 0, if r { 1 } else { 2 });
+        self.c_never_proof.put(raw(c.0), 0, if r { 1 } else { 2 });
         r
     }
 

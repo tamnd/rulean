@@ -4,7 +4,8 @@
 
 use alloc::vec::Vec;
 use rulean_nat::Nat;
-use rulean_store::{BinderInfo, ExprId, LevelId, LevelListId, NameId, Store};
+use rulean_store::ids::{low, raw};
+use rulean_store::{BinderInfo, ExprId, LevelId, LevelListId, NameId, Raw, Store};
 
 use crate::decl::{
     Axiom, Ctor, Decl, Defn, Hints, Induct, InductType, Opaque, Quot, QuotKind, Rec, RecRule,
@@ -27,12 +28,12 @@ pub const MAX_NAT_DIGITS: usize = 323_228_497;
 pub const MAX_NAT_BITS: u64 = 1 << 30;
 
 /// The value of an undefined slot of an index table.
-const UNDEF: u32 = u32::MAX;
+const UNDEF: Raw = Raw::MAX;
 
 /// A table from the indices of one record kind to store handles.
 #[derive(Debug)]
 struct Index {
-    slots: Vec<u32>,
+    slots: Vec<Raw>,
 }
 
 impl Index {
@@ -40,7 +41,7 @@ impl Index {
         Index { slots: Vec::new() }
     }
 
-    fn get(&self, k: u64) -> u32 {
+    fn get(&self, k: u64) -> Raw {
         if k < self.slots.len() as u64 {
             self.slots[k as usize]
         } else {
@@ -275,7 +276,7 @@ impl Parser {
             self.fail(ErrorKind::UndefinedIndex);
             NameId(0)
         } else {
-            NameId(v)
+            NameId(low(v))
         }
     }
 
@@ -285,7 +286,7 @@ impl Parser {
             self.fail(ErrorKind::UndefinedIndex);
             LevelId(0)
         } else {
-            LevelId(v)
+            LevelId(low(v))
         }
     }
 
@@ -341,7 +342,7 @@ impl Parser {
     }
 
     /// Defines index `k` of a table. Index 0 of the name and level tables is defined from the start.
-    fn define(&mut self, which: Record, k: u64, v: u32) {
+    fn define(&mut self, which: Record, k: u64, v: Raw) {
         if k > MAX_TABLE_INDEX {
             self.fail(ErrorKind::IndexLimit);
         }
@@ -405,7 +406,7 @@ impl Parser {
                 id = store.name_num(pre, i);
             }
         }
-        self.define(Record::Name, k, id.0);
+        self.define(Record::Name, k, raw(id.0));
     }
 
     fn level_record(&mut self, store: &mut Store, b: &[u8], o: &Obj) {
@@ -444,7 +445,7 @@ impl Parser {
                 }
             }
         }
-        self.define(Record::Level, k, id.0);
+        self.define(Record::Level, k, raw(id.0));
     }
 
     fn expr_record(&mut self, store: &mut Store, b: &[u8], o: &Obj) {

@@ -81,9 +81,10 @@ fn version_text() -> String {
         ids.push(p.id());
     }
     format!(
-        "rulean {}\nprofiles: {}\nbuild: unverified",
+        "rulean {}\nprofiles: {}\nhandles: {}-bit\nbuild: unverified",
         env!("CARGO_PKG_VERSION"),
-        ids.join(", ")
+        ids.join(", "),
+        rulean_store::Raw::BITS
     )
 }
 
@@ -129,5 +130,6 @@ mod tests {
         let t = version_text();
         assert!(t.starts_with(&format!("rulean {}", env!("CARGO_PKG_VERSION"))));
         assert!(t.contains("profiles: v4.35"));
+        assert!(t.contains(&format!("handles: {}-bit", rulean_store::Raw::BITS)));
     }
 }

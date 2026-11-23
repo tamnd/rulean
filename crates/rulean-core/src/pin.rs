@@ -6,7 +6,8 @@
 
 use alloc::vec::Vec;
 use rulean_format::Safety;
-use rulean_store::{Expr, ExprId, Level, LevelId, LevelListId, Literal, Name, NameId, Store};
+use rulean_store::ids::raw;
+use rulean_store::{Expr, ExprId, Level, LevelId, LevelListId, Literal, Name, NameId, Raw, Store};
 
 use crate::env::ConstKind;
 use crate::memo::Memo;
@@ -142,16 +143,16 @@ impl Digest {
         }
     }
 
-    fn remember(&mut self, id: u32, kind: u32, h: [u8; 32]) -> [u8; 32] {
+    fn remember(&mut self, id: Raw, kind: u32, h: [u8; 32]) -> [u8; 32] {
         let i = self.out.len() as u32;
         self.out.push(h);
-        self.memo.put(id, kind, i);
+        self.memo.put(id, raw(kind), raw(i));
         h
     }
 
     /// The digest of a name.
     pub fn name(&mut self, st: &Store, n: NameId) -> [u8; 32] {
-        if let Some(i) = self.memo.get(n.0, K_NAME) {
+        if let Some(i) = self.memo.get(raw(n.0), raw(K_NAME)) {
             return self.out[i as usize];
         }
         let mut m: Vec<u8> = Vec::new();
@@ -171,12 +172,12 @@ impl Digest {
             }
         }
         let h = sha256(&m);
-        self.remember(n.0, K_NAME, h)
+        self.remember(raw(n.0), K_NAME, h)
     }
 
     /// The digest of a level.
     pub fn level(&mut self, st: &Store, l: LevelId) -> [u8; 32] {
-        if let Some(i) = self.memo.get(l.0, K_LEVEL) {
+        if let Some(i) = self.memo.get(raw(l.0), raw(K_LEVEL)) {
             return self.out[i as usize];
         }
         let mut m: Vec<u8> = Vec::new();
@@ -208,7 +209,7 @@ impl Digest {
             }
         }
         let h = sha256(&m);
-        self.remember(l.0, K_LEVEL, h)
+        self.remember(raw(l.0), K_LEVEL, h)
     }
 
     fn levels(&mut self, st: &Store, m: &mut Vec<u8>, ls: LevelListId) {
@@ -229,7 +230,7 @@ impl Digest {
 
     /// The digest of an expression. A free variable has no digest of its own, because a declaration has none.
     pub fn expr(&mut self, st: &Store, e: ExprId) -> [u8; 32] {
-        if let Some(i) = self.memo.get(e.0, K_EXPR) {
+        if let Some(i) = self.memo.get(e.0, raw(K_EXPR)) {
             return self.out[i as usize];
         }
         if self.depth >= MAX_DEPTH {

@@ -9,6 +9,7 @@
 use alloc::vec::Vec;
 use rulean_format::Safety;
 use rulean_nat::Nat;
+use rulean_store::ids::raw;
 use rulean_store::{BinderInfo, Expr, ExprId, LevelId, Literal, NameId, Store};
 
 use crate::conv::{Engine, FStats};
@@ -1115,7 +1116,7 @@ impl Checker {
             return self.dummy;
         }
         let mode = infer_only as u32;
-        let r = match self.c_infer.get(e.0, mode) {
+        let r = match self.c_infer.get(e.0, raw(mode)) {
             Some(r) => ExprId(r),
             None => {
                 // Only infer-only results go into the session: a check-mode result also depends on the level parameters and the safety of the declaration.
@@ -1127,13 +1128,13 @@ impl Checker {
                 };
                 match hit {
                     Some(r) => {
-                        self.c_infer.put(e.0, mode, r);
+                        self.c_infer.put(e.0, raw(mode), r);
                         ExprId(r)
                     }
                     None => {
                         let r = self.infer_type_node(e, infer_only);
                         if !self.bad() {
-                            self.c_infer.put(e.0, mode, r.0);
+                            self.c_infer.put(e.0, raw(mode), r.0);
                             if key {
                                 self.sess.note(S_INFER, e.0, 0, r.0);
                             }

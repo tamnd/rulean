@@ -7,6 +7,7 @@
 //! Free variables of the local context keep their level. `quote` gives the free variables that it makes under a binder the levels from the length of the local context up, and it reads them back as bound variables.
 
 use alloc::vec::Vec;
+use rulean_store::ids::{low, raw};
 use rulean_store::{Expr, ExprId, LevelListId, Literal, NameId};
 
 use crate::conv::{F_DELTA, F_TYPED};
@@ -193,8 +194,8 @@ impl Checker {
     pub fn force(&mut self, v0: ValueId) -> ValueId {
         let cached = self.force_cached(v0);
         if cached {
-            if let Some(w) = self.c_force.get(v0.0, 0) {
-                return ValueId(w);
+            if let Some(w) = self.c_force.get(raw(v0.0), 0) {
+                return ValueId(low(w));
             }
         }
         let mut v = v0;
@@ -206,7 +207,7 @@ impl Checker {
             }
         }
         if cached && !self.bad() {
-            self.c_force.put(v0.0, 0, v.0);
+            self.c_force.put(raw(v0.0), 0, raw(v.0));
         }
         v
     }
@@ -223,8 +224,8 @@ impl Checker {
     pub(crate) fn force_core(&mut self, v0: ValueId) -> ValueId {
         let cached = matches!(self.va.get(v0), Value::Neu(Head::Const(..), _));
         if cached {
-            if let Some(w) = self.c_force.get(v0.0, 1) {
-                return ValueId(w);
+            if let Some(w) = self.c_force.get(raw(v0.0), 1) {
+                return ValueId(low(w));
             }
         }
         let mut v = v0;
@@ -247,7 +248,7 @@ impl Checker {
             }
         }
         if cached && !self.bad() {
-            self.c_force.put(v0.0, 1, v.0);
+            self.c_force.put(raw(v0.0), 1, raw(v.0));
         }
         v
     }

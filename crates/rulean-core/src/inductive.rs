@@ -4,6 +4,7 @@
 
 use alloc::vec::Vec;
 use rulean_format::{Induct, Safety};
+use rulean_store::ids::raw;
 use rulean_store::{BinderInfo, Expr, ExprId, LevelId, LevelListId, NameId, Store};
 
 use crate::env::{ConstInfo, ConstKind, CtorInfo, InductInfo, RecInfo, RuleInfo};
@@ -377,7 +378,7 @@ impl Checker {
 
     /// `find` of `find_fn.h` for one kind of search. A free variable is a leaf.
     fn find(&mut self, s: &mut Ind, e: ExprId, what: u32) -> bool {
-        match s.occ.get(e.0, what) {
+        match s.occ.get(e.0, raw(what)) {
             Some(v) => v == 1,
             None => self.find_core(s, e, what),
         }
@@ -392,7 +393,7 @@ impl Checker {
             r = self.find_children(s, e, what);
         }
         self.leave();
-        s.occ.put(e.0, what, if r { 1 } else { 2 });
+        s.occ.put(e.0, raw(what), if r { 1 } else { 2 });
         r
     }
 
@@ -481,10 +482,10 @@ impl Checker {
     }
 
     fn uniform_occs(&mut self, s: &mut Ind, e: ExprId, offset: u32) {
-        if self.bad() || s.seen.contains(e.0, offset) {
+        if self.bad() || s.seen.contains(e.0, raw(offset)) {
             return;
         }
-        s.seen.put(e.0, offset, 1);
+        s.seen.put(e.0, raw(offset), 1);
         if !self.enter(e) {
             return;
         }

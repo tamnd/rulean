@@ -239,6 +239,14 @@ pub struct Region {
 }
 
 impl Region {
+    /// The bytes of the parts and of their object start maps, without the allocator overhead.
+    pub fn held(&self) -> usize {
+        self.parts
+            .iter()
+            .map(|p| p.bytes.capacity() + p.starts.capacity() * core::mem::size_of::<u64>())
+            .sum()
+    }
+
     /// Adds a part. A later part can point into the earlier parts, so the parts must not overlap. The root of the part must point to an object in this part or in an earlier part. The decoder does not read the root of the server part, so this check finds a server part that is cut after an object.
     pub fn push(&mut self, p: Part) -> Result<(), Fault> {
         let end = p

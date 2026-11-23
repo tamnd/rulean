@@ -10,7 +10,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ### Changed
 
-- `scripts/olean-xval.sh` cross-validates the `.olean` reader on a list of modules, Init and Std by default (spec 07.3.6). The new CI job `olean-xval` runs it on Lean v4.35.0, v4.36.0 and v4.37.0-rc1, so each profile except `master` and each olean version of these releases is in the check. The `lake comparator` job does not run it any more. Locally, Init and Std of v4.36.0 and Init of v4.35.0 give no difference.
+- The memory budget of `--max-memory` now includes the buffers and tables of the readers (spec 05.11.1). The CLI checks the line buffer of an NDJSON input and the buffer of a binary input, the NDJSON parser checks its index tables and its list of declarations, and the olean reader checks the parts of a module and the tables of its decoder. Before, one short NDJSON line with a large index made the parser allocate up to 1 GiB for each table, and the budget did not see it. Now such an input gives exit code 3 (resource) under a small budget. During the check, the list of declarations counts in the measure of the checker.
+- `scripts/olean-xval.sh` cross-validates the `.olean` reader on a list of modules, Init and Std by default (spec 07.3.6). The new CI job `olean-xval` runs it on Lean v4.35.0, v4.36.0 and v4.37.0-rc1, so each profile except `master` and each olean version of these releases is in the check. The `lake comparator` job does not run it any more. Locally, Init and Std of v4.35.0 and of v4.36.0 give no difference.
 
 ## [0.0.7] - 2026-11-23
 

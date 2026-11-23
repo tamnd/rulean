@@ -341,10 +341,36 @@ impl Parser {
         out
     }
 
-    /// Defines index `k` of a table. Index 0 of the name and level tables is defined from the start.
-    fn define(&mut self, which: Record, k: u64, v: Raw) {
+    /// The bytes of the index tables of the parser, without the allocator overhead.
+    pub fn bytes(&self) -> usize {
+        (self.names.slots.capacity() + self.levels.slots.capacity() + self.exprs.slots.capacity())
+            * core::mem::size_of::<Raw>()
+    }
+
+    /// The length and the capacity of the index table of `which`.
+    fn slots_size(&self, which: Record) -> (usize, usize) {
+        match which {
+            Record::Name => (self.names.slots.len(), self.names.slots.capacity()),
+            Record::Level => (self.levels.slots.len(), self.levels.slots.capacity()),
+            _ => (self.exprs.slots.len(), self.exprs.slots.capacity()),
+        }
+    }
+
+    /// Defines index `k` of a table. Index 0 of the name and level tables is defined from the start. If the table must grow above the memory budget of the store, the store is full (spec 05.11.1).
+    fn define(&mut self, store: &Store, which: Record, k: u64, v: Raw) {
         if k > MAX_TABLE_INDEX {
             self.fail(ErrorKind::IndexLimit);
+        }
+        if self.ok() {
+            let (len, cap) = self.slots_size(which);
+            let want = k as usize + 1;
+            if want > len && want > cap {
+                let grown = if want > cap * 2 { want } else { cap * 2 };
+                let extra = (grown - cap) * core::mem::size_of::<Raw>();
+                if store.over_budget(self.bytes() + extra) {
+                    self.fail(ErrorKind::StoreFull);
+                }
+            }
         }
         if self.ok() {
             let t = match which {
@@ -406,7 +432,7 @@ impl Parser {
                 id = store.name_num(pre, i);
             }
         }
-        self.define(Record::Name, k, raw(id.0));
+        self.define(store, Record::Name, k, raw(id.0));
     }
 
     fn level_record(&mut self, store: &mut Store, b: &[u8], o: &Obj) {
@@ -445,7 +471,7 @@ impl Parser {
                 }
             }
         }
-        self.define(Record::Level, k, raw(id.0));
+        self.define(store, Record::Level, k, raw(id.0));
     }
 
     fn expr_record(&mut self, store: &mut Store, b: &[u8], o: &Obj) {
@@ -479,7 +505,7 @@ impl Parser {
         } else {
             ExprId(0)
         };
-        self.define(Record::Expr, k, id.0);
+        self.define(store, Record::Expr, k, id.0);
     }
 
     /// Makes the node of an expression record. `which` is the key of the node kind.
@@ -954,17 +980,48 @@ impl Stream {
         !self.failed
     }
 
-    /// Reads one line, without its newline.
+    /// The bytes of the index tables and of the list of declarations, without the allocator overhead and without the vectors inside the declarations.
+    pub fn bytes(&self) -> usize {
+        self.p.bytes() + self.decls.capacity() * core::mem::size_of::<Decl>()
+    }
+
+    /// Reads one line, without its newline. If the list of declarations must grow above the memory budget of the store, the parse stops with the error `StoreFull` (spec 05.11.1).
     pub fn line(&mut self, store: &mut Store, b: &[u8]) {
         if !self.failed {
             match self.p.line(store, b) {
-                Ok(Some(d)) => self.decls.push(d),
+                Ok(Some(d)) => {
+                    if self.decls.len() == self.decls.capacity()
+                        && store.over_budget(
+                            self.bytes()
+                                + self.decls.capacity().max(4) * core::mem::size_of::<Decl>(),
+                        )
+                    {
+                        self.failed = true;
+                        self.err = Error {
+                            line: self.p.lines(),
+                            kind: ErrorKind::StoreFull,
+                        };
+                    } else {
+                        self.decls.push(d);
+                    }
+                }
                 Ok(None) => {}
                 Err(e) => {
                     self.failed = true;
                     self.err = e;
                 }
             }
+        }
+    }
+
+    /// Stops the parse with the error `StoreFull` at the next line. The caller uses this when a line does not fit in the memory budget. After an earlier error, this does nothing.
+    pub fn full(&mut self) {
+        if !self.failed {
+            self.failed = true;
+            self.err = Error {
+                line: self.p.lines() + 1,
+                kind: ErrorKind::StoreFull,
+            };
         }
     }
 

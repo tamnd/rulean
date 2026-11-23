@@ -27,6 +27,7 @@ The rules are:
 **Over-acceptance risk.** Rule 2 protects P2.a. It does not fully protect P2.b. The official algorithm is not transitive, so a search that uses only official rules can still find an equality that the official order misses. The known cases are in the Arena corner-case group (eta-struct-major, unit-like, subject-reduction-redex, transitivity through Quot and Acc). rulean handles this with a **confirm set**:
 
 - Engine F records, for each "equal" answer, the rules it used (a small bit set, not a full trace).
+- A rule that a cache saves still counts. Engine F keeps the unfolding of a constant in a slot and the result of `force` in a cache, and both live across the queries of a declaration. So a slot hit records a delta step, and a hit in the `force` cache records the rules of the steps that it saves.
 - If the set contains a type-directed rule (proof irrelevance, structure eta, unit-like, string expansion) together with a delta step on the same query, engine R confirms the answer.
 - If R says "not equal", the answer is "not equal". The case goes into the regression corpus.
 - In CI the confirm set is "all queries" (`--confirm=all`). That run shows how often the default confirm set is too small. The target is zero differences on the conformance corpus (11.2).

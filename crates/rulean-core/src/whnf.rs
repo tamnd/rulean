@@ -5,7 +5,7 @@
 use alloc::vec::Vec;
 use rulean_format::Hints;
 use rulean_nat::Nat;
-use rulean_store::{Expr, ExprId, Literal, NameId, NatId};
+use rulean_store::{Expr, ExprId, LevelListId, Literal, NameId, NatId};
 
 use crate::env::{ConstKind, RuleInfo};
 use crate::expr;
@@ -609,10 +609,14 @@ impl Checker {
     /// `is_delta`: the slot of the definition or theorem at the head of `e`, if its number of levels is right, or 0.
     pub(crate) fn is_delta(&self, e: ExprId) -> u32 {
         let f = expr::app_fn(&self.st, e);
-        let (n, ls) = match self.st.node(f) {
-            Expr::Const(n, ls) => (n, ls),
-            _ => return 0,
-        };
+        match self.st.node(f) {
+            Expr::Const(n, ls) => self.is_delta_const(n, ls),
+            _ => 0,
+        }
+    }
+
+    /// `is_delta` for the constant `n` with the levels `ls`.
+    pub(crate) fn is_delta_const(&self, n: NameId, ls: LevelListId) -> u32 {
         let s = self.env.find(n);
         if s == 0 {
             return 0;

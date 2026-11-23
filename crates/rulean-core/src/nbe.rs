@@ -55,7 +55,7 @@ impl Checker {
                 }
             },
             Expr::Sort(l) => self.v_alloc(Value::Sort(l)),
-            Expr::Const(n, us) => self.eval_const(n, us),
+            Expr::Const(n, us) => self.eval_const(e, n, us),
             Expr::App(f, a) => {
                 let vf = self.eval(env, f);
                 let va = self.eval(env, a);
@@ -107,10 +107,9 @@ impl Checker {
         r
     }
 
-    /// A constant: glued if it has a value and the right number of levels (`is_delta`), neutral otherwise.
-    fn eval_const(&mut self, n: NameId, us: LevelListId) -> ValueId {
-        let e = self.st.mk_const(n, us);
-        let r = if self.is_delta(e) != 0 {
+    /// A constant: glued if it has a value and the right number of levels (`is_delta`), neutral otherwise. `e` is the constant node, so the step makes no new node in the store.
+    fn eval_const(&mut self, e: ExprId, n: NameId, us: LevelListId) -> ValueId {
+        let r = if self.is_delta_const(n, us) != 0 {
             self.va.glued(n, us)
         } else {
             self.va.neutral(Head::Const(n, us))

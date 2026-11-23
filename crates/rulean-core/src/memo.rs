@@ -13,12 +13,18 @@ fn pair_hash(a: Raw, b: Raw) -> u32 {
     hash::finish(hash::mix_raw(hash::mix_raw(PAIR_SEED, a), b))
 }
 
+/// An entry of a `Memo`. The keys and the value are in one record, so a lookup reads one cache line for the entry.
+#[derive(Clone, Copy, Debug)]
+struct Entry {
+    a: Raw,
+    b: Raw,
+    v: Raw,
+}
+
 /// A map from a pair of keys to a value. The keys and the value have the handle type `Raw`, so an `ExprId` fits with the `wide` feature too.
 #[derive(Clone, Debug)]
 pub struct Memo {
-    ka: Vec<Raw>,
-    kb: Vec<Raw>,
-    vals: Vec<Raw>,
+    entries: Vec<Entry>,
     table: Table,
 }
 
@@ -32,28 +38,24 @@ impl Memo {
     /// An empty map.
     pub fn new() -> Memo {
         Memo {
-            ka: Vec::new(),
-            kb: Vec::new(),
-            vals: Vec::new(),
+            entries: Vec::new(),
             table: Table::new(true),
         }
     }
 
     /// The number of entries.
     pub fn len(&self) -> usize {
-        self.vals.len()
+        self.entries.len()
     }
 
     /// The number of bytes of the arrays and the table, without the allocator overhead.
     pub fn bytes(&self) -> usize {
-        (self.ka.capacity() + self.kb.capacity() + self.vals.capacity())
-            * core::mem::size_of::<Raw>()
-            + self.table.bytes()
+        self.entries.capacity() * core::mem::size_of::<Entry>() + self.table.bytes()
     }
 
     /// True if the map has no entry.
     pub fn is_empty(&self) -> bool {
-        self.vals.len() == 0
+        self.entries.len() == 0
     }
 
     /// The position of the key in the entry arrays plus 1, or 0. The second value is the table position where a walk for the key stopped.
@@ -66,7 +68,7 @@ impl Memo {
                 Probe::Free => walking = false,
                 Probe::Full(hh, v) => {
                     let i = v as usize;
-                    if hh == h && self.ka[i] == a && self.kb[i] == b {
+                    if hh == h && self.entries[i].a == a && self.entries[i].b == b {
                         found = i + 1;
                         walking = false;
                     } else {
@@ -84,7 +86,7 @@ impl Memo {
         if found == 0 {
             None
         } else {
-            Some(self.vals[found - 1])
+            Some(self.entries[found - 1].v)
         }
     }
 
@@ -100,21 +102,17 @@ impl Memo {
         let (found, pos) = self.find(a, b, h);
         if found != 0 {
             let k = found - 1;
-            self.vals[k] = v;
+            self.entries[k].v = v;
         } else {
-            let i = self.vals.len() as Raw;
-            self.ka.push(a);
-            self.kb.push(b);
-            self.vals.push(v);
+            let i = self.entries.len() as Raw;
+            self.entries.push(Entry { a, b, v });
             self.table.put(pos, h, i);
         }
     }
 
     /// Removes every entry. This is O(1) for the table.
     pub fn clear(&mut self) {
-        self.ka.truncate(0);
-        self.kb.truncate(0);
-        self.vals.truncate(0);
+        self.entries.truncate(0);
         self.table.clear();
     }
 }

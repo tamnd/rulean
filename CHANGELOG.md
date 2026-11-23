@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.0.10] - 2026-11-23
+
 ### Added
 
 - The weekly workflow `corpus` has the full suite of spec 08.7.2. After `rulean check`, it runs the official kernel `leanchecker --from-export` on the same export, and `scripts/corpus-gate.sh` checks that both accept, that the ratio of the CPU times is at least 10 (P1.a on Mathlib, P1.c on CSLib and Cedar), and that the peak memory of rulean is at most 4 GiB (P1.f). The runner has no hardware counters, so the ratio of CPU times is not the Arena measure.
@@ -209,7 +211,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.9...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.10...HEAD
+[0.0.10]: https://github.com/tamnd/rulean/compare/v0.0.9...v0.0.10
 [0.0.9]: https://github.com/tamnd/rulean/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/tamnd/rulean/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/tamnd/rulean/compare/v0.0.6...v0.0.7

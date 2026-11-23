@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use rulean_core::sha256::Hasher;
 use rulean_format::{Decl, Defn, Induct, InductType, Rec, Safety};
-use rulean_store::{Expr, ExprId, Name, NameId, Store};
+use rulean_store::{Expr, ExprId, Level, Name, NameId, Store};
 
 use crate::decode::{Decoder, Item};
 use crate::region::{Part, Region};
@@ -115,6 +115,8 @@ struct Loader<'a> {
     out: Loaded,
     first: bool,
     hash: Hasher,
+    /// The first position of `out.decls` that `load` must sort again after a replacement.
+    resort: Option<usize>,
 }
 
 /// Loads the modules `roots` and their import closure from the directories `search`. The first directory that has the `.olean` file of a module wins.
@@ -160,6 +162,10 @@ pub fn load(st: &mut Store, roots: &[String], search: &[PathBuf]) -> Result<Load
             l.out.modules.push(m);
         }
     }
+    if let Some(from) = l.resort {
+        let decls = std::mem::take(&mut l.out.decls);
+        l.out.decls = resort(l.st, decls, from, &index)?;
+    }
     l.out.sha256 = l.hash.finish();
     Ok(l.out)
 }
@@ -181,10 +187,11 @@ impl<'a> Loader<'a> {
             },
             first: true,
             hash: Hasher::new(),
+            resort: None,
         }
     }
 
-    /// Adds a declaration of module `m`. Lean can make the same auxiliary theorem in two modules, for example an equation lemma. Its import keeps the first theorem and accepts a second theorem with the same name, level parameters, type and `all` list. The loader does the same. Each other name must occur once.
+    /// Adds a declaration of module `m`. Each name must occur once, with one exception. Lean can make the same auxiliary theorem in two modules, for example an equation lemma. The import of Lean (`finalizeImport`) accepts a second constant when one of the two constants subsumes the other (`subsumes`). When the new constant subsumes the old constant, the new constant replaces the old constant, so the last copy wins. The loader does the same. The new constant goes to the position of the old constant. If its value uses a declaration that comes after this position, `load` sorts the declarations from this position again (`resort`).
     fn add(&mut self, m: &str, d: Decl, index: &mut BTreeMap<NameId, usize>) -> Result<(), Error> {
         let mut names = members(&d);
         names.sort();
@@ -196,19 +203,73 @@ impl<'a> Loader<'a> {
             self.out.decls.push(d);
             return Ok(());
         };
-        let prev = &self.out.decls[i];
-        let same = prev == &d
-            || matches!((prev, &d), (Decl::Thm(a), Decl::Thm(b)) if a.name == b.name && a.lparams == b.lparams && a.ty == b.ty && a.all == b.all);
-        if same {
+        let text = String::from_utf8_lossy(&self.st.name_text(n)).into_owned();
+        if self.subsumes(&d, &self.out.decls[i], index) {
+            if uses(self.st, &d, index, i).iter().any(|&u| u > i) {
+                self.resort = Some(self.resort.map_or(i, |r| r.min(i)));
+            }
+            self.out.decls[i] = d;
+            return Ok(());
+        }
+        if self.subsumes(&self.out.decls[i], &d, index) {
             return Ok(());
         }
         Err(plain(
             FaultKind::Malformed,
             format!(
-                "the module {m} declares {} again with a different value",
-                String::from_utf8_lossy(&self.st.name_text(n))
+                "the module {m} declares {text} again, and neither constant subsumes the other"
             ),
         ))
+    }
+
+    /// The `subsumesInfo` test of the import of Lean: `a` can replace `b`. The two constants must have the same name, level parameters and type. Then a theorem subsumes a theorem with the same `all` list, and a theorem subsumes a safe axiom when its `all` list is the name. An axiom subsumes an axiom with the same safety when the type is a proposition by the test `prop_cheap`. The values are not compared.
+    fn subsumes(&self, a: &Decl, b: &Decl, index: &BTreeMap<NameId, usize>) -> bool {
+        match (a, b) {
+            (Decl::Thm(x), Decl::Thm(y)) => {
+                x.name == y.name && x.lparams == y.lparams && x.ty == y.ty && x.all == y.all
+            }
+            (Decl::Thm(x), Decl::Axiom(y)) => {
+                x.name == y.name
+                    && x.lparams == y.lparams
+                    && x.ty == y.ty
+                    && x.all == [y.name]
+                    && y.safety == Safety::Safe
+            }
+            (Decl::Axiom(x), Decl::Axiom(y)) => {
+                x.name == y.name
+                    && x.lparams == y.lparams
+                    && x.ty == y.ty
+                    && x.safety == y.safety
+                    && self.prop_cheap(x.ty, index)
+            }
+            _ => false,
+        }
+    }
+
+    /// The `isPropCheap` test of the import of Lean. The type `ty` must have the form `(xs : As) -> p ys`, where `p` is a constant with a type `(zs : Bs) -> Prop` and `ys` and `zs` have the same length. The test does not instantiate the bound variables.
+    fn prop_cheap(&self, ty: ExprId, index: &BTreeMap<NameId, usize>) -> bool {
+        let mut e = ty;
+        while let Expr::Pi(b) = self.st.node(e) {
+            e = b.body;
+        }
+        let mut args = 0usize;
+        while let Expr::App(f, _) = self.st.node(e) {
+            e = f;
+            args += 1;
+        }
+        let Expr::Const(n, _) = self.st.node(e) else {
+            return false;
+        };
+        let Some(mut p) = index.get(&n).and_then(|&i| type_of(&self.out.decls[i], n)) else {
+            return false;
+        };
+        for _ in 0..args {
+            let Expr::Pi(b) = self.st.node(p) else {
+                return false;
+            };
+            p = b.body;
+        }
+        matches!(self.st.node(p), Expr::Sort(l) if self.st.level(l) == Level::Zero)
     }
 
     /// The base path of the files of `m`.
@@ -452,6 +513,86 @@ fn members(d: &Decl) -> Vec<NameId> {
             .collect(),
         Decl::Mutual(ds) => ds.iter().map(|x| x.name).collect(),
         _ => vec![d.name()],
+    }
+}
+
+/// Sorts the declarations from position `from` again, so that each declaration comes after the declarations that it uses. The sort is stable: a declaration moves only to come after a declaration that it uses. `index` gives the position of each name. A cycle is malformed.
+fn resort(
+    st: &Store,
+    mut decls: Vec<Decl>,
+    from: usize,
+    index: &BTreeMap<NameId, usize>,
+) -> Result<Vec<Decl>, Error> {
+    let n = decls.len();
+    // 0: not seen, 1: on the stack, 2: emitted.
+    let mut state = vec![0u8; n];
+    let mut seq = Vec::with_capacity(n - from);
+    for root in from..n {
+        if state[root] != 0 {
+            continue;
+        }
+        state[root] = 1;
+        let deps = |k: usize| -> Vec<usize> {
+            uses(st, &decls[k], index, k)
+                .into_iter()
+                .filter(|&u| u >= from)
+                .collect()
+        };
+        let mut stack: Vec<(usize, Vec<usize>, usize)> = vec![(root, deps(root), 0)];
+        while let Some((k, ds, next)) = stack.last_mut() {
+            if *next < ds.len() {
+                let u = ds[*next];
+                *next += 1;
+                match state[u] {
+                    0 => {
+                        state[u] = 1;
+                        let du = deps(u);
+                        stack.push((u, du, 0));
+                    }
+                    1 => {
+                        return Err(plain(
+                            FaultKind::Malformed,
+                            format!(
+                                "the declarations {} and {} use each other",
+                                String::from_utf8_lossy(&st.name_text(decls[*k].name())),
+                                String::from_utf8_lossy(&st.name_text(decls[u].name()))
+                            ),
+                        ));
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            state[*k] = 2;
+            seq.push(*k);
+            stack.pop();
+        }
+    }
+    let mut tail: Vec<Option<Decl>> = decls.drain(from..).map(Some).collect();
+    for k in seq {
+        if let Some(d) = tail[k - from].take() {
+            decls.push(d);
+        }
+    }
+    Ok(decls)
+}
+
+/// The type of the constant `n` of declaration `d`.
+fn type_of(d: &Decl, n: NameId) -> Option<ExprId> {
+    match d {
+        Decl::Axiom(x) => (x.name == n).then_some(x.ty),
+        Decl::Defn(x) => (x.name == n).then_some(x.ty),
+        Decl::Thm(x) => (x.name == n).then_some(x.ty),
+        Decl::Opaque(x) => (x.name == n).then_some(x.ty),
+        Decl::Quot(x) => (x.name == n).then_some(x.ty),
+        Decl::Mutual(ds) => ds.iter().find(|x| x.name == n).map(|x| x.ty),
+        Decl::Induct(b) => b
+            .types
+            .iter()
+            .find(|t| t.name == n)
+            .map(|t| t.ty)
+            .or_else(|| b.ctors.iter().find(|c| c.name == n).map(|c| c.ty))
+            .or_else(|| b.recs.iter().find(|r| r.name == n).map(|r| r.ty)),
     }
 }
 
@@ -900,30 +1041,90 @@ mod tests {
             },
             first: true,
             hash: Hasher::new(),
+            resort: None,
         }
     }
 
     #[test]
-    fn a_theorem_of_two_modules_is_added_once() {
+    fn a_later_theorem_with_the_same_statement_replaces_the_first() {
         let mut st = Store::new();
-        let (a, h) = (name(&mut st, "a"), name(&mut st, "h"));
+        let (a, h, q) = (name(&mut st, "a"), name(&mut st, "h"), name(&mut st, "q"));
         let p = prop(&mut st);
         let ta = cnst(&mut st, a);
+        let tq = cnst(&mut st, q);
         let mut l = loader(&mut st);
         let mut index = BTreeMap::new();
-        l.add("A", thm(h, p, ta), &mut index).expect("first");
-        l.add("B", thm(h, p, p), &mut index)
+        l.add("A", axiom(q, p), &mut index).expect("q");
+        l.add("A", thm(h, tq, ta), &mut index).expect("first");
+        l.add("B", thm(h, tq, tq), &mut index)
             .expect("same statement");
-        assert_eq!(l.out.decls.len(), 1);
-        l.add("A", axiom(a, p), &mut index).expect("axiom");
-        l.add("C", axiom(a, p), &mut index).expect("equal axiom");
+        assert_eq!(l.out.decls.len(), 2);
+        assert_eq!(l.out.decls[1], thm(h, tq, tq));
         let e = l
-            .add("D", axiom(a, ta), &mut index)
-            .expect_err("different axiom");
-        assert_eq!(e.kind, FaultKind::Malformed);
-        let e = l
-            .add("E", thm(h, ta, p), &mut index)
+            .add("E", thm(h, p, tq), &mut index)
             .expect_err("different statement");
+        assert_eq!(e.kind, FaultKind::Malformed);
+        // An axiom with a type `q`, where `q : Prop`, can occur two times, and a theorem replaces it.
+        l.add("A", axiom(a, tq), &mut index).expect("axiom");
+        l.add("C", axiom(a, tq), &mut index).expect("equal axiom");
+        l.add("D", thm(a, tq, tq), &mut index).expect("theorem");
+        assert_eq!(l.out.decls[2], thm(a, tq, tq));
+        // The axiom does not replace the theorem, and the theorem stays.
+        l.add("F", axiom(a, tq), &mut index)
+            .expect("axiom after theorem");
+        assert_eq!(l.out.decls[2], thm(a, tq, tq));
+        assert_eq!(l.out.decls.len(), 3);
+        // The type of `q` is not a proposition, so `q` cannot occur two times.
+        let e = l
+            .add("G", axiom(q, p), &mut index)
+            .expect_err("axiom of type Prop");
+        assert_eq!(e.kind, FaultKind::Malformed);
+    }
+
+    #[test]
+    fn a_replacement_that_uses_a_later_declaration_moves_after_it() {
+        let mut st = Store::new();
+        let (h, q, z, w) = (
+            name(&mut st, "h"),
+            name(&mut st, "q"),
+            name(&mut st, "z"),
+            name(&mut st, "w"),
+        );
+        let p = prop(&mut st);
+        let tq = cnst(&mut st, q);
+        let tz = cnst(&mut st, z);
+        let th = cnst(&mut st, h);
+        let mut l = loader(&mut st);
+        let mut index = BTreeMap::new();
+        l.add("A", axiom(q, p), &mut index).expect("q");
+        l.add("A", thm(h, tq, tq), &mut index).expect("first");
+        l.add("A", thm(w, tq, th), &mut index).expect("w uses h");
+        l.add("B", axiom(z, tq), &mut index).expect("z");
+        l.add("B", thm(h, tq, tz), &mut index).expect("uses z");
+        assert_eq!(l.resort, Some(1));
+        let st = &*l.st;
+        let decls = resort(st, l.out.decls, 1, &index).expect("sort");
+        let order: Vec<NameId> = decls.iter().map(Decl::name).collect();
+        assert_eq!(order, vec![q, z, h, w]);
+        assert_eq!(decls[2], thm(h, tq, tz));
+    }
+
+    #[test]
+    fn a_cycle_after_a_replacement_is_malformed() {
+        let mut st = Store::new();
+        let (h, q, z) = (name(&mut st, "h"), name(&mut st, "q"), name(&mut st, "z"));
+        let p = prop(&mut st);
+        let tq = cnst(&mut st, q);
+        let tz = cnst(&mut st, z);
+        let th = cnst(&mut st, h);
+        let mut l = loader(&mut st);
+        let mut index = BTreeMap::new();
+        l.add("A", axiom(q, p), &mut index).expect("q");
+        l.add("A", thm(h, tq, tq), &mut index).expect("first");
+        l.add("B", thm(z, tq, th), &mut index).expect("z uses h");
+        l.add("B", thm(h, tq, tz), &mut index).expect("h uses z");
+        let st = &*l.st;
+        let e = resort(st, l.out.decls, 1, &index).expect_err("cycle");
         assert_eq!(e.kind, FaultKind::Malformed);
     }
 

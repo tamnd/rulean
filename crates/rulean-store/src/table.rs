@@ -45,13 +45,28 @@ pub enum Probe {
     Full(u32, Raw),
 }
 
+/// A slot of a table without epochs. The hash and the value are in one record, so one step of a walk reads one cache line.
+#[derive(Clone, Copy, Debug)]
+struct Slot {
+    hash: u32,
+    value: Raw,
+}
+
+/// A slot of a table with epochs.
+#[derive(Clone, Copy, Debug)]
+struct EpochSlot {
+    epoch: u32,
+    hash: u32,
+    value: Raw,
+}
+
 /// An open-addressing table from 32-bit hashes to values of the handle type `Raw`, with linear probing.
 #[derive(Clone, Debug)]
 pub struct Table {
-    hashes: Vec<u32>,
-    values: Vec<Raw>,
-    /// The epoch of each slot, or no slots if the table has no epochs.
-    epochs: Vec<u32>,
+    /// The slots if the table has no epochs, or no slots.
+    slots: Vec<Slot>,
+    /// The slots if the table has epochs, or no slots.
+    eslots: Vec<EpochSlot>,
     use_epochs: bool,
     epoch: u32,
     count: usize,
@@ -76,22 +91,27 @@ impl Table {
         while cap < n {
             cap *= 2;
         }
-        let mut hashes = Vec::with_capacity(cap);
-        let mut values = Vec::with_capacity(cap);
-        let mut epochs = Vec::with_capacity(if use_epochs { cap } else { 0 });
+        let mut slots = Vec::with_capacity(if use_epochs { 0 } else { cap });
+        let mut eslots = Vec::with_capacity(if use_epochs { cap } else { 0 });
         let mut i = 0;
         while i < cap {
-            hashes.push(0);
-            values.push(FREE);
             if use_epochs {
-                epochs.push(0);
+                eslots.push(EpochSlot {
+                    epoch: 0,
+                    hash: 0,
+                    value: FREE,
+                });
+            } else {
+                slots.push(Slot {
+                    hash: 0,
+                    value: FREE,
+                });
             }
             i += 1;
         }
         Table {
-            hashes,
-            values,
-            epochs,
+            slots,
+            eslots,
             use_epochs,
             // The slots start in epoch 0, so the live epoch is 1 and every slot is free.
             epoch: 1,
@@ -117,11 +137,10 @@ impl Table {
 
     /// The number of bytes of the slots.
     pub fn bytes(&self) -> usize {
-        let value = (Raw::BITS / 8) as usize;
         let per_slot = if self.use_epochs {
-            8 + value
+            core::mem::size_of::<EpochSlot>()
         } else {
-            4 + value
+            core::mem::size_of::<Slot>()
         };
         self.capacity() * per_slot
     }
@@ -138,24 +157,33 @@ impl Table {
 
     /// The state of the slot at `pos`.
     pub fn get(&self, pos: usize) -> Probe {
-        let live = if self.use_epochs {
-            self.epochs[pos] == self.epoch
+        if self.use_epochs {
+            let s = self.eslots[pos];
+            if s.epoch == self.epoch {
+                Probe::Full(s.hash, s.value)
+            } else {
+                Probe::Free
+            }
         } else {
-            self.values[pos] != FREE
-        };
-        if live {
-            Probe::Full(self.hashes[pos], self.values[pos])
-        } else {
-            Probe::Free
+            let s = self.slots[pos];
+            if s.value != FREE {
+                Probe::Full(s.hash, s.value)
+            } else {
+                Probe::Free
+            }
         }
     }
 
     /// Puts `value` with `hash` in the free slot at `pos`, which is the slot where a walk for `hash` stopped. The table can grow, so the position is not valid after the call.
     pub fn put(&mut self, pos: usize, hash: u32, value: Raw) {
-        self.hashes[pos] = hash;
-        self.values[pos] = value;
         if self.use_epochs {
-            self.epochs[pos] = self.epoch;
+            self.eslots[pos] = EpochSlot {
+                epoch: self.epoch,
+                hash,
+                value,
+            };
+        } else {
+            self.slots[pos] = Slot { hash, value };
         }
         self.count += 1;
         // The load stays below 1/2, so a walk is short and always reaches a free slot.
@@ -180,9 +208,10 @@ impl Table {
         } else {
             let mut i = 0;
             while i < self.capacity() {
-                self.values[i] = FREE;
                 if self.use_epochs {
-                    self.epochs[i] = 0;
+                    self.eslots[i].epoch = 0;
+                } else {
+                    self.slots[i].value = FREE;
                 }
                 i += 1;
             }

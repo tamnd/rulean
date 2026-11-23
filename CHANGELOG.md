@@ -14,6 +14,10 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - When two modules declare the same constant and neither constant subsumes the other, the error of `rulean olean` now gives the kind of each constant, the module of the first constant and the first reason that the test of the import of Lean fails, for example that the types are not the same. The weekly corpus run found such a clash on Mathlib, and the old text did not give enough data to find the cause.
 - A manual run of the workflow `corpus` can skip the step check with the input `steps` set to `olean` (spec 11.2).
 
+### Fixed
+
+- The CI job `arena` failed on each push to `main` from 0.0.8. `scripts/arena-threads.sh` compared the counts `steps` and `interns` of the summary between one thread and four threads, but these counts depend on the job split, because each worker has its own store and caches. The script now does not compare them, and spec 08.3.4 gives the exception. The verdicts did not change.
+
 ## [0.0.8] - 2026-11-23
 
 ### Added

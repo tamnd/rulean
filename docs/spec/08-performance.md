@@ -63,7 +63,7 @@ Parallelism does not help P1 (instructions). It is needed for P1.e (60 s wall on
 
 ### 08.3.4 Determinism
 
-The verdict and the report do not depend on the thread count (T5, 10.1). Workers do not share caches. A session cache entry that one worker makes is not visible to another worker, so a worker's results depend only on its own job sequence. Each job's sequence is a function of the scheduler's deterministic job list, not of timing.
+The verdict and the report do not depend on the thread count (T5, 10.1). The exceptions are the work counts `steps` and `interns` of the summary and the session and engine counts, because each worker does its own work in its own store. They depend on the thread count, but not on timing. Workers do not share caches. A session cache entry that one worker makes is not visible to another worker, so a worker's results depend only on its own job sequence. Each job's sequence is a function of the scheduler's deterministic job list, not of timing.
 
 **Why not share caches between workers.** Sharing would save some work. It would also make the cache contents depend on timing. A cache entry is a true judgment, so sharing would still be sound, but it would make performance timing-dependent and the proof harder. rulean 1.0 does not share. A later release may add a read-only cache layer that is built in a first pass and then frozen.
 

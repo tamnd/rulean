@@ -1,5 +1,6 @@
 //! Tests of the declaration checks of engine R. The expected verdicts follow `environment.cpp` and `quot.cpp` of the official kernel v4.35.0.
 
+use rulean_core::conv::Engine;
 use rulean_core::env::{ConstInfo, ConstKind, CtorInfo, InductInfo};
 use rulean_core::tc::{Checker, ErrorKind};
 use rulean_format::{Axiom, Decl, Defn, Hints, Quot, QuotKind, Safety, Thm};
@@ -637,4 +638,116 @@ fn session_off_keeps_nothing() {
     assert_eq!(t.add(&Decl::Defn(d)), None);
     assert!(t.c.sess.is_empty());
     assert_eq!(t.c.sess.stats.hits, 0);
+}
+
+/// A checker with engine F (spec 05.4.5).
+fn engine_f(confirm_all: bool) -> T {
+    let mut t = T::new();
+    t.c.engine = Engine::F;
+    t.c.confirm_all = confirm_all;
+    t
+}
+
+/// Adds definitions that engine F inference accepts: a lambda, a `let` with a beta step, and a type with a beta step. It gives the number of declarations, with the two axioms of `nat`.
+fn f_accepts(t: &mut T) -> u64 {
+    let (nat, zero) = t.nat();
+    let b0 = t.bv(0);
+    let idf = t.lam("n", nat, b0);
+    let ty = t.pi("n", nat, nat);
+    let d = t.defn("id", ty, idf, Safety::Safe);
+    assert_eq!(t.add(&Decl::Defn(d)), None);
+    // `let x : Nat := Nat.zero; (fun y : Nat => y) x`
+    let app = t.app(idf, &[b0]);
+    let x = t.name("x");
+    let v = t.c.st.mk_let(x, nat, zero, app);
+    let d = t.defn("z1", nat, v, Safety::Safe);
+    assert_eq!(t.add(&Decl::Defn(d)), None);
+    // The type `(fun T : Type => T) Nat`.
+    let s1 = t.sort(1);
+    let tid = t.lam("T", s1, b0);
+    let ty = t.app(tid, &[nat]);
+    let d = t.defn("z2", ty, zero, Safety::Safe);
+    assert_eq!(t.add(&Decl::Defn(d)), None);
+    5
+}
+
+#[test]
+fn engine_f_checks_types_and_values() {
+    let mut t = engine_f(false);
+    let n = f_accepts(&mut t);
+    assert!(t.has("z2"));
+    let s = t.c.f_stats;
+    // Two type checks of the axioms, and a type check and a value check of each definition.
+    assert_eq!(s.infer, 2 * n - 2);
+    assert_eq!(s.infer_ok, s.infer);
+    assert_eq!(s.disagree, 0);
+}
+
+#[test]
+fn engine_f_with_confirm_all_agrees_with_engine_r() {
+    let mut t = engine_f(true);
+    let n = f_accepts(&mut t);
+    let s = t.c.f_stats;
+    assert_eq!(s.infer, 2 * n - 2);
+    assert_eq!(s.infer_ok, s.infer);
+    assert_eq!(s.disagree, 0);
+}
+
+#[test]
+fn engine_f_gives_the_errors_of_engine_r() {
+    let mut t = engine_f(false);
+    let (nat, zero) = t.nat();
+    let ty = t.pi("n", nat, nat);
+    // The value has the type `Nat`, not `Nat → Nat`.
+    let d = t.defn("bad", ty, zero, Safety::Safe);
+    assert_eq!(t.add(&Decl::Defn(d)), Some(ErrorKind::DefTypeMismatch));
+    assert!(!t.has("bad"));
+    // An element of `Nat` is not a type.
+    let d = t.axiom("y", &[], zero, Safety::Safe);
+    assert_eq!(t.add(&d), Some(ErrorKind::TypeExpected));
+    // The value of the `let` has the type `Nat → Nat`, not `Nat`.
+    let b0 = t.bv(0);
+    let idf = t.lam("n", nat, b0);
+    let x = t.name("x");
+    let v = t.c.st.mk_let(x, nat, idf, zero);
+    let d = t.defn("bad2", nat, v, Safety::Safe);
+    assert!(t.add(&Decl::Defn(d)).is_some());
+    assert!(!t.has("bad2"));
+    // A loose bound variable.
+    let d = t.defn("bad3", nat, b0, Safety::Safe);
+    assert!(t.add(&Decl::Defn(d)).is_some());
+    assert!(!t.has("bad3"));
+    let s = t.c.f_stats;
+    assert_eq!(s.disagree, 0);
+    // Engine F accepts the types of the two axioms and of the three definitions, and no value.
+    assert_eq!(s.infer_ok, 5);
+}
+
+#[test]
+fn engine_f_checks_a_long_let_chain() {
+    // The checker recurses on the depth of the terms, so the test runs in a thread with a large stack.
+    std::thread::Builder::new()
+        .stack_size(1 << 30)
+        .spawn(long_let_chain)
+        .expect("the thread starts")
+        .join()
+        .expect("the checker does not panic");
+}
+
+fn long_let_chain() {
+    let mut t = engine_f(false);
+    let (nat, zero) = t.nat();
+    // `let x : Nat := Nat.zero; let x : Nat := x; ...; x` with 5000 `let` terms.
+    let x = t.name("x");
+    let b0 = t.bv(0);
+    let mut v = b0;
+    for _ in 1..5000 {
+        v = t.c.st.mk_let(x, nat, b0, v);
+    }
+    v = t.c.st.mk_let(x, nat, zero, v);
+    let d = t.defn("chain", nat, v, Safety::Safe);
+    assert_eq!(t.add(&Decl::Defn(d)), None);
+    let s = t.c.f_stats;
+    assert_eq!(s.infer, 4);
+    assert_eq!(s.infer_ok, s.infer);
 }

@@ -15,6 +15,7 @@ use rulean_store::{BinderInfo, Expr, ExprId, LevelId, Literal, NameId, Store};
 use crate::conv::{Engine, FStats};
 use crate::env::{ConstKind, Env};
 use crate::expr::{self, Scratch};
+use crate::finfer::FInfer;
 use crate::level::{self, LevelCache};
 use crate::memo::Memo;
 use crate::pin;
@@ -325,6 +326,8 @@ pub struct Checker {
     pub(crate) x: Scratch,
     /// The value arena of engine F. It is cleared at the start of each declaration.
     pub(crate) va: Arena,
+    /// The contexts and caches of engine F inference. They are cleared together with the arena.
+    pub(crate) fi: FInfer,
     /// The number of binders that `quote` of engine F has opened. Their free variables are not in the local context.
     pub(crate) f_under: u32,
     /// The engine of the definitional equality queries (`--engine`).
@@ -400,6 +403,7 @@ impl Checker {
             lc: LevelCache::new(),
             x: Scratch::new(),
             va: Arena::new(),
+            fi: FInfer::new(),
             f_under: 0,
             engine: Engine::R,
             confirm_all: false,
@@ -450,6 +454,7 @@ impl Checker {
         self.lctx_val.truncate(0);
         self.clear_caches();
         self.va.reset();
+        self.fi.reset();
         self.f_under = 0;
         self.f_bits = 0;
         self.eq_depth = 0;
@@ -760,7 +765,7 @@ impl Checker {
     }
 
     /// `infer_constant`.
-    fn infer_constant(&mut self, e: ExprId, infer_only: bool) -> ExprId {
+    pub(crate) fn infer_constant(&mut self, e: ExprId, infer_only: bool) -> ExprId {
         let (n, list) = match self.st.node(e) {
             Expr::Const(n, list) => (n, list),
             _ => return self.fail(ErrorKind::BadConst, e),
@@ -866,7 +871,7 @@ impl Checker {
     }
 
     /// True if `e` is `eagerReduce _ _` (`is_eager_reduce`).
-    fn is_eager_reduce(&self, e: ExprId) -> bool {
+    pub(crate) fn is_eager_reduce(&self, e: ExprId) -> bool {
         let f = expr::app_fn(&self.st, e);
         self.pin_on(pin::PIN_EAGER)
             && self.is_constant_named(f, self.b.eager_reduce)

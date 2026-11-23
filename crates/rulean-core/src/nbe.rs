@@ -21,13 +21,13 @@ use crate::whnf::find_rule;
 
 impl Checker {
     /// A value to return after a fault. The caller must check `bad` before it uses the value.
-    fn v_dummy(&mut self) -> ValueId {
+    pub(crate) fn v_dummy(&mut self) -> ValueId {
         let z = self.st.level_zero();
         self.v_alloc(Value::Sort(z))
     }
 
     /// Adds a value. A full arena is a resource fault.
-    fn v_alloc(&mut self, v: Value) -> ValueId {
+    pub(crate) fn v_alloc(&mut self, v: Value) -> ValueId {
         let id = self.va.alloc(v);
         if self.va.full() {
             self.fail(ErrorKind::ArenaFull, self.dummy);
@@ -91,7 +91,7 @@ impl Checker {
         }
     }
 
-    fn env_push(&mut self, env: EnvId, v: ValueId) -> EnvId {
+    pub(crate) fn env_push(&mut self, env: EnvId, v: ValueId) -> EnvId {
         let r = self.va.env_push(env, v);
         if self.va.full() {
             self.fail(ErrorKind::ArenaFull, self.dummy);
@@ -99,7 +99,7 @@ impl Checker {
         r
     }
 
-    fn v_neutral(&mut self, h: Head) -> ValueId {
+    pub(crate) fn v_neutral(&mut self, h: Head) -> ValueId {
         let r = self.va.neutral(h);
         if self.va.full() {
             self.fail(ErrorKind::ArenaFull, self.dummy);

@@ -40,6 +40,10 @@ pub struct FStats {
     pub disagree: u64,
     /// The queries where engine F stopped with a fault, and engine R decided the query.
     pub faults: u64,
+    /// The type checks and value checks of declarations that engine F inference tried (spec 05.4.5).
+    pub infer: u64,
+    /// The type checks and value checks that engine F inference accepted. Engine R did the others.
+    pub infer_ok: u64,
 }
 
 /// A bit of `Checker::f_bits`: the query used a delta step.

@@ -383,6 +383,8 @@ fn add_f(a: &mut FStats, b: &FStats) {
     a.confirmed += b.confirmed;
     a.disagree += b.disagree;
     a.faults += b.faults;
+    a.infer += b.infer;
+    a.infer_ok += b.infer_ok;
 }
 
 /// Adds the counts of `b` to `a`.

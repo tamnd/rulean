@@ -122,6 +122,19 @@ Env   ::= persistent list of ValueId (in the arena)
 10. Function eta, structure eta, string literal expansion, unit-like (05.7.2).
 11. Otherwise "not equal". Then engine R runs on the read-back terms (05.1, rule 2).
 
+### 05.4.5 Inference in engine F
+
+Engine F also does the type check and the value check of a declaration (A§1.4, `check_constant_val` and the value check of `add_definition`). The judgments are the judgments of `infer_type_core` in check mode. Engine F only changes the representation: it infers types as values, and it does not substitute.
+
+- **Context tree.** A context is a node in a tree. A binder node has the key (domain term, parent node). A `let` node has the key (value term, parent node), and its type term must also be the same. The nodes are hash-consed, so two binders with the same domain in the same context are one node. Each node keeps the environment of the values of its bound variables and the environment of their types. A binder node has a local of the official local context at the de Bruijn level of the node, with the read-back of its domain as the type. A `let` node gets its local only when a term must be read back in its context.
+- **Caches.** The type of a term is cached with the key (term, node, mode), where the mode is infer-only or check. The value of a term is cached with the key (term, node). A closed term uses the root node, so its entries are shared by all contexts. The tree and the caches are cleared with the arena at the end of each declaration (04.5).
+- **Rules.** A bound variable gets its type from the environment of the node. A sort, a constant, a pi type and an application follow `infer_type_core`: a pi type gets `imax` of the levels of the domain and of the body, and an application forces the type of the function to a pi value, checks the type of the argument against the domain in check mode, and applies the closure to the value of the argument. A lambda gets the pi value of its domain and of the read-back of the type of its body. A `let` checks in check mode that its type is a sort and that the type of its value is equal to its type. Then the body is inferred in the `let` node. A literal, a projection and a free variable go to `infer_type_core` of engine R, on the term with the locals of the context.
+- **Evaluation.** An application and a `let` are evaluated with the context tree, so each node of a long chain is evaluated once in each context. A closure body without loose bound variables does not use its argument, so the argument is not evaluated.
+- **Stops.** Each equality check uses conversion of engine F (05.4.4). If the answer is "not equal", or if the answer is in the confirm set (05.1), or if the check meets `eagerReduce`, engine F stops. A fault, for example a full arena, also stops engine F. The fault is removed, and engine R does the full check of the declaration (05.1, rule 2). So a reject always comes from engine R.
+- **Confirm all.** With `--confirm all`, an answer in the confirm set does not stop engine F, because engine R checks the full declaration again after engine F accepts it. If engine R rejects a declaration that engine F accepted, the JSON report counts it in `r_disagree`.
+
+Inference in engine F is a reordering of the official algorithm: the order of the checks and the form of the inferred types are different. Its row in 05.7.3 is O6.
+
 ## 05.5 Engine R: the reference transcription
 
 Engine R is a direct port of `type_checker.cpp`, `inductive.h` and `quot.cpp` from the release of the profile. It works on stored terms with substitution (`instantiate`, `abstract`), as the official kernel does.
@@ -175,8 +188,11 @@ Engine F may change the order of steps only as listed here. Each row has a twin 
 | O3 | Skip `whnf_core` when both sides are already in head normal form | `whnf_core` is the identity on them | `force_core_idem` |
 | O4 | Evaluate `let` lazily | zeta is confluent with all other rules here; the official kernel also substitutes | `zeta_lazy` |
 | O5 | Unfold both sides at once when heights are equal | official step 5 does the same | `lazyDelta_equal_height` |
+| O6 | Infer types as values in a context tree (05.4.5) | the typing rules are the official rules, each equality check is a conversion of engine F, and a reject comes from engine R | not done |
 
 Rows are added only with a lemma, an Arena regression test and a corpus run that shows no verdict change.
+
+Row O6 has no lemma yet. This is an open item of M4. Until the lemma is proved, engine F is not the default engine, and the `arena` CI job runs each Arena test with `--confirm all`.
 
 The lemmas of O1 to O5 are in `proof/RuleanProof/Twin/Order.lean` and `proof/RuleanProof/Twin/Zeta.lean`. They are proved on a twin of the step order. The terms of this twin have no binders and no types, and the twin has no proof irrelevance and no eta. Theorem R1 (10.3) must still connect this twin to the Aeneas model of engine F.
 

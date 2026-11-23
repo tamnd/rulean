@@ -122,7 +122,7 @@ pub fn json(r: &Report) -> String {
     s.push_str(&format!("  \"pin_mismatch\": {},\n", list(&r.pin_mismatch)));
     let f = &r.f_stats;
     s.push_str(&format!(
-        "  \"engine\": {{ \"engine\": {}, \"confirm\": {}, \"f_queries\": {}, \"f_equal\": {}, \"f_fallback\": {}, \"f_faults\": {}, \"r_confirmed\": {}, \"r_disagree\": {} }},\n",
+        "  \"engine\": {{ \"engine\": {}, \"confirm\": {}, \"f_queries\": {}, \"f_equal\": {}, \"f_fallback\": {}, \"f_faults\": {}, \"r_confirmed\": {}, \"r_disagree\": {}, \"f_infer\": {}, \"f_infer_ok\": {} }},\n",
         quote(match r.engine {
             Engine::F => "F",
             Engine::R => "R",
@@ -133,7 +133,9 @@ pub fn json(r: &Report) -> String {
         f.fallback,
         f.faults,
         f.confirmed,
-        f.disagree
+        f.disagree,
+        f.infer,
+        f.infer_ok
     ));
     let t = &r.s_stats;
     s.push_str(&format!(

@@ -108,10 +108,31 @@ pub fn read_module(st: &mut Store, search: &[PathBuf], m: &str) -> Result<Module
     l.module(m)
 }
 
+/// Decodes one module from the bytes of its parts, in the order `.olean`, `.olean.server`, `.olean.private`. `None` is a part that does not exist. The module has the same checks as a module that `read_module` reads from files. An error gives the part as the file `mem.olean`, `mem.olean.server` or `mem.olean.private`. The fuzz targets use this function (spec 11.5.1).
+pub fn decode_parts(st: &mut Store, parts: [Option<Vec<u8>>; 3]) -> Result<Module, Error> {
+    let mut l = Loader::new(st, &[]);
+    let files = part_files(Path::new("mem"));
+    let mut mem = BTreeMap::new();
+    for (f, b) in files.iter().zip(parts) {
+        if let Some(b) = b {
+            mem.insert(f.clone(), b);
+        }
+    }
+    l.mem = Some(mem);
+    l.module_files(&files)
+}
+
+/// The files of the parts of the module with the base path `base`, in load order.
+fn part_files(base: &Path) -> Vec<PathBuf> {
+    PARTS.iter().map(|x| base.with_extension(x)).collect()
+}
+
 /// The state of the loader.
 struct Loader<'a> {
     st: &'a mut Store,
     search: &'a [PathBuf],
+    /// The bytes of each file, for `decode_parts`. `None` reads the files from the file system.
+    mem: Option<BTreeMap<PathBuf, Vec<u8>>>,
     out: Loaded,
     first: bool,
     hash: Hasher,
@@ -175,6 +196,7 @@ impl<'a> Loader<'a> {
         Loader {
             st,
             search,
+            mem: None,
             out: Loaded {
                 decls: Vec::new(),
                 lean_version: Vec::new(),
@@ -294,7 +316,14 @@ impl<'a> Loader<'a> {
 
     /// Reads one part and checks that its Lean version is the same as the version of the first part.
     fn part(&mut self, p: &Path) -> Result<Part, Error> {
-        let bytes = std::fs::read(p).map_err(|e| Error {
+        let read = match &self.mem {
+            Some(m) => m
+                .get(p)
+                .cloned()
+                .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound)),
+            None => std::fs::read(p),
+        };
+        let bytes = read.map_err(|e| Error {
             kind: FaultKind::Io,
             file: Some(p.to_path_buf()),
             offset: 0,
@@ -325,31 +354,43 @@ impl<'a> Loader<'a> {
         Ok(part)
     }
 
+    /// True if the file `p` exists.
+    fn exists(&self, p: &Path) -> bool {
+        match &self.mem {
+            Some(m) => m.contains_key(p),
+            None => p.is_file(),
+        }
+    }
+
     /// Reads and decodes the module `m`.
     fn module(&mut self, m: &str) -> Result<Module, Error> {
         let base = self.find(m)?;
-        let files: Vec<PathBuf> = PARTS.iter().map(|x| base.with_extension(x)).collect();
+        self.module_files(&part_files(&base))
+    }
+
+    /// Reads and decodes the module with the part files `files`.
+    fn module_files(&mut self, files: &[PathBuf]) -> Result<Module, Error> {
         let mut rg = Region::default();
         let first = self.part(&files[0])?;
         rg.push(first).map_err(|f| at_file(&files[0], f))?;
         // Read the public part first. For a module of the module system, also read the other parts.
         let public = {
             let mut d = Decoder::new(&rg, self.st);
-            d.module_data(0).map_err(|f| at_part(&files, f, 0))?
+            d.module_data(0).map_err(|f| at_part(files, f, 0))?
         };
         if !public.is_module {
             let imports = self.imports(&public.imports, &files[0])?;
-            let decls = order(self.st, public.constants).map_err(|f| at_part(&files, f, 0))?;
+            let decls = order(self.st, public.constants).map_err(|f| at_part(files, f, 0))?;
             return Ok(Module { imports, decls });
         }
         for f in &files[1..] {
-            if f.is_file() {
+            if self.exists(f) {
                 let p = self.part(f)?;
                 rg.push(p).map_err(|e| at_file(f, e))?;
             }
         }
         let last = rg.parts.len() - 1;
-        if !files[2].is_file() {
+        if !self.exists(&files[2]) {
             return Err(Error {
                 kind: FaultKind::Missing,
                 file: Some(files[2].clone()),
@@ -359,11 +400,11 @@ impl<'a> Loader<'a> {
         }
         let (public, private) = {
             let mut d = Decoder::new(&rg, self.st);
-            let public = d.module_data(0).map_err(|f| at_part(&files, f, 0))?;
-            let private = d.module_data(last).map_err(|f| at_part(&files, f, last))?;
+            let public = d.module_data(0).map_err(|f| at_part(files, f, 0))?;
+            let private = d.module_data(last).map_err(|f| at_part(files, f, last))?;
             (public, private)
         };
-        let last_file = &rg_file(&files, &rg, last);
+        let last_file = &rg_file(files, &rg, last);
         if private.imports != public.imports || !private.is_module {
             return Err(Error {
                 kind: FaultKind::Malformed,
@@ -379,7 +420,7 @@ impl<'a> Loader<'a> {
             msg,
         })?;
         let imports = self.imports(&public.imports, &files[0])?;
-        let decls = order(self.st, private.constants).map_err(|f| at_part(&files, f, last))?;
+        let decls = order(self.st, private.constants).map_err(|f| at_part(files, f, last))?;
         Ok(Module { imports, decls })
     }
 
@@ -1029,6 +1070,7 @@ mod tests {
         Loader {
             st,
             search: &[],
+            mem: None,
             out: Loaded {
                 decls: Vec::new(),
                 lean_version: Vec::new(),

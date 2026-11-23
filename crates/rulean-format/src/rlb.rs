@@ -453,9 +453,12 @@ impl Decoder {
     }
 
     /// A count of items of at least `size` bytes each that follow in the section.
+    /// A count of items of `size` bytes or more. The count must fit in the rest of the section, so that a wrong count cannot make a large allocation. After an earlier error the count is 0, because the bytes are not checked then.
     fn count(&mut self, b: &[u8], size: usize) -> usize {
         let n = self.word(b) as usize;
-        if self.ok() && n > (self.end - self.pos) / size {
+        if !self.ok() {
+            0
+        } else if n > (self.end - self.pos) / size {
             self.fail(ErrorKind::BadBinary);
             0
         } else {
@@ -577,7 +580,9 @@ impl Decoder {
             if self.ok() && k as u64 > MAX_NAT_BITS / 64 {
                 self.fail(ErrorKind::NatTooLarge);
             }
-            let mut limbs = Vec::with_capacity(k);
+            // After an error, `k` was not checked.
+            let cap = if self.ok() { k } else { 0 };
+            let mut limbs = Vec::with_capacity(cap);
             let mut j = 0;
             while j < k && self.ok() {
                 let x = self.long(b);
@@ -1021,5 +1026,36 @@ fn tables(store: &mut Store, b: &[u8], h: Header, secs: &[Section]) -> Result<Bi
     match d.fault {
         Some(kind) => Err(Error { line: 0, kind }),
         None => Ok(Binary { header: h, decls }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn decoder(end: usize, fault: Option<ErrorKind>) -> Decoder {
+        Decoder {
+            pos: 0,
+            end,
+            fault,
+            strs: Vec::new(),
+            names: Vec::new(),
+            levels: Vec::new(),
+            nats: Vec::new(),
+            exprs: Vec::new(),
+            lv: Vec::new(),
+        }
+    }
+
+    /// A fuzz find (spec 11.5.1): after an earlier error, a count of 0xffff_ffff made a list of 6 GB. Now the count is 0.
+    #[test]
+    fn a_count_after_an_error_is_zero() {
+        let b = [0xff; 8];
+        let mut d = decoder(8, Some(ErrorKind::BadEnumValue));
+        assert_eq!(d.count(&b, 4), 0);
+        assert!(d.names_list(&b).is_empty());
+        let mut d = decoder(8, None);
+        assert_eq!(d.count(&b, 4), 0);
+        assert_eq!(d.fault, Some(ErrorKind::BadBinary));
     }
 }

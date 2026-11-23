@@ -19,7 +19,7 @@ pub mod lean_hash;
 pub mod load;
 pub mod region;
 
-pub use load::{Loaded, Module, digest, load, module_path, read_module};
+pub use load::{Loaded, Module, decode_parts, digest, load, module_path, read_module};
 
 use std::fmt;
 use std::path::PathBuf;

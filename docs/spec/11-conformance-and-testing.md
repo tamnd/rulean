@@ -81,6 +81,13 @@ The corpus is the working meaning of "every Lean program" (02.2). It grows and n
 
 Fuzz runs take 100 CPU-hours each week. Every find becomes a regression test.
 
+State of the fuzzing:
+
+- Byte fuzzing has three targets in `fuzz/`: `olean`, `ndjson` and `rlb`. The workflow `fuzz` runs each target for 60 s on a pull request that changes the readers, and for 20 minutes each week. This is about 1 CPU-hour each week, not 100.
+- The first local run of 10 minutes for each target found one fault in the `.rlb` decoder: after an error, the count of a list was not checked, and the decoder asked for about 6 GB. The fix makes a count after an error zero. The find is a regression test in `crates/rulean-format/tests/fuzz/`.
+- A second local run of 10 minutes for each target, after the fix, found nothing. It ran 1.2 M inputs on `olean`, 3.2 M on `ndjson` and 21.6 M on `rlb`.
+- Grammar fuzzing and type-directed fuzzing are not started.
+
 ### 11.5.2 Mutation testing
 
 - **Input mutation.** For each check in 05.9 and 06.2, a mutator breaks that one property in a valid declaration of the corpus (a wrong universe, a non-positive occurrence, a wrong projection index, a wrong recursor rule, a duplicate level parameter, and so on). rulean must reject every mutant that the official kernel rejects.

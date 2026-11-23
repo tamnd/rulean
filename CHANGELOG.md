@@ -17,6 +17,13 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `rulean-bench gate` checks limits on each result of a run file: `--correct`, `--max-virtual-seconds`, `--max-rss-mib` and `--max-wall`, with `--filter` to select the tests. It exits with code 1 if a limit fails or if no test matches.
 - The workflow `nightly` runs rulean on the Arena tests each night with the cachegrind counter, prints the ratios to the official kernel as a trend, and checks two gates: correct verdicts with at most 4 GiB of peak memory, and no `perf/` test above 1 virtual second (P1.d). At this time the P1.d gate fails: 16 of the 42 `perf/` tests take more than 2 s, and `perf/magma-list-deep-n36` takes 243.7 G instructions.
 - `tests/fixture.rs` of `rulean-olean` decodes the real files of `Init.Control.Do` of v4.36.0. It also decodes cut copies, which must give an error, and 1500 copies with changed bytes, which must give an error or a result and never a panic.
+- `rulean_olean::decode_parts` decodes the three parts of one module from bytes in memory, with the same checks as the load from files. The fuzz target `olean` uses it.
+- The directory `fuzz/` has three `cargo fuzz` targets of spec 11.5.1: `olean` (the parts of one module), `ndjson` (the NDJSON scanner and parser) and `rlb` (the `.rlb` decoder). The binary `seeds` makes the first corpus from the test files. The workflow `fuzz` runs each target for 60 s on a pull request that changes the readers, and for 20 minutes each week.
+- `tests/fuzz.rs` of `rulean-format` decodes each find of the fuzzer in `tests/fuzz/`, and each find must give an error.
+
+### Fixed
+
+- The `.rlb` decoder could allocate a very large vector after an earlier error in the same file, because the count of a list was not checked after the error. A count after an error is now zero, and the limbs of a number have the same check. The fuzz target `rlb` found this with a file of 3805 bytes that asked for about 6 GB.
 
 ### Changed
 

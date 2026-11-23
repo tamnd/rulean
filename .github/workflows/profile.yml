@@ -1,0 +1,68 @@
+name: profile
+
+# A manual instruction profile of `rulean check` on a module of Lean v4.36.0 (spec 08.7.3). GitHub-hosted runners have no hardware counters, so the job runs rulean under valgrind. The artifact has the profile, the annotation of each function and the JSON report.
+on:
+  workflow_dispatch:
+    inputs:
+      module:
+        description: The module to export and check
+        type: choice
+        default: Init
+        options:
+          - Init
+          - Init.Prelude
+          - Std
+      tool:
+        description: The valgrind tool
+        type: choice
+        default: callgrind
+        options:
+          - callgrind
+          - cachegrind
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.module }}
+  cancel-in-progress: false
+
+jobs:
+  profile:
+    name: profile (${{ inputs.module }}, ${{ inputs.tool }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      LEAN_ASSET: lean-4.36.0-linux.tar.zst
+      LEAN_SHA256: 2b7ab1ed8b92d2e6abfaf41344823b510064dbc9c0260cac73eb496ab2dea6eb
+      MODULE: ${{ inputs.module }}
+      TOOL: ${{ inputs.tool }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: false
+      - run: cargo build --locked --release --bin rulean
+      - name: install valgrind
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -q -y --no-install-recommends valgrind
+          valgrind --version
+      - name: the Lean v4.36.0 release
+        run: |
+          mkdir -p _tmp/lean
+          curl -sSfL --retry 3 -o "_tmp/lean/$LEAN_ASSET" "https://github.com/leanprover/lean4/releases/download/v4.36.0/$LEAN_ASSET"
+          echo "$LEAN_SHA256  _tmp/lean/$LEAN_ASSET" | sha256sum -c -
+          tar --zstd -xf "_tmp/lean/$LEAN_ASSET" -C _tmp/lean
+          echo "$PWD/_tmp/lean/lean-4.36.0-linux/bin" >> "$GITHUB_PATH"
+      - name: the profile
+        run: scripts/profile.sh "$MODULE" _tmp/profile
+      - name: upload the profile
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: profile-${{ inputs.module }}-${{ inputs.tool }}
+          path: _tmp/profile
+          retention-days: 30

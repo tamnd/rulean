@@ -147,6 +147,7 @@ State of the profiling:
 
 - The option `--profile` of `rulean check` selects the semantics profile (05.2), so the counters need another option name. The counters are not written yet.
 - The JSON report has the field `slowest`, with the 10 slowest declarations of a sequential run and the wall time of each (09.4).
+- The manual workflow `profile` runs `scripts/profile.sh` on a GitHub-hosted runner. The script exports Init, `Init.Prelude` or Std of Lean v4.36.0 and runs `rulean check` with one thread under callgrind or cachegrind. The artifact has the instruction count of each function, with and without the functions that it calls. A time sample on macOS gives more weight to the cache misses, so it does not show where the instructions are. The Arena counts instructions.
 - On the slow `perf/` tests, one to three declarations take nearly all of the time. On `perf/app-lam`, the declaration `dag_app_binder` takes 6.0 s, and the trace has no conversion rule. So the time is in the type inference of engine R, which puts a new local into each lambda body by substitution, as the official kernel does. Engine F has type inference now (05.4.5). With `--engine F`, this test uses 0.55 G instructions and not 50 G. Engine R is still the default engine, so the default time does not change.
 
 ### 08.7.4 Work gate

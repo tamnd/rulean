@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- The manual workflow `profile` gives an instruction profile of `rulean check` on Init, `Init.Prelude` or Std of Lean v4.36.0 (spec 08.7.3). `scripts/profile.sh` exports the module with leanexport and runs the check under callgrind or cachegrind, and the artifact has the cost of each function.
+
 ### Changed
 
 - A slot of the hash table of the store is one record with the hash, the handle and the epoch, and an entry of a memo map of the checker is one record with the keys and the value (spec 04.2.4). Before, each field was in its own array, so one step of a walk read up to six cache lines. On the Init export of v4.36.0, `rulean check` used 236.3 G instructions and now uses 226.5 G, and the peak memory went from 471 MB to 424 MB. The verdict and the counts of the report do not change.

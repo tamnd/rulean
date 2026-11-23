@@ -82,6 +82,10 @@ pub struct Store {
     pub(crate) scratch: expr::Nodes,
     pub(crate) use_scratch: bool,
     pub(crate) full: bool,
+    // The bytes of the limbs of the large natural number literals.
+    pub(crate) nat_heap: usize,
+    // The memory budget of the store in bytes (`--max-memory`, spec 12.3). `usize::MAX` is no budget.
+    pub(crate) max_bytes: usize,
 }
 
 impl Default for Store {
@@ -117,6 +121,8 @@ impl Store {
             scratch: expr::Nodes::new(true),
             use_scratch: false,
             full: false,
+            nat_heap: 0,
+            max_bytes: usize::MAX,
         };
         s.init_names();
         s.init_levels();
@@ -128,6 +134,21 @@ impl Store {
         self.full
     }
 
+    /// Sets the memory budget of the store in bytes (`--max-memory`, spec 12.3). When an array of expressions must grow and the store would then use more than `bytes`, the store is full, as at the capacity limit. `usize::MAX` is no budget, and this is the default.
+    pub fn set_max_bytes(&mut self, bytes: usize) {
+        self.max_bytes = bytes;
+    }
+
+    /// The memory budget of the store in bytes. `usize::MAX` is no budget.
+    pub fn max_bytes(&self) -> usize {
+        self.max_bytes
+    }
+
+    /// True if the store would use more than its budget after `extra` more bytes. With no budget, this is always false. The cost is a few additions, so a caller can use it at each growth of an array.
+    pub(crate) fn over_budget(&self, extra: usize) -> bool {
+        self.max_bytes != usize::MAX && self.memory().total().saturating_add(extra) > self.max_bytes
+    }
+
     /// The number of bytes that the arrays and tables of the store use, without the allocator overhead. This is the measure of spec 04.9.
     pub fn memory(&self) -> Memory {
         let tables = self.str_table.bytes()
@@ -137,14 +158,7 @@ impl Store {
             + self.nat_table.bytes()
             + self.exprs.table.bytes()
             + self.scratch.table.bytes();
-        let mut nat_bytes = self.nats.capacity() * core::mem::size_of::<Nat>();
-        let mut i = 0;
-        while i < self.nats.len() {
-            if let Nat::Large(v) = &self.nats[i] {
-                nat_bytes += v.capacity() * 8;
-            }
-            i += 1;
-        }
+        let nat_bytes = self.nats.capacity() * core::mem::size_of::<Nat>() + self.nat_heap;
         Memory {
             exprs: self.exprs.bytes() + self.scratch.bytes(),
             names: self.names.capacity() * core::mem::size_of::<Name>()

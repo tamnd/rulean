@@ -309,6 +309,26 @@ fn probe(nodes: &Nodes, node: Expr, h: u32) -> (bool, Raw, usize) {
     (hit, found, pos)
 }
 
+impl Store {
+    /// True if the arrays of `kind` in `tier` are full to their capacity, so the next node makes them grow, and the store would then be over its budget. The arrays of one kind grow to about twice their size, so the estimate adds the current size of these arrays once more: the node array and the side records of 8 bytes, with at most 16 bytes for a node.
+    ///
+    /// A full store gives the handle of the first frozen node of the kind (see `intern_expr`). So while the frozen array of the kind is empty, the budget does not stop a new node, and the handle is always valid. The checker also compares its memory with the budget, so this gap does not let the memory grow with no limit.
+    fn grow_over_budget(&self, tier: Tier, kind: Kind) -> bool {
+        if self.max_bytes == usize::MAX || self.exprs.sides[kind as usize].is_empty() {
+            return false;
+        }
+        let nodes = match tier {
+            Tier::Frozen => &self.exprs,
+            Tier::Scratch => &self.scratch,
+        };
+        let sides = &nodes.sides[kind as usize];
+        if sides.len() < sides.capacity() {
+            return false;
+        }
+        self.over_budget(sides.capacity().saturating_mul(24))
+    }
+}
+
 /// Adds a node that is not in the table to the arrays of one tier, at the free slot `pos` of the walk. The result is None if the array of the kind is full.
 fn push_node(
     nodes: &mut Nodes,
@@ -431,13 +451,21 @@ impl Store {
             fpos = pos;
         }
         let r = if !self.use_scratch {
-            push_node(&mut self.exprs, Tier::Frozen, node, h, info, fpos)
+            if self.grow_over_budget(Tier::Frozen, node.kind()) {
+                None
+            } else {
+                push_node(&mut self.exprs, Tier::Frozen, node, h, info, fpos)
+            }
         } else {
             let (hit, found, pos) = probe(&self.scratch, node, h);
             if hit {
                 return ExprId(found);
             }
-            push_node(&mut self.scratch, Tier::Scratch, node, h, info, pos)
+            if self.grow_over_budget(Tier::Scratch, node.kind()) {
+                None
+            } else {
+                push_node(&mut self.scratch, Tier::Scratch, node, h, info, pos)
+            }
         };
         match r {
             Some(id) => id,
@@ -627,11 +655,18 @@ impl Store {
         }
         if found != 0 {
             NatId(found - 1)
-        } else if self.nats.len() >= u32::MAX as usize - 1 {
+        } else if self.nats.len() >= u32::MAX as usize - 1
+            || (!self.nats.is_empty()
+                && self.over_budget(n.limb_count() * 8 + core::mem::size_of::<Nat>()))
+        {
+            // The array is at its capacity limit, or the literal would make the store go above its budget. Literal 0 is a valid handle, because the array is not empty.
             self.full = true;
             NatId(0)
         } else {
             let id = self.nats.len() as u32;
+            if let Nat::Large(v) = &n {
+                self.nat_heap += v.capacity() * 8;
+            }
             self.nats.push(n);
             self.nat_hash.push(h);
             self.nat_table.put(pos, h, raw(id));

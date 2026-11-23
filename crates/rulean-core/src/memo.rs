@@ -44,6 +44,13 @@ impl Memo {
         self.vals.len()
     }
 
+    /// The number of bytes of the arrays and the table, without the allocator overhead.
+    pub fn bytes(&self) -> usize {
+        (self.ka.capacity() + self.kb.capacity() + self.vals.capacity())
+            * core::mem::size_of::<Raw>()
+            + self.table.bytes()
+    }
+
     /// True if the map has no entry.
     pub fn is_empty(&self) -> bool {
         self.vals.len() == 0

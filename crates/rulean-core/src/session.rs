@@ -125,6 +125,16 @@ impl Session {
         self.len
     }
 
+    /// The number of bytes of the table and the pending entries, without the allocator overhead.
+    pub fn bytes(&self) -> usize {
+        let raw = core::mem::size_of::<Raw>();
+        self.tag.capacity()
+            + (self.ka.capacity() + self.kb.capacity() + self.val.capacity()) * raw
+            + self.stamp.capacity() * 4
+            + self.refd.capacity()
+            + self.pending.capacity() * core::mem::size_of::<(u8, Raw, Raw, Raw)>()
+    }
+
     /// True if the table has no entry.
     pub fn is_empty(&self) -> bool {
         self.len == 0

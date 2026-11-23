@@ -123,6 +123,14 @@ impl Arena {
         self.full
     }
 
+    /// The number of bytes of the arrays, without the allocator overhead.
+    pub fn bytes(&self) -> usize {
+        self.values.capacity() * core::mem::size_of::<Value>()
+            + self.envs.capacity() * core::mem::size_of::<EnvNode>()
+            + self.spines.capacity() * core::mem::size_of::<SpineNode>()
+            + self.slots.capacity() * core::mem::size_of::<Option<ValueId>>()
+    }
+
     /// The number of nodes in each array.
     pub fn counts(&self) -> Counts {
         Counts {

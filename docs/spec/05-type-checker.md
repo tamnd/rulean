@@ -269,6 +269,17 @@ Rules:
 - When rulean succeeds where the official kernel times out, the declaration is accepted. This is deviation D2. The report flags it when the R engine needed more than the official bound.
 - Deep terms are handled with explicit work stacks, never with Rust recursion beyond a fixed bound. Stack overflow is not a possible outcome (12.4).
 
+### 05.11.1 Memory and time limits
+
+- **Values.** `--max-memory <size>` takes a number of bytes with an optional unit `K`, `M`, `G` or `T` (powers of 1024), or `none`. `--timeout <time>` takes a number of seconds with an optional unit `s`, `m` or `h`.
+- **Default memory limit.** The default is 0.8 times the physical memory. On Linux, rulean reads `MemTotal` from `/proc/meminfo`. On macOS, rulean reads `hw.memsize` from `sysctl`. On other systems, the default is `none`.
+- **Measure.** The measure is the bytes of the arrays and tables of the store, the environment, the local context, the caches, the value arena of engine F and the session. It does not include the allocator overhead, so the resident memory of the process is larger than the measure.
+- **Store.** When an array of expressions or the literal array must grow and the store would then be above the budget, the store goes into its full state (04.2.1). The result is the resource code, as for a full array.
+- **Checker.** The checker compares the measure with the budget before each declaration and each 4096 calls of `enter`. Above the budget, the declaration fails with `MemoryLimit`, which is a resource failure.
+- **Workers.** With `--threads n`, each worker has a copy of the store. So the main checker and each worker get 1/(n + 1) of the budget.
+- **Time.** The checker runs on its own thread. At the deadline of `--timeout`, the main thread gives the resource code and the report, and the process stops. The report has the SHA-256 of the input file, which the main thread reads again. A run on standard input and a run of `rulean olean` give no report at a timeout, because the main thread cannot get the SHA-256.
+- **Open items.** The tables of the NDJSON parser and the buffers of the olean reader are not in the measure. Spec 12.3 rule 4 asks for a check of every allocation, and this is not done yet.
+
 ## 05.12 Deviation register
 
 Every known difference from the official kernel of the profile is a row here. A release cannot add a deviation without a row. The register is also published as `deviations.json` with the release.

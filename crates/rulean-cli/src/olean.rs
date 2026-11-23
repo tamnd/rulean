@@ -8,8 +8,9 @@ use std::time::Instant;
 use rulean_olean::FaultKind;
 use rulean_store::Store;
 
-use crate::check::{self, Options, Run, STACK_BYTES};
+use crate::check::{self, Options, Run};
 use crate::exit::Code;
+use crate::limits::{self, Limited};
 use crate::report::Report;
 
 /// Runs `olean` with the arguments after the command name.
@@ -26,19 +27,23 @@ pub fn run(args: &[String]) -> Code {
         eprintln!("rulean olean: no search path. Give `--path DIR`, or set LEAN_PATH.");
         return Code::Usage;
     }
-    let h = std::thread::Builder::new()
-        .stack_size(STACK_BYTES)
-        .spawn(move || check_modules(&o, &search));
-    match h {
-        Ok(h) => match h.join() {
-            Ok(Ok(r)) => check::finish(&r),
-            Ok(Err(code)) => code,
-            Err(_) => {
-                eprintln!("rulean: internal error: the checker thread stopped");
-                Code::Resource
-            }
-        },
-        Err(e) => {
+    let timeout = o.timeout;
+    match limits::run_limited(timeout, move || check_modules(&o, &search)) {
+        Limited::Done(Ok(r)) => check::finish(&r),
+        Limited::Done(Err(code)) => code,
+        Limited::Timeout => {
+            // The report needs the SHA-256 of the files that the loader read, and only the checker thread knows them, so a timeout gives no report.
+            eprintln!(
+                "rulean: {}",
+                limits::timeout_text(timeout.unwrap_or_default())
+            );
+            Code::Resource
+        }
+        Limited::Stopped => {
+            eprintln!("rulean: internal error: the checker thread stopped");
+            Code::Resource
+        }
+        Limited::NoThread(e) => {
             eprintln!("rulean: cannot start the checker thread: {e}");
             Code::Resource
         }
@@ -73,6 +78,7 @@ fn code_of(kind: FaultKind) -> Code {
 fn check_modules(o: &Options, search: &[PathBuf]) -> Result<Run, Code> {
     let start = Instant::now();
     let mut store = Store::new();
+    store.set_max_bytes(o.memory_budget());
     let mut rep = Report {
         input_path: o.modules.join(" "),
         format_version: "olean".to_owned(),

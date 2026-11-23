@@ -23,9 +23,9 @@ The corpus is the working meaning of "every Lean program" (02.2). It grows and n
 | Lean core: Init, Std, Lean, Lake | Init 332 MB, Std 557 MB exports | Lean release | every pull request (Init, Std); nightly (all) |
 | Batteries | | leanprover-community | nightly |
 | Mathlib | 5.9 GB export, 112.1 M lines | Arena, Lean 4.36.0 | weekly (`corpus`) |
-| CSLib | 2.3 GB export | Arena | nightly |
-| Cedar | 863 MB export, uses `native_decide` | Arena | nightly |
-| Navier-Stokes (OpenAI) | 1.5 GB export | Arena | nightly |
+| CSLib | 2.3 GB export, 44.1 M lines | Arena, Lean 4.36.0 | weekly (`corpus`) |
+| Cedar | 863 MB export, 15.9 M lines, uses `native_decide` | Arena, Lean 4.36.0 | weekly (`corpus`) |
+| Navier-Stokes (OpenAI) | 1.5 GB export | Arena, Lean 4.34.0-rc2, which is out of scope (02.5) | none |
 | con-leche's own export | 669 MB | Arena | nightly |
 | FLT (Imperial, human-led) | | GitHub | weekly |
 | FLT (Anthropic) | 37.8 GB export, 1,052,234 declarations | GitHub | weekly |
@@ -38,7 +38,7 @@ The corpus is the working meaning of "every Lean program" (02.2). It grows and n
 
 **Pass rule.** For each entry and each profile, the verdict of every declaration equals the verdict of the official kernel of that profile, except for rows of the deviation register (05.12). A release needs a 100% pass on every entry.
 
-**Mathlib run.** The weekly workflow `corpus` makes the Mathlib export again from mathlib4 at the commit of the Arena test, because the 5.9 GB export is too large for a cache entry. It runs `scripts/mathlib-corpus.sh`, which has five steps: fetch, export, check, olean and compare. It compares the SHA-256 digest of the new export with the digest of the Arena export, and it records a difference but does not fail. The job records the time and the peak memory of each step. A GitHub-hosted runner has 16 GB of memory, and each worker has its own copy of the store, so the default is one thread. On the Init export of v4.36.0 (348 MB), `rulean check` has a peak memory of 485 MB with one thread and 1.97 GB with four threads.
+**Corpus run.** The weekly workflow `corpus` has one job for each of Mathlib, CSLib and Cedar. Each job makes the export again from the project at the commit of the Arena test, because the exports are too large for a cache entry. It runs `scripts/corpus.sh`, which has five steps: fetch, export, check, olean and compare. The step fetch does the pre-build step of the Arena test and then `lake build` of the module, as the Arena does. For Mathlib, the oleans come from `lake exe cache get`. For CSLib, the oleans of Mathlib come from the cache and the job builds the oleans of CSLib. For Cedar, the job builds all the oleans. It compares the SHA-256 digest of the new export with the digest of the Arena export, and it records a difference but does not fail. The job records the time and the peak memory of each step. A GitHub-hosted runner has 16 GB of memory, and each worker has its own copy of the store, so the default is one thread. On the Init export of v4.36.0 (348 MB), `rulean check` has a peak memory of 485 MB with one thread and 1.97 GB with four threads.
 
 ## 11.3 Differential testing
 

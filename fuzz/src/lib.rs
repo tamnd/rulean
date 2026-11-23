@@ -1,6 +1,6 @@
 //! The input layout of the `olean` target.
 //!
-//! The first byte is a mask. Bit `i` is set if part `i` exists, in the order `.olean`, `.olean.server`, `.olean.private`. Each part that exists follows, with a length of 4 bytes (little-endian) before it. The last part that exists has no length and takes the rest of the input. A length that is longer than the rest of the input takes the rest of the input.
+//! The first byte is a mask. Bit `i` is set if part `i` exists, in the order `.olean`, `.olean.server`, `.olean.private`. Each part that exists follows, with a length of 4 bytes (little-endian) before it. The last part that exists has no length and takes the rest of the input. A length that is longer than the rest of the input takes the rest of the input, and the parts after it are empty.
 
 /// Splits an input into the parts of one module.
 pub fn split(data: &[u8]) -> [Option<Vec<u8>>; 3] {
@@ -61,6 +61,9 @@ mod tests {
         for parts in cases {
             assert_eq!(split(&join(&parts)), parts);
         }
-        assert_eq!(split(&[7, 200, 0, 0, 0, 1]), [Some(vec![1]), None, None]);
+        assert_eq!(
+            split(&[7, 200, 0, 0, 0, 1]),
+            [Some(vec![1]), Some(vec![]), Some(vec![])]
+        );
     }
 }

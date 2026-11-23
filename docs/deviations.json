@@ -26,8 +26,8 @@
       "official": "profile-specific",
       "rulean": "the verdict of the profile",
       "option": null,
-      "status": "planned",
-      "tests": []
+      "status": "implemented",
+      "tests": ["docs/arena/either-v4.35.tsv", "scripts/arena-check.sh"]
     },
     {
       "id": "D4",
@@ -42,10 +42,10 @@
       "id": "D5",
       "input": ".olean input whose cached hashes or flags disagree with recomputed ones",
       "official": "uses the cached data without a check",
-      "rulean": "recomputes, and declines with malformed-olean if the structure is not valid",
+      "rulean": "ignores the cached data and computes the values again, and gives the input error (exit code 4) if the structure is not valid",
       "option": null,
-      "status": "planned",
-      "tests": []
+      "status": "implemented",
+      "tests": ["crates/rulean-olean/src/header.rs", "crates/rulean-olean/src/load.rs", "scripts/olean-xval.sh"]
     },
     {
       "id": "D6",

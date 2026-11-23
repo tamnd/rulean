@@ -294,7 +294,7 @@ Every known difference from the official kernel of the profile is a row here. A 
 | D2 | declaration where the official kernel hits a resource limit and rulean does not | `resource` error | accept, with a flag | `--limits=official` |
 | D3 | Arena "either" corner cases | profile-specific | same verdict as the profile; each test has a row in `deviations.json` with status `same` | none |
 | D4 | extra rules that con-leche has and the official kernel does not: semantic level comparison, proof irrelevance fall-through, `And.rec` rescue, extra large elimination | reject | reject | `--rules=con-leche` accepts; still covered by T1 |
-| D5 | `.olean` input whose cached hashes or flags disagree with recomputed ones | uses the cached data without checking | recomputes; decline with `malformed-olean` if the structure is invalid (07.3) | none |
+| D5 | `.olean` input whose cached hashes or flags disagree with recomputed ones | uses the cached data without checking | recomputes; the input error (exit code 4) if the structure is invalid (07.3) | none |
 | D6 | trust level above 1024 (`lean_add_decl_without_checking`) in in-process mode | adds unchecked | adds unchecked and marks the constant `unchecked` in the report | `--check-all` checks them |
 
 Rows D1 and D5 can only differ from the official kernel on inputs that no Lean program produces without metaprogramming. Each row has at least one regression test in `tests/deviations/` (11.6).

@@ -15,6 +15,7 @@
 
 pub mod decode;
 pub mod header;
+pub mod lean_hash;
 pub mod load;
 pub mod region;
 

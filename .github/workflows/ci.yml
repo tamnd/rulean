@@ -391,6 +391,47 @@ jobs:
           axiom-audit-root: RuleanProof
       - run: scripts/leanchecker.sh
 
+  # The export of the proof package, checked by three kernels: rulean, nanoda and con-leche (spec 10.9 and rule 5 of the release gate in 11.7). nanoda is built from the commit that the Lean Kernel Arena pins, with the configuration of the Arena. con-leche is the package that proof/ requires at a pinned commit, and it runs in verified mode. The job builds two checkers from outside the project, so it is not a required check.
+  proof-kernels:
+    name: proof kernels
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      NANODA_REV: 0da9f98feadd3a0a2ef4b3dbcf52a298a6fef929
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: false
+      - run: cargo build --locked --release --bin rulean
+      - uses: leanprover/lean-action@ba3fdfe5c4476c925da13bf11a005ddb47e47aee # v1.7.1
+        with:
+          lake-package-directory: proof
+          build: true
+          test: false
+          lint: false
+          use-mathlib-cache: false
+      - name: the bin directory of the Lean toolchain of proof/ on PATH, for leanexport
+        working-directory: proof
+        run: dirname "$(elan which lean)" >> "$GITHUB_PATH"
+      - name: con-leche at the commit that proof/ requires
+        working-directory: proof/.lake/packages/con-leche
+        run: lake build con-leche
+      - name: nanoda at the commit of the Arena
+        env:
+          RUSTFLAGS: ""
+        run: |
+          git init -q "$RUNNER_TEMP/nanoda"
+          git -C "$RUNNER_TEMP/nanoda" fetch -q --depth 1 https://github.com/ammkrn/nanoda_lib "$NANODA_REV"
+          git -C "$RUNNER_TEMP/nanoda" checkout -q FETCH_HEAD
+          cd "$RUNNER_TEMP/nanoda"
+          cargo build --release
+      - name: rulean, nanoda and con-leche on the export of RuleanProof
+        run: scripts/proof-kernels.sh _tmp/proof-kernels target/release/rulean "$RUNNER_TEMP/nanoda/target/release/nanoda_bin" proof/.lake/packages/con-leche/.lake/build/bin/con-leche
+
   # The Verus proof of contract K1 for rulean-pool (spec 10.7), in proof/verus/pool.rs. The job uses a pinned Verus release. This release needs Rust 1.100.0, which is the toolchain of rust-toolchain.toml.
   verus:
     name: verus

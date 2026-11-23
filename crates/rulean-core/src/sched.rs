@@ -84,6 +84,10 @@ pub struct JobResult {
     pub s_entries: u64,
     /// True if an array of the store of the worker was full. Then the result is not valid, and the run must stop.
     pub full: bool,
+    /// The calls of `enter` in the job.
+    pub steps: u64,
+    /// The calls of `intern_expr` of the store of the worker in the job.
+    pub interns: u64,
 }
 
 /// The merge of the results of all jobs.
@@ -95,6 +99,10 @@ pub struct Outcome {
     pub failed: Option<(u32, Fault)>,
     pub f_stats: FStats,
     pub s_stats: SessionStats,
+    /// The calls of `enter` in all jobs.
+    pub steps: u64,
+    /// The calls of `intern_expr` in all jobs.
+    pub interns: u64,
     /// The largest session of a worker at the end of a job.
     pub s_entries: u64,
     /// True if the store of a worker was full.
@@ -349,6 +357,8 @@ impl Checker {
     pub fn run_job(&mut self, plan: &Plan, ds: &[Decl], k: usize) -> JobResult {
         self.f_stats = FStats::default();
         self.sess.stats = SessionStats::default();
+        let start = self.steps;
+        let start_interns = self.st.interns();
         let mut r = JobResult::default();
         let mut i = plan.starts[k] as usize;
         let end = plan.starts[k + 1] as usize;
@@ -372,6 +382,8 @@ impl Checker {
         r.s_stats = self.sess.stats;
         r.s_entries = self.sess.len() as u64;
         r.full = self.st.is_full();
+        r.steps = self.steps - start;
+        r.interns = self.st.interns() - start_interns;
         r
     }
 }
@@ -423,6 +435,8 @@ pub fn merge(plan: &Plan, results: &[JobResult], n: u32) -> Outcome {
         let r = &results[k];
         add_f(&mut o.f_stats, &r.f_stats);
         add_s(&mut o.s_stats, &r.s_stats);
+        o.steps += r.steps;
+        o.interns += r.interns;
         o.s_entries = max_u64(o.s_entries, r.s_entries);
         o.full = either(o.full, r.full);
         o.failed = first_failure(o.failed, r.failed);

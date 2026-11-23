@@ -88,6 +88,7 @@ Rules:
 - Axiom lists are computed as the official `#print axioms` does: the axioms in the transitive closure of the constants that the declaration uses, through types and values (T4, 10.1). Natively evaluated facts appear as `_native.…` axioms.
 - The input hash is SHA-256 over the exact bytes that were checked (contract K2, 10.7). SHA-256 is implemented in pure Rust (13.3).
 - Specs 2148 and 2148r replay trust reports with a second kernel. They read this report format.
+- The fields `steps` and `interns` of `summary` are the work count of the run: the calls of `enter` of the type checker and the calls of `intern_expr` of the store, with the parse. A sequential run gives the same counts on each machine. The work gate of 08.7.4 uses them. With `--threads` above 1, the counts are the sums over the workers, and they can change from one run to the next.
 - The field `slowest` lists the 10 slowest declarations of a sequential run, with the wall time of each in microseconds. It shows where the time of a run goes, for the performance work of 08.7. The list is empty with `--threads` above 1.
 
 ## 09.5 `lake check`, `lake comparator` and the Arena

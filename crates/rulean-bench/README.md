@@ -48,4 +48,12 @@ target/release/rulean-bench gate --filter perf/ --max-virtual-seconds 1 rulean.j
 
 The workflow `.github/workflows/nightly.yml` runs rulean through `scripts/arena-run.sh` on the Arena tests each night with the `cachegrind` counter, and then runs the two gates above. With `--cachegrind-max 5`, a test that takes more than 5 s has no count, so it fails the P1.d gate. This is correct, because such a test is far above 1 virtual second.
 
+## Work
+
+```sh
+target/release/rulean-bench work docs/bench/work.json Init=init.json Std=std.json
+```
+
+`work` reads the JSON reports of `rulean check` and compares the work count of each report (`summary.steps` plus `summary.interns`) with the entry of the same name in the baseline file. It prints one line for each export and exits with code 1 if a count differs from the baseline by more than the tolerance in either direction (`--tolerance PERCENT`, 1 by default), if the Lean version of the report is not the version of the baseline, or if the verdict of the report is not accept. With `--write`, it writes the counts into the baseline file and does not compare. Use a sequential check (`--threads 1`), because its counts are the same on each machine. `scripts/work-gate.sh` runs this gate on Init and Std of a Lean release, and the CI job `lake comparator` runs the script. This is the quick suite gate of spec 08.7.4.
+
 On macOS, the `rusage` counter counts only the process that `run` starts. If this process is a script that starts the checker, the count does not include the checker. Run the checker directly when you use `rusage`.

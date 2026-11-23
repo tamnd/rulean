@@ -409,6 +409,8 @@ fn check_sequential(o: &Options, c: &mut Checker, ds: &[Decl], rep: &mut Report)
         rep.slowest.push((name_text(c, ds[i].name()), us));
     }
     rep.f_stats = c.f_stats;
+    rep.steps = c.steps;
+    rep.interns = c.st.interns();
     rep.s_stats = c.sess.stats;
     rep.s_entries = c.sess.len();
     if c.st.is_full() {
@@ -534,6 +536,8 @@ fn check_parallel(o: &Options, c: &mut Checker, ds: &[Decl], rep: &mut Report) {
     c.env.set_cut(u32::MAX);
     t.finish(rep);
     rep.f_stats = out.f_stats;
+    rep.steps = c.steps + out.steps;
+    rep.interns = c.st.interns() + out.interns;
     rep.s_stats = out.s_stats;
     rep.s_entries = out.s_entries as usize;
     if out.full || c.st.is_full() {

@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.0.7] - 2026-11-23
+
 ### Added
 
 - Engine F does the type check and the value check of a declaration with type inference on values (spec 05.4.5). The contexts are nodes of a tree with hash-consing, so a binder or a `let` with the same domain or value in the same context is one node, and the types and values of terms are cached for each node. A literal, a projection and a free variable go to engine R inference. If an equality check gives "not equal" or an answer in the confirm set, or if engine F stops with a fault, engine R does the full check of the declaration. So a reject always comes from engine R. With `--confirm all`, engine R checks each declaration again after engine F accepts it. The JSON report has the new counts `f_infer` and `f_infer_ok`, and `r_disagree` also counts the checks that engine F accepted and engine R rejected. Row O6 of the reordering table of spec 05.7.3 has no lemma yet, so engine R stays the default engine.
@@ -156,7 +158,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.6...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.7...HEAD
+[0.0.7]: https://github.com/tamnd/rulean/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/tamnd/rulean/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/tamnd/rulean/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/tamnd/rulean/compare/v0.0.3...v0.0.4

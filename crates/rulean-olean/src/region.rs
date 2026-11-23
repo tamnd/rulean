@@ -11,6 +11,9 @@ const ROOT_AT: usize = header::HEADER_BYTES;
 /// The offset of the first object in a version 2 file.
 pub const DATA_AT: usize = ROOT_AT + 8;
 
+/// The offset of the `data_size` field in a version 3 or 4 file. The data starts after it, with the root pointer.
+const DATA_SIZE_AT: usize = header::HEADER_BYTES;
+
 /// The tags of the Lean runtime objects (lean.h).
 pub mod tag {
     pub const MAX_CTOR: u8 = 243;
@@ -42,35 +45,35 @@ pub struct Part {
     starts: Vec<u64>,
     /// The number of objects.
     pub objects: usize,
+    /// The offset of the root pointer.
+    root_at: usize,
+    /// The offset after the last object.
+    data_end: usize,
 }
 
 impl Part {
     /// Reads the header of `bytes` and walks the objects.
+    ///
+    /// In version 2, the root pointer follows the header, and the objects go to the end of the file. In versions 3 and 4, the header is followed by `data_size`, then `data_size` bytes of data (the root pointer and the objects), and then the closure section and the library table. The reader supports only a file without closures, so the two sections must be the two counts 0.
     pub fn new(bytes: Vec<u8>) -> Result<Part, Fault> {
         let header = header::read(&bytes)?;
-        if bytes.len() < DATA_AT {
-            return Err(Fault::new(
-                FaultKind::Malformed,
-                0,
-                "the file has no root pointer",
-            ));
-        }
-        let root = word(&bytes, ROOT_AT);
+        let (root_at, data_end) = layout(&header, &bytes)?;
+        let root = word(&bytes, root_at);
         let mut starts = vec![0u64; bytes.len() / (64 * WORD) + 1];
-        let mut off = DATA_AT;
+        let mut off = root_at + WORD;
         let mut objects = 0;
-        while off < bytes.len() {
-            let size = object_size(&bytes, off)?;
+        while off < data_end {
+            let size = object_size(&bytes[..data_end], off)?;
             let i = off / WORD;
             starts[i / 64] |= 1 << (i % 64);
             objects += 1;
             off += size;
         }
-        if off != bytes.len() {
+        if off != data_end {
             return Err(Fault::new(
                 FaultKind::Malformed,
                 off as u64,
-                "the last object goes past the end of the file",
+                "the last object goes past the end of the data",
             ));
         }
         Ok(Part {
@@ -79,6 +82,8 @@ impl Part {
             root,
             starts,
             objects,
+            root_at,
+            data_end,
         })
     }
 
@@ -86,8 +91,8 @@ impl Part {
     pub fn starts_at(&self, off: usize) -> bool {
         let i = off / WORD;
         off.is_multiple_of(WORD)
-            && off >= DATA_AT
-            && off < self.bytes.len()
+            && off > self.root_at
+            && off < self.data_end
             && self.starts[i / 64] & (1 << (i % 64)) != 0
     }
 
@@ -95,6 +100,50 @@ impl Part {
     fn end(&self) -> Option<u64> {
         self.header.base.checked_add(self.bytes.len() as u64)
     }
+}
+
+/// The offset of the root pointer and the offset after the data of a file with header `h`.
+fn layout(h: &Header, b: &[u8]) -> Result<(usize, usize), Fault> {
+    let bad = |at: usize, msg: &str| Fault::new(FaultKind::Malformed, at as u64, msg);
+    if h.version == 2 {
+        if b.len() < DATA_AT {
+            return Err(bad(0, "the file has no root pointer"));
+        }
+        return Ok((ROOT_AT, b.len()));
+    }
+    let root_at = DATA_SIZE_AT + 8;
+    if b.len() < root_at + WORD {
+        return Err(bad(DATA_SIZE_AT, "the file has no data"));
+    }
+    let size = usize::try_from(word(b, DATA_SIZE_AT)).unwrap_or(usize::MAX);
+    let data_end = root_at
+        .checked_add(size)
+        .filter(|&e| e <= b.len() && size >= WORD && size.is_multiple_of(WORD))
+        .ok_or_else(|| bad(DATA_SIZE_AT, "the data size does not fit the file"))?;
+    // The closure section: a `u32` count and the offsets. Then the library table: a `u32` count and the entries.
+    let rest = &b[data_end..];
+    if rest.len() < 8 {
+        return Err(bad(data_end, "the file has no closure section"));
+    }
+    let closures = u32::from_le_bytes([rest[0], rest[1], rest[2], rest[3]]);
+    if closures != 0 {
+        return Err(Fault::new(
+            FaultKind::Decline,
+            data_end as u64,
+            "the file has closures, this reader supports only files without closures",
+        ));
+    }
+    let libs = u32::from_le_bytes([rest[4], rest[5], rest[6], rest[7]]);
+    if libs != 0 {
+        return Err(bad(data_end + 4, "the file has libraries but no closures"));
+    }
+    if rest.len() != 8 {
+        return Err(bad(
+            data_end + 8,
+            "the file has bytes after the library table",
+        ));
+    }
+    Ok((root_at, data_end))
 }
 
 /// The word at `off`. The caller makes sure that the 8 bytes are in `b`.
@@ -206,6 +255,7 @@ impl Region {
             }
         }
         let root = p.root;
+        let p_root_at = p.root_at;
         let after = At {
             part: self.parts.len(),
             off: p.bytes.len(),
@@ -215,7 +265,7 @@ impl Region {
             Ok(Field::Object(_)) => Ok(()),
             Ok(Field::Scalar(_)) => Err(Fault::new(
                 FaultKind::Malformed,
-                ROOT_AT as u64,
+                p_root_at as u64,
                 "the root is a scalar",
             )),
             Err(f) => Err(f),
@@ -352,6 +402,58 @@ mod tests {
         o.extend_from_slice(scalars);
         o.resize(size, 0);
         o
+    }
+
+    /// A version 4 file with the objects `objs`: the header, `data_size`, the root pointer, the objects, and the closure count and the library count. The root points to the last object.
+    pub fn file4(base: u64, objs: &[Vec<u8>], closures: u32, libs: u32) -> Vec<u8> {
+        let mut b = file(base, &[]);
+        b[5] = 4;
+        b.truncate(88);
+        b.extend_from_slice(&[0u8; 16]);
+        let mut last = 0;
+        for o in objs {
+            last = b.len();
+            b.extend_from_slice(o);
+        }
+        let size = (b.len() - 96) as u64;
+        b[88..96].copy_from_slice(&size.to_le_bytes());
+        b[96..104].copy_from_slice(&(base + last as u64).to_le_bytes());
+        b.extend_from_slice(&closures.to_le_bytes());
+        b.extend_from_slice(&libs.to_le_bytes());
+        b
+    }
+
+    #[test]
+    fn the_walk_of_version_4_stops_at_the_end_of_the_data() {
+        let b = file4(
+            0x1000,
+            &[ctor(1, &[1], &[]), ctor(0, &[0x1000 + 104], &[7])],
+            0,
+            0,
+        );
+        let p = Part::new(b).expect("part");
+        assert_eq!(p.objects, 2);
+        assert!(p.starts_at(104));
+        assert!(p.starts_at(120));
+        assert!(!p.starts_at(96));
+        assert_eq!(p.root, 0x1000 + 120);
+        let mut rg = Region::default();
+        rg.push(p).expect("push");
+    }
+
+    #[test]
+    fn version_4_needs_empty_trailing_sections() {
+        let objs = [ctor(1, &[1], &[])];
+        let e = Part::new(file4(0x1000, &objs, 1, 0)).expect_err("closures");
+        assert_eq!(e.kind, FaultKind::Decline);
+        let e = Part::new(file4(0x1000, &objs, 0, 1)).expect_err("libraries");
+        assert_eq!(e.kind, FaultKind::Malformed);
+        let mut b = file4(0x1000, &objs, 0, 0);
+        b.push(0);
+        assert_eq!(Part::new(b).expect_err("extra").kind, FaultKind::Malformed);
+        let mut b = file4(0x1000, &objs, 0, 0);
+        b[88] = 0xff;
+        assert_eq!(Part::new(b).expect_err("size").kind, FaultKind::Malformed);
     }
 
     #[test]

@@ -9,10 +9,12 @@ use rulean_format::{
     Axiom, Ctor, Decl, Defn, Hints, InductType, Opaque, Quot, QuotKind, Rec, RecRule, Safety, Thm,
 };
 use rulean_nat::Nat;
-use rulean_store::{BinderInfo, ExprId, LevelId, NameId, Store};
+use std::collections::{BTreeMap, BTreeSet};
+
+use rulean_store::{BinderInfo, ExprId, LevelId, Name, NameId, Store};
 
 use crate::region::{self, At, Field, Region, WORD, tag};
-use crate::{Fault, FaultKind};
+use crate::{Fault, FaultKind, lean_hash};
 
 /// The types that the position table records.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -743,6 +745,119 @@ impl<'a> Decoder<'a> {
         }
     }
 
+    /// Checks the constant trie of a version 4 module (spec 07.3.3). Lean finds the imported constants in the trie and not in `constants`, so the trie must map each key of `keys` to the same constant object, and it must have no other value. Lean finds a child by binary search on the cached hash of its key and then compares the last component. So the reader checks that each key extends the key of its parent by one component, that each cached hash is the hash that Lean computes, that the children are sorted by hash and that no two children have the same key. Then the search of Lean finds exactly the keys of the trie. A trie is a tree, so a node that occurs two times is an error.
+    fn const_trie(&mut self, root: At, keys: Vec<(NameId, At)>) -> Result<(), Fault> {
+        let mut want: BTreeMap<NameId, At> = BTreeMap::new();
+        for (n, ci) in keys {
+            if want.insert(n, ci).is_some() {
+                return Err(bad(ci, "constNames has a name two times"));
+            }
+        }
+        let mut seen: BTreeSet<At> = BTreeSet::new();
+        let mut found = 0usize;
+        let anon = self.st.anon();
+        let mut stack = vec![(root, anon)];
+        while let Some((node, parent)) = stack.pop() {
+            if !seen.insert(node) {
+                return Err(bad(node, "a node of the constant trie occurs two times"));
+            }
+            let (objs, val, kids) = match self.rg.tag(node) {
+                0 => (2, Some(1), None),
+                1 => (2, None, Some(1)),
+                2 => (3, Some(1), Some(2)),
+                t => {
+                    return Err(bad(
+                        node,
+                        format!("a node of the constant trie has the tag {t}"),
+                    ));
+                }
+            };
+            self.rg.ctor(node, 0..=2, objs, 0, "ConstTrie")?;
+            let key = self.name(node, 0)?;
+            if node == root {
+                if key != anon || val.is_some() {
+                    return Err(bad(
+                        node,
+                        "the root of the constant trie is not an anonymous node without a value",
+                    ));
+                }
+            } else {
+                let pre = match self.st.name(key) {
+                    Name::Str(p, _) | Name::Num(p, _) => p,
+                    Name::Anon => anon,
+                };
+                if key == anon || pre != parent {
+                    return Err(bad(
+                        node,
+                        "a key of the constant trie does not extend the key of its parent",
+                    ));
+                }
+            }
+            if let Some(v) = val {
+                let ci = self.object(node, v)?;
+                if want.get(&key) != Some(&ci) {
+                    return Err(bad(
+                        node,
+                        format!(
+                            "the constant trie maps {} to a constant that is not in constants",
+                            String::from_utf8_lossy(&self.st.name_text(key))
+                        ),
+                    ));
+                }
+                found += 1;
+            }
+            if let Some(k) = kids {
+                // The children are sorted by hash, and two equal keys have the same hash. So two children with the same key are in one run of children with equal hashes, and the reader compares each child with the run before it.
+                let mut run_hash: Option<u64> = None;
+                let mut run: Vec<NameId> = Vec::new();
+                for c in self.objects(node, k)? {
+                    let key_at = match self.rg.field(c, self.rg.ptr(c, 0))? {
+                        Field::Object(o) => o,
+                        Field::Scalar(_) => {
+                            return Err(bad(
+                                c,
+                                "a child of the constant trie has the anonymous key",
+                            ));
+                        }
+                    };
+                    let ck = self.name(c, 0)?;
+                    let cached = region::word(self.rg.bytes(key_at.part), key_at.off + 3 * WORD);
+                    if cached != lean_hash::name(self.st, ck) {
+                        return Err(bad(
+                            key_at,
+                            "the cached hash of a key of the constant trie is not the hash of the name",
+                        ));
+                    }
+                    if run_hash.is_some_and(|h| cached < h) {
+                        return Err(bad(
+                            c,
+                            "the children of a node of the constant trie are not sorted by hash",
+                        ));
+                    }
+                    if run_hash != Some(cached) {
+                        run.clear();
+                        run_hash = Some(cached);
+                    }
+                    if run.contains(&ck) {
+                        return Err(bad(
+                            c,
+                            "two children of a node of the constant trie have the same key",
+                        ));
+                    }
+                    run.push(ck);
+                    stack.push((c, key));
+                }
+            }
+        }
+        if found != want.len() {
+            return Err(bad(
+                root,
+                "the constant trie does not have each constant of constants",
+            ));
+        }
+        Ok(())
+    }
+
     /// The `ModuleData` at the root of part `part`.
     pub fn module_data(&mut self, part: usize) -> Result<ModuleData, Fault> {
         let p = &self.rg.parts[part];
@@ -757,7 +872,11 @@ impl<'a> Decoder<'a> {
             Field::Scalar(_) => return Err(bad(after, "the root is a scalar")),
         };
         // The root can be in an earlier part. Lean writes a private part without objects when the private data is the same as the public data, and its root is the root of the public part.
-        let c = self.rg.ctor(at, 0..=0, 5, 1, "ModuleData")?;
+        // Version 4 adds the fields `constTrie?` and `extraConstTrie?`.
+        let v4 = self.rg.parts[part].header.version >= 4;
+        let c = self
+            .rg
+            .ctor(at, 0..=0, if v4 { 7 } else { 5 }, 1, "ModuleData")?;
         let is_module = self.rg.bool_at(c, 0)?;
         let mut imports = Vec::new();
         for i in self.objects(at, 0)? {
@@ -770,17 +889,29 @@ impl<'a> Decoder<'a> {
             return Err(bad(at, "constNames and constants have different lengths"));
         }
         let mut constants = Vec::with_capacity(consts.len());
-        for (k, ci) in consts.into_iter().enumerate() {
+        let mut keys = Vec::with_capacity(consts.len());
+        for (k, ci) in consts.iter().copied().enumerate() {
             let item = self.constant(ci)?;
             let n = self.name_ptr(names_at, names[k])?;
             if n != item.name() {
                 return Err(bad(ci, "constNames does not agree with constants"));
             }
+            keys.push((n, ci));
             constants.push(item);
         }
         // `extraConstNames` and `entries` are environment data. The reader checks only that the pointers are valid (spec 07.3.3).
         self.object(at, 3)?;
         self.object(at, 4)?;
+        if v4 {
+            let trie = match self.rg.field(at, self.rg.ptr(at, 5))? {
+                Field::Object(o) => o,
+                Field::Scalar(_) => return Err(bad(at, "the module data has no constant trie")),
+            };
+            self.rg.ctor(trie, 1..=1, 1, 0, "Option.some")?;
+            let root = self.object(trie, 0)?;
+            self.const_trie(root, keys)?;
+            self.rg.field(at, self.rg.ptr(at, 6))?;
+        }
         Ok(ModuleData {
             is_module,
             imports,

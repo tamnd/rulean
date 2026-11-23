@@ -12,7 +12,7 @@ pub const HEADER_BYTES: usize = 88;
 pub const FLAG_GMP: u8 = 1;
 
 /// The format versions that this reader supports.
-pub const VERSIONS: &[u8] = &[2];
+pub const VERSIONS: &[u8] = &[2, 3, 4];
 
 /// The header of one `.olean` file.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -44,7 +44,7 @@ pub fn read(b: &[u8]) -> Result<Header, Fault> {
             FaultKind::Decline,
             5,
             format!(
-                "olean format version {version} is not supported, this reader supports version 2"
+                "olean format version {version} is not supported, this reader supports versions 2, 3 and 4"
             ),
         ));
     }
@@ -127,6 +127,12 @@ mod tests {
         let mut b = sample();
         b[5] = 9;
         assert_eq!(read(&b).expect_err("version").kind, FaultKind::Decline);
+        b[5] = 1;
+        assert_eq!(read(&b).expect_err("version").kind, FaultKind::Decline);
+        for v in [3, 4] {
+            b[5] = v;
+            assert_eq!(read(&b).expect("known version").version, v);
+        }
     }
 
     #[test]

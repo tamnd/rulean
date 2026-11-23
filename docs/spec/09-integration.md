@@ -30,6 +30,7 @@ Main options:
 | Option | Default | Meaning |
 |---|---|---|
 | `--profile <id>` | from the input | semantics profile (05.2) |
+| `--path <dir>` | `LEAN_PATH` | `rulean olean` only: a directory of the search path. More than one is allowed, and the first directory that has the module wins. Without `--path`, the directories of `LEAN_PATH` are the search path. |
 | `--threads <n>` | 1 | worker count (08.3); 1 is the sequential check, and the plan is the number of cores (08.3.5) |
 | `--report <file>` | none | write the JSON report (09.4) |
 | `--format text\|json` | text | the format of standard output |

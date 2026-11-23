@@ -4,6 +4,18 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- `rulean olean [--path DIR]... MODULE...` loads the modules and their import closure from `.olean` files and checks them with engine R (spec 07.3). It takes the options of `rulean check`. Without `--path`, the search path comes from `LEAN_PATH`. A malformed file or a missing module gives exit code 4, an unsupported file gives 2. After the run, the command reads the files again and compares the SHA-256 digest, as `rulean check` does (contract K2).
+- `rulean-olean` is the hardened reader. It reads format version 2 with the GMP number encoding, which Lean v4.33 to v4.36 write. It reads the three parts of a module of the module system, checks each object header and each pointer, decodes with an explicit stack, and orders the declarations so that each comes after the declarations that it uses. Versions 3 and 4 and the native number encoding are a decline.
+- On Init of Lean v4.36.0 (668 modules, 2004 files, 10.6 M objects), the reader gives 64,709 declarations in 4 to 5 s, and engine R accepts all of them. Init of v4.35.0 is also accepted. The example `olean_compare` compares the reader with lean4export: each of the 58,547 declarations of the NDJSON export of Init is equal to the declaration from the oleans, modulo binder names and binder information. When two modules have the same auxiliary theorem, the loader keeps the last copy, as the import of Lean does. The CI job for this comparison is not written yet.
+- `Decl::Mutual` is a block of unsafe or partial definitions, as `mutualDefnDecl` of Lean. The checker adds it with `add_mutual`. The `.olean` reader makes it for each unsafe or partial definition, because a recursive partial definition refers to its `_unsafe_rec` constants. The `.rlb` format has the declaration tag 7 for it.
+- `tests/fixture.rs` of `rulean-olean` decodes the real files of `Init.Control.Do` of v4.36.0. It also decodes cut copies, which must give an error, and 1500 copies with changed bytes, which must give an error or a result and never a panic.
+
+### Changed
+
+- The `olean` command was a decline before this change. All commands of spec 09.2 are now written.
+
 ## [0.0.5] - 2026-11-22
 
 ### Added

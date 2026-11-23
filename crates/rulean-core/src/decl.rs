@@ -526,7 +526,7 @@ impl Checker {
 
     /// Checks one declaration of the stream and adds it to the environment. Then it compares the new primitives with their references (spec 05.8).
     ///
-    /// The terms that the check of an axiom, a definition, a theorem or an opaque constant makes go to the scratch tier of the store, and the call removes them at the end (spec 04.8). These constants keep only input terms in the environment, so no scratch handle stays. An inductive or a quotient declaration adds terms that the checker makes, such as the recursor rules, so it uses the frozen tier. If the fault is at a scratch term, `Fault::at` is the dummy term after the call.
+    /// The terms that the check of an axiom, a definition, a theorem, an opaque constant or a mutual block makes go to the scratch tier of the store, and the call removes them at the end (spec 04.8). These constants keep only input terms in the environment, so no scratch handle stays. An inductive or a quotient declaration adds terms that the checker makes, such as the recursor rules, so it uses the frozen tier. If the fault is at a scratch term, `Fault::at` is the dummy term after the call.
     pub fn add_decl(&mut self, d: &Decl) -> Option<Fault> {
         self.sess_start();
         let r0 = match d {
@@ -548,13 +548,17 @@ impl Checker {
             }
             Decl::Quot(q) => self.add_quot(q),
             Decl::Induct(i) => self.add_inductive(i),
+            Decl::Mutual(ds) => {
+                self.st.set_scratch(true);
+                self.add_mutual(ds)
+            }
         };
         let r = if r0.is_none() { self.fault() } else { r0 };
         if r.is_none() {
             self.check_pins();
         }
         if r.is_none() && self.st.uses_scratch() {
-            // Only an axiom, a definition, a theorem or an opaque constant checks in the scratch tier. The other declarations add temporary constants, so their entries are not kept.
+            // Only an axiom, a definition, a theorem, an opaque constant or a mutual block checks in the scratch tier. The other declarations add temporary constants, so their entries are not kept.
             self.sess_commit();
         }
         self.st.clear_scratch();

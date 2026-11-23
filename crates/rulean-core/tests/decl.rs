@@ -464,6 +464,24 @@ fn mutual_definitions() {
 }
 
 #[test]
+fn a_mutual_declaration_goes_to_add_mutual() {
+    let mut t = T::new();
+    let (df, dg, _) = mutual_pair(&mut t);
+    assert_eq!(
+        t.add(&Decl::Mutual(vec![df.clone(), df.clone()])),
+        Some(ErrorKind::BadMutual)
+    );
+    assert_eq!(t.add(&Decl::Mutual(vec![df.clone(), dg.clone()])), None);
+    assert!(t.has("f") && t.has("g"));
+    // A safe definition cannot use a partial constant.
+    let f = t.k("f");
+    let mut h = t.defn("h", df.ty, f, Safety::Safe);
+    h.all = vec![h.name];
+    assert!(t.add(&Decl::Defn(h)).is_some());
+    assert!(!t.has("h"));
+}
+
+#[test]
 fn quotient_initialization() {
     let mut t = T::new();
     let eq_ty = t.eq_type();

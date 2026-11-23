@@ -80,6 +80,7 @@ dependencies = [
  "rulean-core",
  "rulean-format",
  "rulean-io",
+ "rulean-olean",
  "rulean-pack",
  "rulean-pool",
  "rulean-store",
@@ -127,6 +128,12 @@ dependencies = [
 [[package]]
 name = "rulean-olean"
 version = "0.0.5"
+dependencies = [
+ "rulean-core",
+ "rulean-format",
+ "rulean-nat",
+ "rulean-store",
+]
 
 [[package]]
 name = "rulean-pack"

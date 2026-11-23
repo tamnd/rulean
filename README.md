@@ -12,7 +12,7 @@ rulean contains no C or C++ code. It has its own big number type and uses no C a
 
 ## Status
 
-rulean is at an early stage. Engine R, the reference type checker, checks NDJSON exports. The proofs of soundness and the fast engine are not done yet. The table shows the plan from `docs/spec/14-milestones.md`.
+rulean is at an early stage. Engine R, the reference type checker, checks NDJSON exports and `.olean` files. The proofs of soundness and the fast engine are not done yet. The table shows the plan from `docs/spec/14-milestones.md`.
 
 | Milestone | Content | State |
 |---|---|---|
@@ -44,11 +44,14 @@ rulean pack export.ndjson -o export.rlb
 rulean check export.rlb
 rulean check --threads 4 export.ndjson
 rulean check --format text --axioms std export.ndjson
+rulean olean --path ~/.elan/toolchains/leanprover--lean4---v4.36.0/lib/lean Init
 ```
 
 The input is an export in the NDJSON format of [lean4export](https://github.com/leanprover/lean4export), or `-` for standard input. `rulean pack` writes the binary format of `docs/spec/07-input-formats.md` (07.2). This format is a cache of the export with less parse work, and `rulean check` finds it from its first bytes. rulean selects the semantics profile from the Lean version of the export. Use `--profile` for an export from a Lean version that has no profile. The JSON report follows `docs/report.schema.json`. After the check, rulean reads the input file again. If the file changed during the run, the exit code is 4 and the report gives no verdict.
 
 `--threads N` checks the declarations on N threads with the scheduler of spec 08.3. The verdict and the rejected declaration are the same as with one thread. Each thread has a copy of the term store, so the memory grows with N. The default is one thread.
+
+`rulean olean MODULE...` reads the modules and their imports from `.olean` files, and checks them as `rulean check` does. It takes the options of `rulean check`. `--path DIR` adds a directory to the search path, and without `--path` the search path comes from `LEAN_PATH`, so `lake env rulean olean MODULE` uses the search path of a project. The reader treats each byte of a file as hostile input. It reads olean format version 2 with the GMP number encoding, which Lean v4.33 to v4.36 write, and declines other versions. For a module of the module system, it reads the `.olean.private` file too, so that it checks the proofs.
 
 `--axioms LIST` gives the axioms that a theorem can use. LIST is `any` (the default), `none`, or names with a comma between them. The name `std` means `propext`, `Quot.sound` and `Classical.choice`. If every declaration is accepted but a theorem uses an axiom outside the list, the exit code is 5. The axioms of a theorem are the axioms that `#print axioms` shows. The last command above is the command for an external kernel of `lake comparator`. Lake adds the path of the export at the end, so the entry in `comparator.json` is:
 

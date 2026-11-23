@@ -43,6 +43,10 @@ pub struct Options {
     pub axioms: Option<Vec<String>>,
     /// `--threads N`: the number of workers of the check stage (spec 08.3). 0 and 1 give the sequential check.
     pub threads: usize,
+    /// `rulean olean`: the directories of `--path`, in order.
+    pub paths: Vec<String>,
+    /// `rulean olean`: the modules to check.
+    pub modules: Vec<String>,
 }
 
 /// The axioms of `--axioms std` (spec 09.2).
@@ -85,8 +89,13 @@ fn is_option(a: &str, name: &str) -> bool {
     a == name || a.starts_with(&format!("{name}="))
 }
 
-/// Reads the options. The result is an error text for a usage error.
+/// Reads the options of `check`. The result is an error text for a usage error.
 pub fn options(args: &[String]) -> Result<Options, String> {
+    parse(args, false)
+}
+
+/// Reads the options of `check`, or of `olean` if `olean` is true. The `olean` command also takes `--path DIR`, and each argument that is not an option is a module.
+pub fn parse(args: &[String], olean: bool) -> Result<Options, String> {
     let mut o = Options::default();
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -136,15 +145,22 @@ pub fn options(args: &[String]) -> Result<Options, String> {
                 "json" => o.json = true,
                 v => return Err(format!("unknown format `{v}`")),
             }
+        } else if olean && is_option(a, "--path") {
+            o.paths.push(value("--path", a, &mut it)?);
         } else if a.starts_with("--") {
             return Err(format!("unknown option `{a}`"));
+        } else if olean {
+            o.modules.push(a.to_owned());
         } else if o.input.is_some() {
             return Err(format!("a second input `{a}`"));
         } else {
             o.input = Some(a.to_owned());
         }
     }
-    if o.input.is_none() {
+    if olean && o.modules.is_empty() {
+        return Err("no module".to_owned());
+    }
+    if !olean && o.input.is_none() {
         return Err("no input".to_owned());
     }
     Ok(o)
@@ -214,7 +230,7 @@ pub fn check_options(o: Options) -> Result<Run, Code> {
 }
 
 /// Prints the result, writes the report and gives the exit code.
-fn finish(r: &Run) -> Code {
+pub(crate) fn finish(r: &Run) -> Code {
     let rep = &r.report;
     if let Some(file) = &r.report_file
         && let Err(e) = std::fs::write(file, report::json(rep))
@@ -255,6 +271,17 @@ pub fn check_reader<R: BufRead>(o: &Options, input: R) -> std::io::Result<Run> {
             return Ok(done(o, rep, start));
         }
     };
+    Ok(check_export(o, store, export, rep, start))
+}
+
+/// Checks the declarations of a decoded export. `rep` has the input path and the digest. This runs on the checker thread.
+pub(crate) fn check_export(
+    o: &Options,
+    store: Store,
+    export: rulean_format::Export,
+    mut rep: Report,
+    start: Instant,
+) -> Run {
     rep.lean_version = String::from_utf8_lossy(&export.lean_version).into_owned();
     rep.format_version = String::from_utf8_lossy(&export.format_version).into_owned();
     let prof = match select_profile(o, &export.lean_version) {
@@ -262,7 +289,7 @@ pub fn check_reader<R: BufRead>(o: &Options, input: R) -> std::io::Result<Run> {
         Err(e) => {
             rep.code = Code::Decline;
             rep.error = Some(e);
-            return Ok(done(o, rep, start));
+            return done(o, rep, start);
         }
     };
     rep.profile = Some(prof.id());
@@ -287,7 +314,7 @@ pub fn check_reader<R: BufRead>(o: &Options, input: R) -> std::io::Result<Run> {
     if !rep.pin_mismatch.is_empty() && !o.trust_primitives {
         rep.deviations.push("D1");
     }
-    Ok(done(o, rep, start))
+    done(o, rep, start)
 }
 
 /// Checks the declarations one after the other, and stops at the first declaration that is not accepted.
@@ -418,7 +445,7 @@ fn store_full(rep: &mut Report) {
     rep.error = Some("the store is full".to_owned());
 }
 
-fn done(o: &Options, mut rep: Report, start: Instant) -> Run {
+pub(crate) fn done(o: &Options, mut rep: Report, start: Instant) -> Run {
     rep.wall_ms = start.elapsed().as_millis();
     Run {
         report: rep,
@@ -459,7 +486,7 @@ pub(crate) fn name_text(c: &Checker, n: rulean_store::NameId) -> String {
     String::from_utf8_lossy(&c.st.name_text(n)).into_owned()
 }
 
-fn hex(b: &[u8]) -> String {
+pub(crate) fn hex(b: &[u8]) -> String {
     let mut s = String::with_capacity(2 * b.len());
     for x in b {
         s.push_str(&format!("{x:02x}"));

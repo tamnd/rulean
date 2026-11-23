@@ -109,9 +109,10 @@ Decl ::= Axiom   { name, lparams, type, safety }
        | Opaque  { name, lparams, type, value, safety, all }
        | Quot    { name, lparams, type, kind }
        | Induct  { lparams, nparams, types: [(name, type)], ctors: [[(name, type)]], safety, exported_recs }
+       | Mutual  [Defn]
 ```
 
-Handles in a `Decl` refer to the frozen tier. The Lean twin has the same type. `Spec.parseStream` (10.5) returns a list of the Lean version of `Decl`.
+Handles in a `Decl` refer to the frozen tier. `Mutual` is a block of unsafe or partial definitions that can refer to each other, as the `mutualDefnDecl` declaration of Lean. The checker adds it with the rules of a mutual definition (05). NDJSON has no form for it, and the `.olean` reader gives it (07.3.4). The Lean twin has the same type. `Spec.parseStream` (10.5) returns a list of the Lean version of `Decl`.
 
 ## 04.8 Tiers and lifetimes
 

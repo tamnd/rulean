@@ -73,6 +73,7 @@ pub const D_THM: u32 = 3;
 pub const D_OPAQUE: u32 = 4;
 pub const D_QUOT: u32 = 5;
 pub const D_INDUCT: u32 = 6;
+pub const D_MUTUAL: u32 = 7;
 
 /// The required sections, in the order of decoding. A table refers only to tables before it in this list.
 pub const ORDER: [u32; 6] = [
@@ -824,15 +825,7 @@ impl Decoder {
                 ty: self.expr(b),
                 safety: self.safety(b, false),
             }),
-            D_DEFN => Decl::Defn(Defn {
-                name: self.name(b),
-                lparams: self.names_list(b),
-                ty: self.expr(b),
-                value: self.expr(b),
-                hints: self.hints(b),
-                safety: self.safety(b, true),
-                all: self.names_list(b),
-            }),
+            D_DEFN => Decl::Defn(self.defn(b)),
             D_THM => Decl::Thm(Thm {
                 name: self.name(b),
                 lparams: self.names_list(b),
@@ -855,6 +848,17 @@ impl Decoder {
                 kind: self.quot_kind(b),
             }),
             D_INDUCT => Decl::Induct(self.inductive(b)),
+            D_MUTUAL => {
+                let n = self.count(b, 4);
+                let mut ds = Vec::with_capacity(n);
+                let mut i = 0;
+                while i < n && self.ok() {
+                    let d = self.defn(b);
+                    ds.push(d);
+                    i += 1;
+                }
+                Decl::Mutual(ds)
+            }
             _ => {
                 self.fail(ErrorKind::BadEnumValue);
                 Decl::Quot(Quot {
@@ -864,6 +868,19 @@ impl Decoder {
                     kind: QuotKind::Type,
                 })
             }
+        }
+    }
+
+    /// The fields of a definition, after its tag.
+    fn defn(&mut self, b: &[u8]) -> Defn {
+        Defn {
+            name: self.name(b),
+            lparams: self.names_list(b),
+            ty: self.expr(b),
+            value: self.expr(b),
+            hints: self.hints(b),
+            safety: self.safety(b, true),
+            all: self.names_list(b),
         }
     }
 

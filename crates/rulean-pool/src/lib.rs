@@ -5,6 +5,8 @@
 //! The pool does not use `unsafe` code. It uses scoped threads of `std` and one atomic counter.
 //!
 //! `proof/verus/pool.rs` is a model of `run_all`, `worker` and `check_order` with a Verus proof of the safety part of K1: if `run_all` returns, the result at each position `k` is the result of job `k`. The proof holds for each value of the counter, so it holds for each schedule of the threads. A change to one of these functions needs the same change in the model.
+//!
+//! The proof does not show that each job runs exactly once and that each worker stops. The test `each_claim_order_runs_each_job_once` shows this for each order of the claims of at most 3 workers on at most 5 jobs. All `fetch_add` calls on one atomic are in one total order, also with `Ordering::Relaxed`, so an order of the claims is a complete model of a schedule of the threads.
 
 #![forbid(unsafe_code)]
 
@@ -56,14 +58,27 @@ where
         .collect()
 }
 
+/// The shared counter of the jobs. It is the trait `Counter` of the Verus model. The pool uses an `AtomicUsize`, and the model test uses a counter that follows a given order of the claims.
+trait Counter {
+    /// Gives the value of the counter and adds 1 to it.
+    fn fetch_add(&self) -> usize;
+}
+
+impl Counter for AtomicUsize {
+    fn fetch_add(&self) -> usize {
+        AtomicUsize::fetch_add(self, 1, Ordering::Relaxed)
+    }
+}
+
 /// One worker: it takes jobs from the counter until no job is left.
-fn worker<S, R, I, F>(next: &AtomicUsize, order: &[usize], init: &I, job: &F) -> Vec<(usize, R)>
+fn worker<S, R, I, F, C>(next: &C, order: &[usize], init: &I, job: &F) -> Vec<(usize, R)>
 where
+    C: Counter,
     I: Fn() -> S,
     F: Fn(&mut S, usize) -> R,
 {
     let mut out = Vec::new();
-    let mut i = next.fetch_add(1, Ordering::Relaxed);
+    let mut i = next.fetch_add();
     if i >= order.len() {
         return out;
     }
@@ -71,7 +86,7 @@ where
     while i < order.len() {
         let k = order[i];
         out.push((k, job(&mut state, k)));
-        i = next.fetch_add(1, Ordering::Relaxed);
+        i = next.fetch_add();
     }
     out
 }
@@ -119,6 +134,76 @@ mod tests {
             assert_eq!(out, vec![0, 10, 20, 30, 40, 50, 60]);
             assert!(inits.load(Ordering::Relaxed) as usize <= threads.min(7));
         }
+    }
+
+    /// A counter that gives the values of one worker in a given order of the claims.
+    struct Scripted(std::cell::RefCell<std::collections::VecDeque<usize>>);
+
+    impl Counter for Scripted {
+        fn fetch_add(&self) -> usize {
+            self.0
+                .borrow_mut()
+                .pop_front()
+                .expect("the worker claims more than its schedule")
+        }
+    }
+
+    /// Puts each order of the claims of `threads` workers on `n` jobs into `out`. `owner[v]` is the worker that gets the value `v` of the counter. A worker claims until it gets a value of at least `n`, and then it stops.
+    fn claim_orders(
+        n: usize,
+        live: &mut Vec<bool>,
+        owner: &mut Vec<usize>,
+        out: &mut Vec<Vec<usize>>,
+    ) {
+        if !live.iter().any(|&l| l) {
+            out.push(owner.clone());
+            return;
+        }
+        for t in 0..live.len() {
+            if live[t] {
+                let v = owner.len();
+                owner.push(t);
+                live[t] = v < n;
+                claim_orders(n, live, owner, out);
+                live[t] = true;
+                owner.pop();
+            }
+        }
+    }
+
+    #[test]
+    fn each_claim_order_runs_each_job_once() {
+        let mut orders_seen = 0;
+        for n in 0..=5 {
+            let costs: Vec<u64> = (0..n as u64).map(|k| (k * 7) % 5).collect();
+            let order = largest_first(&costs);
+            for threads in 1..=3 {
+                let mut all = Vec::new();
+                claim_orders(n, &mut vec![true; threads], &mut Vec::new(), &mut all);
+                for owner in all {
+                    orders_seen += 1;
+                    let mut runs = vec![0; n];
+                    for t in 0..threads {
+                        let mine = owner
+                            .iter()
+                            .enumerate()
+                            .filter(|&(_, &o)| o == t)
+                            .map(|(v, _)| v)
+                            .collect();
+                        let next = Scripted(std::cell::RefCell::new(mine));
+                        let part = worker(&next, &order, &|| (), &|_: &mut (), k| k * 10);
+                        // The worker stops at its first value of at least `n`, so it uses all of its schedule.
+                        assert!(next.0.borrow().is_empty(), "{owner:?}");
+                        for (k, r) in part {
+                            assert_eq!(r, k * 10);
+                            runs[k] += 1;
+                        }
+                    }
+                    assert_eq!(runs, vec![1; n], "{owner:?}");
+                }
+            }
+        }
+        assert!(orders_seen > 1000, "{orders_seen}");
     }
 
     #[test]

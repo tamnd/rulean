@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-11-23
+
 ### Added
 
 - The work gate of the quick suite (spec 08.7.4). The JSON report has two new counts in `summary`: `steps`, the calls of `enter` of the type checker, and `interns`, the calls of `intern_expr` of the store. A sequential run gives the same counts on each machine. `rulean-bench work` compares the counts of reports with the baseline file `docs/bench/work.json` and fails on a change above 1% in either direction. `scripts/work-gate.sh` runs the gate on Init and Std of a Lean release, and the CI job `lake comparator` runs the script.
@@ -179,7 +181,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.7...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.8...HEAD
+[0.0.8]: https://github.com/tamnd/rulean/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/tamnd/rulean/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/tamnd/rulean/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/tamnd/rulean/compare/v0.0.4...v0.0.5

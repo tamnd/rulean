@@ -253,28 +253,31 @@ impl<'a> Loader<'a> {
                 "the module {m} declares {text} again, and neither constant subsumes the other: the new constant is {}, the constant from {from} is {}, and {}",
                 kind_text(&d),
                 kind_text(old),
-                clash_reason(&d, old)
+                clash_reason(self.st, &d, old)
             ),
         ))
     }
 
-    /// The `subsumesInfo` test of the import of Lean: `a` can replace `b`. The two constants must have the same name, level parameters and type. Then a theorem subsumes a theorem with the same `all` list, and a theorem subsumes a safe axiom when its `all` list is the name. An axiom subsumes an axiom with the same safety when the type is a proposition by the test `prop_cheap`. The values are not compared.
+    /// The `subsumesInfo` test of the import of Lean: `a` can replace `b`. The two constants must have the same name and level parameters, and the same type up to the binder names and the binder info (`same_type`). Then a theorem subsumes a theorem with the same `all` list, and a theorem subsumes a safe axiom when its `all` list is the name. An axiom subsumes an axiom with the same safety when the type is a proposition by the test `prop_cheap`. The values are not compared.
     fn subsumes(&self, a: &Decl, b: &Decl, index: &BTreeMap<NameId, usize>) -> bool {
         match (a, b) {
             (Decl::Thm(x), Decl::Thm(y)) => {
-                x.name == y.name && x.lparams == y.lparams && x.ty == y.ty && x.all == y.all
+                x.name == y.name
+                    && x.lparams == y.lparams
+                    && same_type(self.st, x.ty, y.ty)
+                    && x.all == y.all
             }
             (Decl::Thm(x), Decl::Axiom(y)) => {
                 x.name == y.name
                     && x.lparams == y.lparams
-                    && x.ty == y.ty
+                    && same_type(self.st, x.ty, y.ty)
                     && x.all == [y.name]
                     && y.safety == Safety::Safe
             }
             (Decl::Axiom(x), Decl::Axiom(y)) => {
                 x.name == y.name
                     && x.lparams == y.lparams
-                    && x.ty == y.ty
+                    && same_type(self.st, x.ty, y.ty)
                     && x.safety == y.safety
                     && self.prop_cheap(x.ty, index)
             }
@@ -598,15 +601,20 @@ fn header(d: &Decl) -> Option<(&[NameId], ExprId)> {
     }
 }
 
+/// The type test of `subsumesInfo`: the `==` of `Expr` in Lean, which is `Expr.eqv`. It ignores the binder names and the binder info, so two copies of a constant that differ only in the binder names or the binder info have the same type.
+fn same_type(st: &Store, a: ExprId, b: ExprId) -> bool {
+    rulean_core::expr::expr_equal(st, &mut rulean_core::expr::Scratch::new(), a, b)
+}
+
 /// The first reason of `subsumes` that two declarations with the same name fail, for an error text.
-fn clash_reason(a: &Decl, b: &Decl) -> &'static str {
+fn clash_reason(st: &Store, a: &Decl, b: &Decl) -> &'static str {
     let (Some((la, ta)), Some((lb, tb))) = (header(a), header(b)) else {
         return "only a theorem or an axiom can be declared again";
     };
     if la != lb {
         return "the level parameters are not the same";
     }
-    if ta != tb {
+    if !same_type(st, ta, tb) {
         return "the types are not the same";
     }
     match (a, b) {
@@ -941,7 +949,7 @@ fn blocks(st: &Store, items: Vec<Item>) -> Result<Vec<Decl>, Fault> {
 mod tests {
     use super::*;
     use rulean_format::{Axiom, Ctor, Thm};
-    use rulean_store::LevelListId;
+    use rulean_store::{BinderInfo, LevelListId};
 
     fn name(st: &mut Store, s: &str) -> NameId {
         st.name_str_bytes(NameId(0), s.as_bytes())
@@ -1158,6 +1166,43 @@ mod tests {
         assert!(same_public(&st, &public, &short).is_err());
         let changed = vec![Item::Decl(axiom(a, ta)), Item::Decl(thm(h, ta, ta))];
         assert!(same_public(&st, &public, &changed).is_err());
+    }
+
+    #[test]
+    fn the_type_test_ignores_the_binder_names_and_the_binder_info() {
+        // Two modules of Mathlib declare the same instance, and the two types are not the same handle (spec 07.3).
+        let mut st = Store::new();
+        let (h, q, x, y) = (
+            name(&mut st, "h"),
+            name(&mut st, "q"),
+            name(&mut st, "x"),
+            name(&mut st, "y"),
+        );
+        let p = prop(&mut st);
+        let tq = cnst(&mut st, q);
+        let b = st.mk_bvar(0);
+        let one = st.mk_pi(x, BinderInfo::Default, tq, tq);
+        let two = st.mk_pi(y, BinderInfo::InstImplicit, tq, tq);
+        let other = st.mk_pi(y, BinderInfo::InstImplicit, tq, b);
+        let v = st.mk_lam(x, BinderInfo::Default, tq, b);
+        let mut l = loader(&mut st);
+        let mut index = BTreeMap::new();
+        l.add("A", axiom(q, p), &mut index).expect("q");
+        l.add("A", thm(h, one, v), &mut index).expect("first");
+        l.out.modules.push("A".into());
+        l.add("B", thm(h, two, v), &mut index)
+            .expect("same type up to the binders");
+        l.out.modules.push("B".into());
+        assert_eq!(l.out.decls.len(), 2);
+        assert_eq!(l.out.decls[1], thm(h, two, v));
+        let e = l
+            .add("C", thm(h, other, v), &mut index)
+            .expect_err("other type");
+        assert!(
+            e.msg.ends_with("and the types are not the same"),
+            "{}",
+            e.msg
+        );
     }
 
     fn loader<'a>(st: &'a mut Store) -> Loader<'a> {

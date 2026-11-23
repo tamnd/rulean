@@ -123,7 +123,7 @@ Engine R (05.5) runs on F's "not equal" answers and on the confirm set (05.1).
 | Suite | Corpus | When | Gate |
 |---|---|---|---|
 | quick | Init, Std, the Arena `perf/` tests | every pull request | instructions on Init and Std within +1% of `main`; no `perf/` test above 1 virtual second (P1.d) |
-| full | Mathlib, CSLib, Cedar, Navier-Stokes | each night | P1.a and P1.b ratios; memory at most 4 GiB (P1.f); wall at most 60 s on 8 threads (P1.e) |
+| full | Mathlib, CSLib, Cedar | each week, in the workflow `corpus` | P1.a and P1.c ratios; memory at most 4 GiB (P1.f); P1.b and P1.e are not measured in CI |
 | scale | FLT (Anthropic), RH project | each week | ratio at least 10 (P1.c); memory and wall time recorded |
 
 Instruction counts are deterministic to within about 0.1% for a single-threaded run. The pull-request gate uses a single-threaded run for that reason.
@@ -134,7 +134,9 @@ State of the harness:
 
 - `rulean-bench gate` checks limits on each result of a run: the verdict, the instructions in virtual seconds, the peak memory and the wall time. It exits with code 1 if a limit fails.
 - The workflow `nightly` runs rulean on the 225 Arena tests each night with the cachegrind counter. It then checks two gates: each verdict is correct with at most 4 GiB of peak memory, and no `perf/` test is above 1 virtual second (P1.d).
-- The Init and Std gate of the quick suite uses the work count of 08.7.4 and not the instructions. The full suite and the scale suite are not written yet.
+- The Init and Std gate of the quick suite uses the work count of 08.7.4 and not the instructions.
+- The full suite is in the weekly workflow `corpus` (11.2), because that workflow already makes the exports of Mathlib, CSLib and Cedar, and one run of Mathlib takes more than one hour. After `rulean check`, the job runs `leanchecker --from-export` of the same release on the same export, and `scripts/corpus-gate.sh` checks three gates: both checkers accept the export, the CPU time of the official kernel is at least 10 times the CPU time of rulean (P1.a on Mathlib, P1.c on CSLib and Cedar), and the peak memory of rulean is at most 4 GiB (P1.f). The CPU time is the user time and the system time of all threads. The runner has no hardware counters, so this ratio takes the place of the ratio of instructions, and it is not the Arena measure. P1.b needs the official nightly, and P1.e needs 8 threads on a workstation, so the job records the wall time but does not check them. Navier-Stokes uses Lean 4.34.0-rc2 and is out of scope (02.5).
+- The scale suite is not written yet.
 - In November 2026, on an Apple M-series machine, rulean gives the correct verdict on all 225 tests, but 16 of the 42 `perf/` tests take more than 2 s of wall time. The largest is `perf/magma-list-deep-n36`, with 243.7 G instructions (about 40 virtual seconds) and 3.2 GB of peak memory. So P1.d is not met.
 
 ### 08.7.3 Profiling

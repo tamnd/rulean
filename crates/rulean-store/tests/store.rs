@@ -285,3 +285,32 @@ fn scratch_tier() {
     assert_eq!(s.mk_app(lam, c), a2);
     s.clear_scratch();
 }
+
+#[test]
+fn memory_budget_makes_the_store_full() {
+    let mut s = Store::new();
+    assert_eq!(s.max_bytes(), usize::MAX);
+    let start = s.memory().total();
+    s.set_max_bytes(start + (64 << 10));
+    let mut i = 0u32;
+    while !s.is_full() && i < 1_000_000 {
+        s.mk_bvar(i);
+        i += 1;
+    }
+    assert!(s.is_full(), "the budget did not stop the store");
+    // The store stops before an array grows past the budget, so the measure stays below it.
+    assert!(s.memory().total() <= start + (64 << 10));
+    // The same nodes with no budget fit.
+    let mut s = Store::new();
+    for j in 0..i {
+        s.mk_bvar(j);
+    }
+    assert!(!s.is_full());
+    // A large literal also counts.
+    let mut s = Store::new();
+    s.intern_nat(Nat::from_u64(1));
+    s.set_max_bytes(s.memory().total() + 4096);
+    let big = Nat::from_limbs(vec![u64::MAX; 1024]);
+    s.intern_nat(big);
+    assert!(s.is_full());
+}

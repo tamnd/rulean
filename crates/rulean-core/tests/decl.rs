@@ -751,3 +751,41 @@ fn long_let_chain() {
     assert_eq!(s.infer, 4);
     assert_eq!(s.infer_ok, s.infer);
 }
+
+/// Adds the definitions `a0 : Nat := Nat.zero`, `a1`, and so on, up to `n` of them. The result is the index and the error of the first definition that fails.
+fn add_many(t: &mut T, nat: ExprId, zero: ExprId, n: usize) -> Option<(usize, ErrorKind)> {
+    for i in 0..n {
+        let d = t.defn(&format!("a{i}"), nat, zero, Safety::Safe);
+        if let Some(e) = t.add(&Decl::Defn(d)) {
+            return Some((i, e));
+        }
+    }
+    None
+}
+
+#[test]
+fn memory_budget_stops_the_check() {
+    let mut t = T::new();
+    assert_eq!(t.c.max_memory(), usize::MAX);
+    assert!(!t.c.over_memory());
+    let (nat, zero) = t.nat();
+    assert_eq!(add_many(&mut t, nat, zero, 5000), None);
+    // A budget below the memory that the checker already uses stops the check at the next memory check.
+    let mut t = T::new();
+    let (nat, zero) = t.nat();
+    let m = t.c.memory();
+    assert!(m > 0);
+    t.c.set_max_memory(m / 2);
+    assert_eq!(t.c.st.max_bytes(), m / 2);
+    assert!(t.c.over_memory());
+    match add_many(&mut t, nat, zero, 5000) {
+        Some((_, e)) => assert_eq!(e, ErrorKind::MemoryLimit),
+        None => panic!("the budget did not stop the check"),
+    }
+    // A budget above the memory of the check changes nothing.
+    let mut t = T::new();
+    t.c.set_max_memory(1 << 30);
+    let (nat, zero) = t.nat();
+    assert_eq!(add_many(&mut t, nat, zero, 5000), None);
+    assert!(t.c.memory() < 1 << 30);
+}

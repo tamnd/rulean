@@ -4,7 +4,8 @@
 
 use std::collections::BTreeSet;
 use std::io::BufRead;
-use std::time::Instant;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use rulean_core::axioms::Axioms;
 use rulean_core::conv::Engine;
@@ -17,6 +18,7 @@ use rulean_format::{Decl, ErrorKind, Stream, rlb};
 use rulean_store::Store;
 
 use crate::exit::Code;
+use crate::limits::{self, Limited};
 use crate::report::{self, Report, SLOWEST};
 
 /// The stack size of the checker thread. Engine R recurses on the depth of the terms, so the default stack of 2 MiB is too small for real exports.
@@ -47,6 +49,17 @@ pub struct Options {
     pub paths: Vec<String>,
     /// `rulean olean`: the modules to check.
     pub modules: Vec<String>,
+    /// `--max-memory`: the memory budget in bytes. None is the default of spec 05.11, and `limits::NO_LIMIT` is no budget.
+    pub max_memory: Option<usize>,
+    /// `--timeout`: the limit of the wall time. None is no limit.
+    pub timeout: Option<Duration>,
+}
+
+impl Options {
+    /// The memory budget of the run in bytes: the value of `--max-memory`, or else 0.8 times the physical memory.
+    pub fn memory_budget(&self) -> usize {
+        self.max_memory.unwrap_or_else(limits::default_max_memory)
+    }
 }
 
 /// The axioms of `--axioms std` (spec 09.2).
@@ -135,6 +148,10 @@ pub fn parse(args: &[String], olean: bool) -> Result<Options, String> {
                     ));
                 }
             };
+        } else if is_option(a, "--max-memory") {
+            o.max_memory = Some(limits::parse_size(&value("--max-memory", a, &mut it)?)?);
+        } else if is_option(a, "--timeout") {
+            o.timeout = Some(limits::parse_duration(&value("--timeout", a, &mut it)?)?);
         } else if is_option(a, "--profile") {
             o.profile = Some(value("--profile", a, &mut it)?);
         } else if is_option(a, "--report") {
@@ -204,28 +221,66 @@ pub fn check_options(o: Options) -> Result<Run, Code> {
     };
     let source = input.source;
     let reader = input.reader;
-    let h = std::thread::Builder::new()
-        .stack_size(STACK_BYTES)
-        .spawn(move || check_reader(&o, reader));
-    match h {
-        Ok(h) => match h.join() {
-            Ok(Ok(mut r)) => {
-                confirm_input(&source, &mut r.report);
-                Ok(r)
+    let timeout = o.timeout;
+    let report_file = o.report.clone();
+    let json = o.json;
+    let start = Instant::now();
+    match limits::run_limited(timeout, move || check_reader(&o, reader)) {
+        Limited::Done(Ok(mut r)) => {
+            confirm_input(&source, &mut r.report);
+            Ok(r)
+        }
+        Limited::Done(Err(e)) => {
+            eprintln!("rulean: cannot read {path}: {e}");
+            Err(Code::Input)
+        }
+        Limited::Timeout => {
+            let t = timeout.unwrap_or_default();
+            eprintln!("rulean: {}", limits::timeout_text(t));
+            // The report needs the SHA-256 of the input. Only a file can be read again for it, so a run on standard input gives no report.
+            let digest = match &source {
+                rulean_io::Source::File(f) => {
+                    std::fs::File::open(f).and_then(rulean_io::digest).ok()
+                }
+                _ => None,
+            };
+            match digest {
+                Some(d) => Ok(timeout_run(path, hex(&d), t, start, report_file, json)),
+                None => Err(Code::Resource),
             }
-            Ok(Err(e)) => {
-                eprintln!("rulean: cannot read {path}: {e}");
-                Err(Code::Input)
-            }
-            Err(_) => {
-                eprintln!("rulean: internal error: the checker thread stopped");
-                Err(Code::Resource)
-            }
-        },
-        Err(e) => {
+        }
+        Limited::Stopped => {
+            eprintln!("rulean: internal error: the checker thread stopped");
+            Err(Code::Resource)
+        }
+        Limited::NoThread(e) => {
             eprintln!("rulean: cannot start the checker thread: {e}");
             Err(Code::Resource)
         }
+    }
+}
+
+/// The result of a run that `--timeout` stopped: no verdict, with the resource code.
+pub(crate) fn timeout_run(
+    path: String,
+    sha256: String,
+    t: Duration,
+    start: Instant,
+    report_file: Option<String>,
+    json: bool,
+) -> Run {
+    let report = Report {
+        input_path: path,
+        sha256,
+        code: Code::Resource,
+        error: Some(limits::timeout_text(t)),
+        wall_ms: start.elapsed().as_millis(),
+        ..Report::default()
+    };
+    Run {
+        report,
+        report_file,
+        json,
     }
 }
 
@@ -257,6 +312,7 @@ pub struct Run {
 pub fn check_reader<R: BufRead>(o: &Options, input: R) -> std::io::Result<Run> {
     let start = Instant::now();
     let mut store = Store::new();
+    store.set_max_bytes(o.memory_budget());
     let (parsed, digest) = read_export(&mut store, input)?;
     let mut rep = Report {
         input_path: o.input.clone().unwrap_or_default(),
@@ -268,6 +324,9 @@ pub fn check_reader<R: BufRead>(o: &Options, input: R) -> std::io::Result<Run> {
         Err(e) => {
             rep.code = code_of(e.kind);
             rep.error = Some(error_text(&e));
+            if e.kind == ErrorKind::StoreFull && store.max_bytes() != limits::NO_LIMIT {
+                rep.error = Some(memory_text(store.max_bytes()));
+            }
             return Ok(done(o, rep, start));
         }
     };
@@ -295,6 +354,7 @@ pub(crate) fn check_export(
     rep.profile = Some(prof.id());
     rep.declarations = export.decls.len();
     let mut c = Checker::new(store);
+    c.set_max_memory(o.memory_budget());
     c.flags = prof.flags();
     c.trust_primitives = o.trust_primitives;
     c.engine = engine_of(o);
@@ -322,6 +382,12 @@ fn check_sequential(o: &Options, c: &mut Checker, ds: &[Decl], rep: &mut Report)
     let mut t = Tally::new();
     let mut times: Vec<(u64, usize)> = Vec::new();
     for (i, d) in ds.iter().enumerate() {
+        // The memory check between declarations. Inside a declaration, the checker makes the same check at intervals.
+        if c.over_memory() {
+            rep.code = Code::Resource;
+            rep.error = Some(memory_text(c.max_memory()));
+            break;
+        }
         let t0 = Instant::now();
         let fault = c.add_decl(d);
         keep_slowest(&mut times, (micros(t0), i));
@@ -346,7 +412,7 @@ fn check_sequential(o: &Options, c: &mut Checker, ds: &[Decl], rep: &mut Report)
     rep.s_stats = c.sess.stats;
     rep.s_entries = c.sess.len();
     if c.st.is_full() {
-        store_full(rep);
+        store_full(c, rep);
     }
 }
 
@@ -427,12 +493,26 @@ fn check_parallel(o: &Options, c: &mut Checker, ds: &[Decl], rep: &mut Report) {
     let plan = c.plan(ds);
     let order = rulean_pool::largest_first(&plan.costs);
     let main: &Checker = c;
+    // The main checker and the workers share one budget. Each worker has a copy of the store, so the copies count too. The core has no shared state, so the total is here: before and after each job, a worker adds the change of its memory to the total and reads the memory of the others.
+    let total = AtomicUsize::new(main.memory());
+    let publish = |w: &mut Checker| {
+        let m = w.memory();
+        total.fetch_add(m, Ordering::Relaxed);
+        let now = total.fetch_sub(w.mem_published, Ordering::Relaxed) - w.mem_published;
+        w.mem_published = m;
+        w.mem_others = now.saturating_sub(m);
+    };
     let results = rulean_pool::run_all(
         o.threads,
         STACK_BYTES,
         &order,
         || Checker::worker(main.st.clone(), main.env.clone(), main),
-        |w: &mut Checker, k| w.run_job(&plan, ds, k),
+        |w: &mut Checker, k| {
+            publish(w);
+            let r = w.run_job(&plan, ds, k);
+            publish(w);
+            r
+        },
     );
     let out = sched::merge(&plan, &results, ds.len() as u32);
     rep.accepted = out.accepted as usize;
@@ -457,14 +537,22 @@ fn check_parallel(o: &Options, c: &mut Checker, ds: &[Decl], rep: &mut Report) {
     rep.s_stats = out.s_stats;
     rep.s_entries = out.s_entries as usize;
     if out.full || c.st.is_full() {
-        store_full(rep);
+        store_full(c, rep);
     }
 }
 
-/// The result of a run where an array of the store was full. Then some handles are wrong, so the run stops with a resource error (see the crate `rulean-store`).
-fn store_full(rep: &mut Report) {
+/// The result of a run where an array of the store was full. Then some handles are wrong, so the run stops with a resource error (see the crate `rulean-store`). With a memory budget, the cause can also be the budget.
+fn store_full(c: &Checker, rep: &mut Report) {
     rep.code = Code::Resource;
-    rep.error = Some("the store is full".to_owned());
+    rep.error = Some(match c.max_memory() {
+        limits::NO_LIMIT => "the store is full".to_owned(),
+        b => format!("the store is full or {}", memory_text(b)),
+    });
+}
+
+/// The text of a run that is above the memory budget.
+pub(crate) fn memory_text(budget: usize) -> String {
+    format!("the memory is above the limit of `--max-memory` ({budget} bytes)")
 }
 
 pub(crate) fn done(o: &Options, mut rep: Report, start: Instant) -> Run {
@@ -562,6 +650,7 @@ pub fn code_of_check(kind: CheckError) -> Code {
     match kind {
         CheckError::DeepRecursion => Code::Resource,
         CheckError::ArenaFull => Code::Resource,
+        CheckError::MemoryLimit => Code::Resource,
         CheckError::Unsupported => Code::Decline,
         _ => Code::Reject,
     }
@@ -767,6 +856,19 @@ mod tests {
         assert_eq!(code_of_check(CheckError::AppTypeMismatch), Code::Reject);
         assert_eq!(code_of_check(CheckError::DeepRecursion), Code::Resource);
         assert_eq!(code_of_check(CheckError::ArenaFull), Code::Resource);
+        assert_eq!(code_of_check(CheckError::MemoryLimit), Code::Resource);
+        let o = options(&strs(&["x", "--max-memory", "8G", "--timeout=90s"])).expect("valid");
+        assert_eq!(o.max_memory, Some(8 << 30));
+        assert_eq!(o.memory_budget(), 8 << 30);
+        assert_eq!(o.timeout, Some(Duration::from_secs(90)));
+        let o = options(&strs(&["x", "--max-memory=none"])).expect("valid");
+        assert_eq!(o.memory_budget(), limits::NO_LIMIT);
+        let o = options(&strs(&["x"])).expect("valid");
+        assert_eq!((o.max_memory, o.timeout), (None, None));
+        assert!(options(&strs(&["x", "--max-memory", "0"])).is_err());
+        assert!(options(&strs(&["x", "--max-memory"])).is_err());
+        assert!(options(&strs(&["x", "--timeout", "0"])).is_err());
+        assert!(options(&strs(&["x", "--timeout", "soon"])).is_err());
         assert_eq!(code_of_check(CheckError::Unsupported), Code::Decline);
     }
 
@@ -776,6 +878,30 @@ mod tests {
         check_reader(o, text.as_bytes())
             .expect("no read error")
             .report
+    }
+
+    #[test]
+    fn memory_limit_gives_a_resource_failure() {
+        // `axiom A : Prop`.
+        let text = format!(
+            "{META}\n{}\n{}\n{}\n",
+            r#"{"in":1,"str":{"pre":0,"str":"A"}}"#,
+            r#"{"ie":0,"sort":0}"#,
+            r#"{"axiom":{"name":1,"levelParams":[],"type":0,"isUnsafe":false}}"#
+        );
+        let o = Options {
+            max_memory: Some(1024),
+            ..Options::default()
+        };
+        let r = run_on(&text, &o);
+        assert_eq!(r.code, Code::Resource);
+        assert_eq!(r.accepted, 0);
+        assert!(r.error.unwrap_or_default().contains("--max-memory"));
+        let o = Options {
+            max_memory: Some(64 << 20),
+            ..Options::default()
+        };
+        assert_eq!(run_on(&text, &o).code, Code::Accept);
     }
 
     #[test]

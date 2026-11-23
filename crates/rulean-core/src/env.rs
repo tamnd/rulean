@@ -187,6 +187,11 @@ impl Env {
         if c < n { c } else { n }
     }
 
+    /// The number of bytes of the arrays of the environment, without the allocator overhead and without the small arrays inside a constant.
+    pub fn bytes(&self) -> usize {
+        self.consts.capacity() * core::mem::size_of::<ConstInfo>() + self.slot.capacity() * 4
+    }
+
     /// True if a lookup can see no constant.
     pub fn is_empty(&self) -> bool {
         self.len() == 0

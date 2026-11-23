@@ -337,6 +337,7 @@ impl Checker {
         c.confirm_all = main.confirm_all;
         c.trust_primitives = main.trust_primitives;
         c.max_depth = main.max_depth;
+        c.set_max_memory(main.max_memory);
         c.sess = main.sess.fresh();
         c.pin_off = 0;
         // The add stage compared the primitives. A worker takes the pin bits of each step from the plan.

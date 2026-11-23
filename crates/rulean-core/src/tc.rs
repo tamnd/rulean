@@ -30,6 +30,9 @@ pub const NAT_MAX_BYTES: u64 = 128 * 1024 * 1024;
 /// The default bound of the call depth: 4 times 16 times the default `maxRecDepth` of 512 (spec 05.5 and 05.11).
 pub const MAX_DEPTH: u32 = 4 * 16 * 512;
 
+/// The number of calls of `enter` between two memory checks. A check adds about 30 sizes, so the cost is small.
+const MEMORY_TICKS: u32 = 4096;
+
 /// The kind of an error. Each kind is one exception of `kernel_exception.h` or one message of `type_checker.cpp`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ErrorKind {
@@ -65,6 +68,8 @@ pub enum ErrorKind {
     DeepRecursion,
     /// The value arena of engine F is full (spec 04.5). This is a resource failure and not a verdict.
     ArenaFull,
+    /// The checker uses more memory than `--max-memory` allows (spec 12.3). This is a resource failure and not a verdict.
+    MemoryLimit,
     /// A constant of the environment does not have the expected kind. The official kernel fails with an assertion here.
     BadConst,
     /// `already_declared_exception`.
@@ -375,6 +380,14 @@ pub struct Checker {
     pub(crate) eager: bool,
     pub(crate) depth: u32,
     pub max_depth: u32,
+    // The memory budget in bytes (`--max-memory`). `usize::MAX` is no budget.
+    pub(crate) max_memory: usize,
+    // The calls of `enter`. Each `MEMORY_TICKS` calls, `enter` compares the memory with the budget.
+    pub(crate) ticks: u32,
+    /// The memory of the other checkers of the run in bytes, as the driver last saw it. With `--threads`, the checkers share one budget, and the driver sets this value before each job. The core has no shared state, so the driver keeps the total.
+    pub mem_others: usize,
+    /// The memory of this checker that the driver last added to the total of the run.
+    pub mem_published: usize,
     pub(crate) fault: Option<Fault>,
     /// The extension bits that primitive pinning turned off (spec 05.8).
     pub(crate) pin_off: u32,
@@ -433,6 +446,10 @@ impl Checker {
             eager: false,
             depth: 0,
             max_depth: MAX_DEPTH,
+            max_memory: usize::MAX,
+            ticks: 0,
+            mem_others: 0,
+            mem_published: 0,
             fault: None,
             pin_off: 0,
             pin_done: 0,
@@ -504,8 +521,59 @@ impl Checker {
             self.fail(ErrorKind::DeepRecursion, at);
             return false;
         }
+        if self.max_memory != usize::MAX {
+            self.ticks = self.ticks.wrapping_add(1);
+            if (self.ticks.is_multiple_of(MEMORY_TICKS) || self.st.is_full()) && self.over_memory()
+            {
+                self.fail(ErrorKind::MemoryLimit, at);
+                return false;
+            }
+        }
         self.depth += 1;
         true
+    }
+
+    /// Sets the memory budget in bytes (`--max-memory`, spec 12.3). The store gets the same budget, so it stops to grow at the budget. `usize::MAX` is no budget, and this is the default.
+    pub fn set_max_memory(&mut self, bytes: usize) {
+        self.max_memory = bytes;
+        self.st.set_max_bytes(bytes);
+    }
+
+    /// The memory budget in bytes. `usize::MAX` is no budget.
+    pub fn max_memory(&self) -> usize {
+        self.max_memory
+    }
+
+    /// The number of bytes that the store, the environment, the local context, the caches, the value arena and the session use, without the allocator overhead. This is the measure of `--max-memory`.
+    pub fn memory(&self) -> usize {
+        let lctx = self.lctx_name.capacity() * core::mem::size_of::<NameId>()
+            + self.lctx_info.capacity() * core::mem::size_of::<BinderInfo>()
+            + self.lctx_ty.capacity() * core::mem::size_of::<ExprId>()
+            + self.lctx_val.capacity() * core::mem::size_of::<Option<ExprId>>();
+        let memos = self.c_infer.bytes()
+            + self.c_whnf_core.bytes()
+            + self.c_whnf.bytes()
+            + self.c_unfold.bytes()
+            + self.c_success.bytes()
+            + self.c_failure.bytes()
+            + self.c_conv_failure.bytes()
+            + self.c_conv_success.bytes()
+            + self.c_force.bytes()
+            + self.c_never_proof.bytes();
+        self.st.memory().total()
+            + self.env.bytes()
+            + lctx
+            + memos
+            + self.va.bytes()
+            + self.sess.bytes()
+            + self.lparams.capacity() * core::mem::size_of::<NameId>()
+    }
+
+    /// True if the checker has a budget and the store is full, or the memory of this checker and of the other checkers (`mem_others`) is above the budget.
+    pub fn over_memory(&self) -> bool {
+        self.max_memory != usize::MAX
+            && (self.st.is_full()
+                || self.memory().saturating_add(self.mem_others) > self.max_memory)
     }
 
     pub(crate) fn leave(&mut self) {

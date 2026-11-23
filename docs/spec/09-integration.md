@@ -36,7 +36,7 @@ Main options:
 | `--format text\|json` | text | the format of standard output |
 | `--axioms <list>` | any | reject if a theorem uses an axiom outside the list; `std` means {propext, Quot.sound, Classical.choice} |
 | `--limits official\|default` | default | 05.11 |
-| `--max-memory`, `--timeout` | 05.11 | resource limits |
+| `--max-memory <size>\|none`, `--timeout <time>` | 05.11 | resource limits: a size such as `8G`, and a time such as `90s` or `2h` (05.11.1) |
 | `--engine F\|R` | F | engine R only, for debugging (05.5) |
 | `--confirm default\|all` | default | the confirm set (05.1) |
 | `--session on\|off` | on | keep the session caches across declarations (08.4); `off` clears all caches at each declaration, as the official kernel does |

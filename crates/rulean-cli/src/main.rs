@@ -8,6 +8,7 @@ mod check;
 mod diff;
 mod exit;
 mod explain;
+mod limits;
 mod olean;
 mod pack;
 mod report;
@@ -26,6 +27,9 @@ commands:
                     --engine F|R: engine F first, or engine R only (R by default for now)
                     --confirm default|all: the queries where engine R confirms engine F
                     --parse-only: parse the export and check nothing
+                    --max-memory <size>|none: the memory limit, for example 8G
+                    (0.8 times the physical memory by default)
+                    --timeout <time>: the wall time limit, for example 90s or 2h
   diff <INPUT> --against <CMD>
                     check an export with rulean and with the command CMD, and
                     compare the verdicts (exit 0 if they are the same, 1 if not)

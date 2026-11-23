@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.0.11] - 2026-11-24
+
 ### Added
 
 - `proof/RuleanProof/Contracts.lean` states the island contracts K3 to K6 of spec 10.7, each with one theorem: `Frozen` for the frozen tier, `ScanAgrees` for the SIMD scanner, `NoWrap` for overflow and `AllOrNothing` for allocation failure.
@@ -227,7 +229,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.10...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.11...HEAD
+[0.0.11]: https://github.com/tamnd/rulean/compare/v0.0.10...v0.0.11
 [0.0.10]: https://github.com/tamnd/rulean/compare/v0.0.9...v0.0.10
 [0.0.9]: https://github.com/tamnd/rulean/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/tamnd/rulean/compare/v0.0.7...v0.0.8

@@ -204,11 +204,11 @@ jobs:
       - name: engine F and engine R on the either tests
         run: scripts/arena-confirm.sh _tmp/arena-extra
 
-  # rulean as an external kernel of lake comparator, with the bwrap sandbox of lake (spec 09.5), and `rulean olean` on the oleans of Init of the release (spec 07.3). Ubuntu 24.04 blocks the user namespaces that bwrap needs, so the job allows them first. The job depends on the Lean release, so it is not a required check.
+  # rulean as an external kernel of lake comparator, with the bwrap sandbox of lake (spec 09.5), and the cross-validation of the `.olean` reader with lean4export on Init of the release (spec 07.3.6). Ubuntu 24.04 blocks the user namespaces that bwrap needs, so the job allows them first. The job depends on the Lean release, so it is not a required check.
   lake:
     name: lake comparator
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     env:
       LEAN_ASSET: lean-4.36.0-linux.tar.zst
       LEAN_SHA256: 2b7ab1ed8b92d2e6abfaf41344823b510064dbc9c0260cac73eb496ab2dea6eb
@@ -221,6 +221,7 @@ jobs:
         with:
           save-if: false
       - run: cargo build --locked --release --bin rulean
+      - run: cargo build --locked --release -p rulean-olean --example olean_compare
       - name: bwrap
         run: |
           sudo apt-get update -q
@@ -235,8 +236,8 @@ jobs:
           echo "$PWD/_tmp/lean/lean-4.36.0-linux/bin" >> "$GITHUB_PATH"
       - name: rulean in lake comparator
         run: scripts/lake-comparator.sh
-      - name: rulean olean on Init of the release
-        run: target/release/rulean olean --path _tmp/lean/lean-4.36.0-linux/lib/lean Init
+      - name: the .olean reader and lean4export on Init of the release
+        run: scripts/olean-xval.sh _tmp/lean/lean-4.36.0-linux/lib/lean
 
   # The repository rules of the spec: the dependency rule (03.3), the no-C policy (13.3) and the Aeneas subset (10.6). `cargo xtask all` also scans the vendored source of each dependency.
   policy:

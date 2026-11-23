@@ -165,7 +165,8 @@ Any difference is a release blocker. This is the evidence for the reader until i
 
 - lean4export gives a subset of the constants of the oleans. It does not export some auxiliary constants, for example `_unsafe_rec`, `_proof_N` and `_impl` constants. For Init of v4.36.0 the export has 58,547 declarations and the oleans have 64,714 before the mutual blocks are made. So the comparison requires each declaration of the export to be in the oleans, and it reports the others as a count.
 - lean4export shares expressions that are equal up to alpha equivalence, because the equality of `Expr` in Lean ignores binder names and binder information. So a binder name in the export can come from another term. The comparison is modulo binder names and binder information.
-- The first form of this check is the example `olean_compare` of `rulean-olean`. On Init of v4.36.0, each of the 58,547 declarations of the export is equal to the declaration from the oleans. Before the reader followed the replacement rule of 07.3.4, the check found 4 differences: the reader kept the first copy of 4 auxiliary theorems, and Lean keeps the last copy. The CI job is not written yet.
+- The first form of this check is the example `olean_compare` of `rulean-olean`. On Init of v4.36.0, each of the 58,547 declarations of the export is equal to the declaration from the oleans. Before the reader followed the replacement rule of 07.3.4, the check found 4 differences: the reader kept the first copy of 4 auxiliary theorems, and Lean keeps the last copy.
+- The script `scripts/olean-xval.sh` runs the three steps on Init of one Lean release, and the `lake` job of CI runs it on Init of v4.36.0. A difference or a declaration that is only in the export makes the job fail. The corpus projects and the other profiles are not in the job yet.
 
 ## 07.4 Formats rulean does not read
 

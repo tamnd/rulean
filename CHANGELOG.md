@@ -4,6 +4,14 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- The work gate of the quick suite (spec 08.7.4). The JSON report has two new counts in `summary`: `steps`, the calls of `enter` of the type checker, and `interns`, the calls of `intern_expr` of the store. A sequential run gives the same counts on each machine. `rulean-bench work` compares the counts of reports with the baseline file `docs/bench/work.json` and fails on a change above 1% in either direction. `scripts/work-gate.sh` runs the gate on Init and Std of a Lean release, and the CI job `lake comparator` runs the script.
+
+### Changed
+
+- `scripts/olean-xval.sh` cross-validates the `.olean` reader on a list of modules, Init and Std by default (spec 07.3.6). The new CI job `olean-xval` runs it on Lean v4.35.0, v4.36.0 and v4.37.0-rc1, so each profile except `master` and each olean version of these releases is in the check. The `lake comparator` job does not run it any more. Locally, Init and Std of v4.36.0 and Init of v4.35.0 give no difference.
+
 ## [0.0.7] - 2026-11-23
 
 ### Added
@@ -11,7 +19,6 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - Engine F does the type check and the value check of a declaration with type inference on values (spec 05.4.5). The contexts are nodes of a tree with hash-consing, so a binder or a `let` with the same domain or value in the same context is one node, and the types and values of terms are cached for each node. A literal, a projection and a free variable go to engine R inference. If an equality check gives "not equal" or an answer in the confirm set, or if engine F stops with a fault, engine R does the full check of the declaration. So a reject always comes from engine R. With `--confirm all`, engine R checks each declaration again after engine F accepts it. The JSON report has the new counts `f_infer` and `f_infer_ok`, and `r_disagree` also counts the checks that engine F accepted and engine R rejected. Row O6 of the reordering table of spec 05.7.3 has no lemma yet, so engine R stays the default engine.
 - With `--engine F`, the Arena test `perf/app-lam` used 50 G instructions and now uses 0.55 G, `perf/beta-ladder` used 12.8 G and now uses 0.21 G, and `perf/let-ladder` used 6.6 G and now uses 0.20 G. On the Init export (58,547 declarations), engine F used 974.0 G instructions and now uses 833.1 G, and engine F inference accepts 104,103 of its 115,869 checks. Engine R uses about 266 G on this export, so it is still much faster. All 225 Arena tests give the expected verdict with engine F and with engine R.
 - `--max-memory <size>|none` and `--timeout <time>` for `rulean check` and `rulean olean` (spec 05.11.1). The default memory limit is 0.8 times the physical memory on Linux and macOS. The store checks the budget when an array of expressions or the literal array must grow, and the checker compares its memory with the budget before each declaration and at intervals inside a declaration. Above the budget, or at the deadline of `--timeout`, the result is exit code 3 (resource) and no verdict. The parser tables and the olean reader buffers are not in the measure yet.
-- The work gate of the quick suite (spec 08.7.4). The JSON report has two new counts in `summary`: `steps`, the calls of `enter` of the type checker, and `interns`, the calls of `intern_expr` of the store. A sequential run gives the same counts on each machine. `rulean-bench work` compares the counts of reports with the baseline file `docs/bench/work.json` and fails on a change above 1% in either direction. `scripts/work-gate.sh` runs the gate on Init and Std of a Lean release, and the CI job `lake comparator` runs the script.
 
 ## [0.0.6] - 2026-11-23
 

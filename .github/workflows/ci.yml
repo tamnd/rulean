@@ -220,7 +220,7 @@ jobs:
       - name: engine F and engine R on the either tests
         run: scripts/arena-confirm.sh _tmp/arena-extra
 
-  # rulean as an external kernel of lake comparator, with the bwrap sandbox of lake (spec 09.5), the cross-validation of the `.olean` reader with lean4export on Init of the release (spec 07.3.6), and the work gate of the quick suite on Init and Std (spec 08.7.4). Ubuntu 24.04 blocks the user namespaces that bwrap needs, so the job allows them first. The job depends on the Lean release, so it is not a required check.
+  # rulean as an external kernel of lake comparator, with the bwrap sandbox of lake (spec 09.5), and the work gate of the quick suite on Init and Std (spec 08.7.4). Ubuntu 24.04 blocks the user namespaces that bwrap needs, so the job allows them first. The job depends on the Lean release, so it is not a required check.
   lake:
     name: lake comparator
     runs-on: ubuntu-latest
@@ -237,7 +237,6 @@ jobs:
         with:
           save-if: false
       - run: cargo build --locked --release --bin rulean --bin rulean-bench
-      - run: cargo build --locked --release -p rulean-olean --example olean_compare
       - name: bwrap
         run: |
           sudo apt-get update -q
@@ -252,10 +251,46 @@ jobs:
           echo "$PWD/_tmp/lean/lean-4.36.0-linux/bin" >> "$GITHUB_PATH"
       - name: rulean in lake comparator
         run: scripts/lake-comparator.sh
-      - name: the .olean reader and lean4export on Init of the release
-        run: scripts/olean-xval.sh _tmp/lean/lean-4.36.0-linux/lib/lean
       - name: the work gate on Init and Std of the release
         run: scripts/work-gate.sh docs/bench/work.json
+
+  # The cross-validation of the `.olean` reader with lean4export on Init and Std (spec 07.3.6), for each Lean release of a profile (spec 05.2). v4.35.0 and v4.36.0 have the profile v4.35 and write oleans of version 2. v4.37.0-rc1 has the profile v4.37 and writes oleans of version 4. The job depends on the Lean releases, so it is not a required check.
+  olean-xval:
+    name: olean cross-validation (v${{ matrix.lean }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lean: 4.35.0
+            sha256: 7289597a44543246c9227b8cae501767e095ce17f6d448b95fc4a8dc97268f6d
+          - lean: 4.36.0
+            sha256: 2b7ab1ed8b92d2e6abfaf41344823b510064dbc9c0260cac73eb496ab2dea6eb
+          - lean: 4.37.0-rc1
+            sha256: 2e1bbb832870bb81b7131cb70b13aec2cc7ed9f22e2bdbb236b86076ae20382d
+    env:
+      LEAN: ${{ matrix.lean }}
+      LEAN_SHA256: ${{ matrix.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: false
+      - run: cargo build --locked --release --bin rulean
+      - run: cargo build --locked --release -p rulean-olean --example olean_compare
+      - name: the Lean release
+        run: |
+          mkdir -p _tmp/lean
+          curl -sSfL --retry 3 -o "_tmp/lean/lean.tar.zst" "https://github.com/leanprover/lean4/releases/download/v$LEAN/lean-$LEAN-linux.tar.zst"
+          echo "$LEAN_SHA256  _tmp/lean/lean.tar.zst" | sha256sum -c -
+          tar --zstd -xf "_tmp/lean/lean.tar.zst" -C _tmp/lean
+          echo "$PWD/_tmp/lean/lean-$LEAN-linux/bin" >> "$GITHUB_PATH"
+      - name: the .olean reader and lean4export on Init and Std
+        run: scripts/olean-xval.sh "_tmp/lean/lean-$LEAN-linux/lib/lean"
 
   # The repository rules of the spec: the dependency rule (03.3), the no-C policy (13.3) and the Aeneas subset (10.6). `cargo xtask all` also scans the vendored source of each dependency.
   policy:

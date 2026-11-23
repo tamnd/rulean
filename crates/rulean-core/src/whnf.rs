@@ -5,7 +5,7 @@
 use alloc::vec::Vec;
 use rulean_format::Hints;
 use rulean_nat::Nat;
-use rulean_store::{Expr, ExprId, Literal, NameId};
+use rulean_store::{Expr, ExprId, Literal, NameId, NatId};
 
 use crate::env::{ConstKind, RuleInfo};
 use crate::expr;
@@ -54,6 +54,25 @@ pub fn utf8_decode(b: &[u8]) -> Vec<u32> {
         i += 1 + k;
     }
     out
+}
+
+/// The result of `nat_lit_id`.
+#[derive(Clone, Copy)]
+enum NatArg {
+    /// A literal: its handle, or `None` for `Nat.zero`.
+    Lit(Option<NatId>),
+    /// The term is not a literal.
+    NotLit,
+}
+
+/// The result of a binary `Nat` operation of `nat_bin`, before it goes into the store.
+enum NatOut {
+    /// A value whose size `check_nat_size` checks.
+    Sized(Nat),
+    /// A value with no size check.
+    Value(Nat),
+    Bool(bool),
+    None,
 }
 
 impl Checker {
@@ -664,17 +683,6 @@ impl Checker {
 
     // The `Nat` extension.
 
-    /// The value of a literal or of `Nat.zero` (`is_nat_lit_ext` and `get_nat_val`).
-    pub(crate) fn nat_lit_ext(&self, e: ExprId) -> Option<Nat> {
-        if e == self.b.e_nat_zero {
-            return Some(Nat::zero());
-        }
-        match self.st.node(e) {
-            Expr::Lit(Literal::Nat(n)) => Some(self.st.nat(n).clone()),
-            _ => None,
-        }
-    }
-
     pub(crate) fn mk_nat(&mut self, v: Nat) -> ExprId {
         let id = self.st.intern_nat(v);
         self.st.mk_nat_lit(id)
@@ -688,20 +696,39 @@ impl Checker {
         }
     }
 
-    /// The two arguments of a binary `Nat` operation after `whnf`, if both are literals.
-    fn nat_args(&mut self, e: ExprId) -> Option<(Nat, Nat)> {
+    /// The literal of `e` as a handle of the store, with `None` for `Nat.zero`, or `NotLit` (`is_nat_lit_ext`). The value stays in the store, so a large value is not copied.
+    fn nat_lit_id(&self, e: ExprId) -> NatArg {
+        if e == self.b.e_nat_zero {
+            return NatArg::Lit(None);
+        }
+        match self.st.node(e) {
+            Expr::Lit(Literal::Nat(n)) => NatArg::Lit(Some(n)),
+            _ => NatArg::NotLit,
+        }
+    }
+
+    /// The value of a literal of `nat_lit_id`. `zero` is the value for `None`.
+    fn nat_ref<'a>(&'a self, n: Option<NatId>, zero: &'a Nat) -> &'a Nat {
+        match n {
+            Some(id) => self.st.nat(id),
+            None => zero,
+        }
+    }
+
+    /// The two arguments of a binary `Nat` operation after `whnf`, if both are literals, as in `nat_lit_id`.
+    fn nat_args(&mut self, e: ExprId) -> Option<(Option<NatId>, Option<NatId>)> {
         let f = self.app_fn1(e);
         let a1 = self.app_arg(f);
         let w1 = self.whnf(a1);
-        let v1 = match self.nat_lit_ext(w1) {
-            Some(v) => v,
-            None => return None,
+        let v1 = match self.nat_lit_id(w1) {
+            NatArg::Lit(v) => v,
+            NatArg::NotLit => return None,
         };
         let a2 = self.app_arg(e);
         let w2 = self.whnf(a2);
-        let v2 = match self.nat_lit_ext(w2) {
-            Some(v) => v,
-            None => return None,
+        let v2 = match self.nat_lit_id(w2) {
+            NatArg::Lit(v) => v,
+            NatArg::NotLit => return None,
         };
         if self.bad() {
             return None;
@@ -762,24 +789,45 @@ impl Checker {
         Some(self.mk_nat(r))
     }
 
-    /// The binary operation `op` of `reduce_nat` on the values.
-    fn nat_bin(&mut self, e: ExprId, op: usize, v1: &Nat, v2: &Nat) -> Option<ExprId> {
-        match op {
-            NAT_ADD => self.sized(e, v1.add(v2)),
-            NAT_SUB => self.sized(e, v1.sub(v2)),
-            NAT_MUL => self.sized(e, v1.mul(v2)),
-            NAT_POW => self.reduce_pow(e, v1, v2),
-            NAT_GCD => Some(self.mk_nat(v1.gcd(v2))),
-            NAT_MOD => Some(self.mk_nat(v1.rem(v2))),
-            NAT_DIV => Some(self.mk_nat(v1.div(v2))),
-            NAT_BEQ => Some(self.mk_bool(v1.beq(v2))),
-            NAT_BLE => Some(self.mk_bool(v1.ble(v2))),
-            NAT_LAND => Some(self.mk_nat(v1.land(v2))),
-            NAT_LOR => Some(self.mk_nat(v1.lor(v2))),
-            NAT_XOR => Some(self.mk_nat(v1.xor(v2))),
-            NAT_SHL => self.reduce_shift_left(e, v1, v2),
-            NAT_SHR => Some(self.mk_nat(v1.shift_right_nat(v2))),
-            _ => None,
+    /// The binary operation `op` of `reduce_nat` on the literals `n1` and `n2` of `nat_args`. The operation reads the values in the store and does not copy them. `Nat.pow` and `Nat.shiftLeft` check a count before the operation, so they copy the values.
+    fn nat_bin(
+        &mut self,
+        e: ExprId,
+        op: usize,
+        n1: Option<NatId>,
+        n2: Option<NatId>,
+    ) -> Option<ExprId> {
+        let zero = Nat::zero();
+        if op == NAT_POW || op == NAT_SHL {
+            let v1 = self.nat_ref(n1, &zero).clone();
+            let v2 = self.nat_ref(n2, &zero).clone();
+            if op == NAT_POW {
+                return self.reduce_pow(e, &v1, &v2);
+            }
+            return self.reduce_shift_left(e, &v1, &v2);
+        }
+        let v1 = self.nat_ref(n1, &zero);
+        let v2 = self.nat_ref(n2, &zero);
+        let r = match op {
+            NAT_ADD => NatOut::Sized(v1.add(v2)),
+            NAT_SUB => NatOut::Sized(v1.sub(v2)),
+            NAT_MUL => NatOut::Sized(v1.mul(v2)),
+            NAT_GCD => NatOut::Value(v1.gcd(v2)),
+            NAT_MOD => NatOut::Value(v1.rem(v2)),
+            NAT_DIV => NatOut::Value(v1.div(v2)),
+            NAT_BEQ => NatOut::Bool(v1.beq(v2)),
+            NAT_BLE => NatOut::Bool(v1.ble(v2)),
+            NAT_LAND => NatOut::Value(v1.land(v2)),
+            NAT_LOR => NatOut::Value(v1.lor(v2)),
+            NAT_XOR => NatOut::Value(v1.xor(v2)),
+            NAT_SHR => NatOut::Value(v1.shift_right_nat(v2)),
+            _ => NatOut::None,
+        };
+        match r {
+            NatOut::Sized(v) => self.sized(e, v),
+            NatOut::Value(v) => Some(self.mk_nat(v)),
+            NatOut::Bool(b) => Some(self.mk_bool(b)),
+            NatOut::None => None,
         }
     }
 
@@ -812,11 +860,13 @@ impl Checker {
             if f == self.b.e_nat_succ {
                 let a = self.app_arg(e);
                 let w = self.whnf(a);
-                let v = match self.nat_lit_ext(w) {
-                    Some(v) => v,
-                    None => return None,
+                let n = match self.nat_lit_id(w) {
+                    NatArg::Lit(n) => n,
+                    NatArg::NotLit => return None,
                 };
-                return self.sized(e, v.succ());
+                let zero = Nat::zero();
+                let v = self.nat_ref(n, &zero).succ();
+                return self.sized(e, v);
             }
         } else if nargs == 2 {
             let f1 = self.app_fn1(e);
@@ -828,11 +878,11 @@ impl Checker {
             if op >= self.b.nat_ops.len() || !self.pin_on(1 << op) {
                 return None;
             }
-            let (v1, v2) = match self.nat_args(e) {
+            let (n1, n2) = match self.nat_args(e) {
                 Some(x) => x,
                 None => return None,
             };
-            return self.nat_bin(e, op, &v1, &v2);
+            return self.nat_bin(e, op, n1, n2);
         }
         None
     }

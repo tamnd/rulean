@@ -54,6 +54,7 @@ flags           : u8      (has_fvar, has_level_param, has_let, has_proj, has_lit
 
 - The hash is a 32-bit mix of the kind seed and the hashes of the children, with a MurmurHash3-style step. Lean moved to a similar step in v4.37 for the same reason (D§3.4, PR#16107).
 - Literal hashes cover all bits of the number (lean4#16146), so literals that differ only above 2^64 do not collide.
+- The hash of a large literal has four lanes of 64 bits. Each limb goes into the lane of its position modulo 4 with one multiplication and one rotation, and at the end the MurmurHash3 step mixes the halves of the lanes and the limb count. The four lanes do not depend on each other, so the processor runs them at the same time. The MurmurHash3 step for each limb has a chain of six multiplications, and on `perf/gf3-matrix-product`, with values of up to 19,000 limbs, the hash took more time than the operations.
 - Hash collisions are never a soundness problem: a table lookup compares the full node after the hash matches. Collisions cost time only. The #14576 exploit used a hash collision to defeat caching (A§2.1), so rulean's caches never trust a hash alone (08.5).
 
 ### 04.2.4 Interning tables
@@ -95,7 +96,7 @@ enum Nat { Small(u64), Large(Limbs) }   -- Large is canonical: at least 2 limbs 
 ```
 
 - The 15 kernel operations (05.8) each have a fast path for `Small` with overflow checks.
-- `Large` uses schoolbook multiplication below 32 limbs, Karatsuba above, and Knuth division (algorithm D). No FFT. Results above 128 MiB are refused by the caller before the operation runs (05.8).
+- `Large` uses schoolbook multiplication below 32 limbs, Karatsuba above, and Knuth division (algorithm D). No FFT. Results above 128 MiB are refused by the caller before the operation runs (05.8). The schoolbook loop has the shorter operand in the outer loop, so the inner loop is long. The addition, the subtraction and the bitwise operations have one loop on the limbs of both operands and one loop on the other limbs of the longer operand, with no test of the length in the loops.
 - Each operation has a refinement proof against Lean's `Nat` (10.4.6). The differential test oracles are `num-bigint` and `malachite` (malachite is LGPL and is used only in tests, D§12.5).
 - Literals are interned in a `NatId` table, so equal literals have equal handles.
 

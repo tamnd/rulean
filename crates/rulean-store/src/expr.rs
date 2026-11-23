@@ -641,14 +641,14 @@ impl Store {
 
     /// Interns a natural number literal. The hash covers every limb (spec 04.2.3).
     pub fn intern_nat(&mut self, n: Nat) -> NatId {
-        let count = n.limb_count();
-        let mut h = hash::mix(NAT_SEED, count as u32);
-        let mut i = 0;
-        while i < count {
-            h = hash::word64(h, n.limb(i));
-            i += 1;
-        }
-        let h = hash::finish(h);
+        let h = match &n {
+            Nat::Small(x) => {
+                let count = n.limb_count();
+                hash::finish(hash::word64(hash::mix(NAT_SEED, count as u32), *x))
+            }
+            // A large value has at least two limbs, so its hash does not need to be the hash of a small value with the same limbs.
+            Nat::Large(v) => hash::limbs(NAT_SEED, v),
+        };
         let mut pos = self.nat_table.start(h);
         let mut found: u32 = 0;
         let mut walking = true;

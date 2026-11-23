@@ -77,12 +77,19 @@ pub fn cmp(a: &[u64], b: &[u64]) -> Ordering {
 
 /// `a + b`.
 pub fn add(a: &[u64], b: &[u64]) -> Vec<u64> {
-    let n = if a.len() > b.len() { a.len() } else { b.len() };
-    let mut r = Vec::with_capacity(n + 1);
+    // `long` is the longer operand. The first loop runs on the limbs of both operands and has no test of the length, and the second loop runs on the other limbs of `long`.
+    let (long, short) = if a.len() >= b.len() { (a, b) } else { (b, a) };
+    let mut r = Vec::with_capacity(long.len() + 1);
     let mut carry: u128 = 0;
     let mut i = 0;
-    while i < n {
-        let s = get(a, i) as u128 + get(b, i) as u128 + carry;
+    while i < short.len() {
+        let s = long[i] as u128 + short[i] as u128 + carry;
+        r.push(s as u64);
+        carry = s >> 64;
+        i += 1;
+    }
+    while i < long.len() {
+        let s = long[i] as u128 + carry;
         r.push(s as u64);
         carry = s >> 64;
         i += 1;
@@ -96,12 +103,20 @@ pub fn add(a: &[u64], b: &[u64]) -> Vec<u64> {
 /// `a - b`. The caller makes sure that `a >= b`.
 pub fn sub(a: &[u64], b: &[u64]) -> Vec<u64> {
     let n = a.len();
+    let m = if b.len() < n { b.len() } else { n };
     let mut r = Vec::with_capacity(n);
     let mut borrow: u128 = 0;
     let mut i = 0;
-    while i < n {
+    while i < m {
         // The sum is at least 2^64 - (2^64 - 1) - 1 = 0, so it does not go below zero.
-        let d = (1u128 << 64) + a[i] as u128 - get(b, i) as u128 - borrow;
+        let d = (1u128 << 64) + a[i] as u128 - b[i] as u128 - borrow;
+        r.push(d as u64);
+        borrow = 1 - (d >> 64);
+        i += 1;
+    }
+    // The limbs of `b` from `m` are zero, because `a >= b`.
+    while i < n {
+        let d = (1u128 << 64) + a[i] as u128 - borrow;
         r.push(d as u64);
         borrow = 1 - (d >> 64);
         i += 1;
@@ -137,22 +152,32 @@ fn sub_into(acc: &mut [u64], b: &[u64], offset: usize) {
 
 /// `a * b` with the schoolbook method.
 pub fn mul_school(a: &[u64], b: &[u64]) -> Vec<u64> {
-    let na = used_len(a);
-    let nb = used_len(b);
-    let mut r = zeros(na + nb);
+    // The outer loop runs on the shorter operand, so the inner loop is long and its cost for each limb is low.
+    let (long, short) = if used_len(a) >= used_len(b) {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    let nl = used_len(long);
+    let ns = used_len(short);
+    let long = &long[..nl];
+    let mut r = zeros(nl + ns);
     let mut i = 0;
-    while i < na {
-        let x = a[i] as u128;
-        let mut carry: u128 = 0;
-        let mut j = 0;
-        while j < nb {
-            // At most (2^64 - 1) + (2^64 - 1)^2 + (2^64 - 1) = 2^128 - 1.
-            let t = r[i + j] as u128 + x * b[j] as u128 + carry;
-            r[i + j] = t as u64;
-            carry = t >> 64;
-            j += 1;
+    while i < ns {
+        let x = short[i] as u128;
+        if x != 0 {
+            let row = &mut r[i..i + nl + 1];
+            let mut carry: u128 = 0;
+            let mut j = 0;
+            while j < nl {
+                // At most (2^64 - 1) + (2^64 - 1)^2 + (2^64 - 1) = 2^128 - 1.
+                let t = row[j] as u128 + x * long[j] as u128 + carry;
+                row[j] = t as u64;
+                carry = t >> 64;
+                j += 1;
+            }
+            row[nl] = carry as u64;
         }
-        r[i + nb] = carry as u64;
         i += 1;
     }
     r
@@ -341,11 +366,15 @@ pub fn and(a: &[u64], b: &[u64]) -> Vec<u64> {
 
 /// `a | b`.
 pub fn or(a: &[u64], b: &[u64]) -> Vec<u64> {
-    let n = if a.len() > b.len() { a.len() } else { b.len() };
-    let mut r = Vec::with_capacity(n);
+    let (long, short) = if a.len() >= b.len() { (a, b) } else { (b, a) };
+    let mut r = Vec::with_capacity(long.len());
     let mut i = 0;
-    while i < n {
-        r.push(get(a, i) | get(b, i));
+    while i < short.len() {
+        r.push(long[i] | short[i]);
+        i += 1;
+    }
+    while i < long.len() {
+        r.push(long[i]);
         i += 1;
     }
     r
@@ -353,11 +382,15 @@ pub fn or(a: &[u64], b: &[u64]) -> Vec<u64> {
 
 /// `a ^ b`.
 pub fn xor(a: &[u64], b: &[u64]) -> Vec<u64> {
-    let n = if a.len() > b.len() { a.len() } else { b.len() };
-    let mut r = Vec::with_capacity(n);
+    let (long, short) = if a.len() >= b.len() { (a, b) } else { (b, a) };
+    let mut r = Vec::with_capacity(long.len());
     let mut i = 0;
-    while i < n {
-        r.push(get(a, i) ^ get(b, i));
+    while i < short.len() {
+        r.push(long[i] ^ short[i]);
+        i += 1;
+    }
+    while i < long.len() {
+        r.push(long[i]);
         i += 1;
     }
     r

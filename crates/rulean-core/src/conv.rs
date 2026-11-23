@@ -46,6 +46,9 @@ pub struct FStats {
     pub infer_ok: u64,
 }
 
+/// The largest number of nodes that `same_value` visits. The check runs at each step of `conv`, and a failed check on a deep value runs again on each part of it, so a large budget costs time. On the Init export of v4.36.0, engine F uses 458 G instructions with 16, 435 G with 64, 423 G with 256 and 417 G with 1024. On the 42 Arena perf tests, the budget 256 makes `magma-list-pair-n21` slower (113.4 G to 120.6 G instructions), and 1024 makes `church-numerals` slower (0.1 G to 1.7 G).
+const SAME_BUDGET: u32 = 64;
+
 /// A bit of `Checker::f_bits`: the query used a delta step.
 pub(crate) const F_DELTA: u32 = 1;
 /// A bit of `Checker::f_bits`: the query used a type-directed rule (K-like reduction or structure eta of a major premise).
@@ -139,6 +142,9 @@ impl Checker {
     }
 
     fn conv_body(&mut self, a: ValueId, b: ValueId) -> bool {
+        if self.same_value(a, b) {
+            return true;
+        }
         let q = self.conv_quick(a, b);
         if q != LBool::Undef {
             return q == LBool::True;
@@ -451,7 +457,10 @@ impl Checker {
                         y = self.conv_delta(y);
                     } else {
                         let regular = matches!(h1, Hints::Regular(_));
-                        if regular
+                        if c1 == c2 && self.same_value(x, y) {
+                            r = LBool::True;
+                            done = true;
+                        } else if regular
                             && c1 == c2
                             && self.is_def_eq_levels(us1, us2)
                             && self.conv_spines(sp1, sp2)
@@ -474,6 +483,82 @@ impl Checker {
             }
         }
         (r, x, y)
+    }
+
+    /// Reflexivity on values (row O7 of spec 05.7.3): true if `a` and `b` have the same form, with no reduction. The form is the same when the constructors, the constants, the levels, the free variables and the literals are the same, and two closures have the same body and environments of the same form. Two values with the same form read back to the same term, so the answer is the quick check of the official step 1, where the official kernel compares two terms by their structure.
+    ///
+    /// Engine R gets this check for free, because the store shares equal terms: two equal terms are the same node. Engine F makes a new value at each evaluation, so two equal arguments are two different values. Without this check, lazy delta unfolds both sides of two equal applications of an abbreviation, and then compares the unfoldings. On `Lean.Grind.Linarith.lt_norm` in Init, engine F did 6,022 delta steps, and engine R did 55.
+    ///
+    /// The check visits at most `SAME_BUDGET` nodes. When the budget is used up, it gives false, and the normal steps decide the query.
+    fn same_value(&mut self, a: ValueId, b: ValueId) -> bool {
+        let mut budget = SAME_BUDGET;
+        self.same_in(a, b, &mut budget)
+    }
+
+    fn same_in(&mut self, a: ValueId, b: ValueId, budget: &mut u32) -> bool {
+        if a == b {
+            return true;
+        }
+        if *budget == 0 {
+            return false;
+        }
+        *budget -= 1;
+        match (self.va.get(a), self.va.get(b)) {
+            (Value::Sort(l1), Value::Sort(l2)) => l1 == l2,
+            (Value::Lit(x), Value::Lit(y)) => x == y,
+            (Value::Lam(_, _, d1, c1), Value::Lam(_, _, d2, c2))
+            | (Value::Pi(_, _, d1, c1), Value::Pi(_, _, d2, c2)) => {
+                self.same_in(d1, d2, budget) && self.same_closure(c1, c2, budget)
+            }
+            (Value::Glued(c1, us1, sp1, _), Value::Glued(c2, us2, sp2, _)) => {
+                c1 == c2 && us1 == us2 && self.same_spine(sp1, sp2, budget)
+            }
+            (Value::Neu(h1, sp1), Value::Neu(h2, sp2)) => {
+                let same_head = match (h1, h2) {
+                    (Head::FVar(l1, _), Head::FVar(l2, _)) => l1 == l2,
+                    (Head::Const(c1, us1), Head::Const(c2, us2)) => c1 == c2 && us1 == us2,
+                    (Head::Proj(s1, i1, x1), Head::Proj(s2, i2, x2)) => {
+                        s1 == s2 && i1 == i2 && self.same_in(x1, x2, budget)
+                    }
+                    _ => false,
+                };
+                same_head && self.same_spine(sp1, sp2, budget)
+            }
+            _ => false,
+        }
+    }
+
+    /// Two spines with arguments of the same form.
+    fn same_spine(&mut self, s1: SpineId, s2: SpineId, budget: &mut u32) -> bool {
+        let mut x = s1;
+        let mut y = s2;
+        let mut ok = self.va.spine_len(x) == self.va.spine_len(y);
+        while ok && x != y && x != SpineId::NIL {
+            let (ax, px) = self.va.spine_node(x);
+            let (ay, py) = self.va.spine_node(y);
+            ok = self.same_in(ax, ay, budget);
+            x = px;
+            y = py;
+        }
+        ok
+    }
+
+    /// Two closures with the same body and environments of the same form.
+    fn same_closure(&mut self, c1: Closure, c2: Closure, budget: &mut u32) -> bool {
+        if c1.body != c2.body {
+            return false;
+        }
+        let mut x = c1.env;
+        let mut y = c2.env;
+        let mut ok = self.va.env_len(x) == self.va.env_len(y);
+        while ok && x != y && x != EnvId::NIL {
+            let (vx, px) = self.va.env_node(x);
+            let (vy, py) = self.va.env_node(y);
+            ok = self.same_in(vx, vy, budget);
+            x = px;
+            y = py;
+        }
+        ok
     }
 
     /// Two spines of the same length with equal arguments.

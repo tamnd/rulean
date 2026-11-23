@@ -221,7 +221,19 @@ impl Arena {
         Some(self.envs[e.0 as usize].value)
     }
 
+    /// The value and the parent of an environment node that is not `EnvId::NIL`.
+    pub fn env_node(&self, env: EnvId) -> (ValueId, EnvId) {
+        let n = self.envs[env.0 as usize];
+        (n.value, n.parent)
+    }
+
     // Spines.
+
+    /// The last argument and the parent of a spine node that is not `SpineId::NIL`.
+    pub fn spine_node(&self, sp: SpineId) -> (ValueId, SpineId) {
+        let n = self.spines[sp.0 as usize];
+        (n.arg, n.parent)
+    }
 
     /// The spine `sp` with `arg` added as the last argument.
     pub fn spine_push(&mut self, sp: SpineId, arg: ValueId) -> SpineId {

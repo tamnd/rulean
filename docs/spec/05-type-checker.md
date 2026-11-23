@@ -190,13 +190,14 @@ Engine F may change the order of steps only as listed here. Each row has a twin 
 | O3 | Skip `whnf_core` when both sides are already in head normal form | `whnf_core` is the identity on them | `force_core_idem` |
 | O4 | Evaluate `let` lazily | zeta is confluent with all other rules here; the official kernel also substitutes | `zeta_lazy` |
 | O5 | Unfold both sides at once when heights are equal | official step 5 does the same | `lazyDelta_equal_height` |
+| O7 | Compare two values by their form before any step, and stop lazy delta when both sides have the same form | official step 1 compares two terms by their structure; two values of the same form read back to the same term | `same_true`, `lazyDelta_same` |
 | O6 | Infer types as values in a context tree (05.4.5) | the typing rules are the official rules, each equality check is a conversion of engine F, and a reject comes from engine R | not done |
 
 Rows are added only with a lemma, an Arena regression test and a corpus run that shows no verdict change.
 
 Row O6 has no lemma yet. This is an open item of M4. Until the lemma is proved, engine F is not the default engine, and the `arena` CI job runs each Arena test with `--confirm all`.
 
-The lemmas of O1 to O5 are in `proof/RuleanProof/Twin/Order.lean` and `proof/RuleanProof/Twin/Zeta.lean`. They are proved on a twin of the step order. The terms of this twin have no binders and no types, and the twin has no proof irrelevance and no eta. Theorem R1 (10.3) must still connect this twin to the Aeneas model of engine F.
+The lemmas of O1 to O5 and O7 are in `proof/RuleanProof/Twin/Order.lean` and `proof/RuleanProof/Twin/Zeta.lean`. They are proved on a twin of the step order. The terms of this twin have no binders and no types, and the twin has no proof irrelevance and no eta. Theorem R1 (10.3) must still connect this twin to the Aeneas model of engine F.
 
 ## 05.8 Nat and String literal extensions
 

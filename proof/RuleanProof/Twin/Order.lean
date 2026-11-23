@@ -1,7 +1,7 @@
 /-!
 # The order of the conversion steps (spec 05.7.3)
 
-This file is a twin of the conversion loop of A§1.8 at the level of its step order. It has the quick check, the head reduction without delta (`whnf_core`), lazy delta with heights and the congruence of applications. It proves the reordering lemmas O1, O2, O3 and O5 of the table in spec 05.7.3. Lemma O4 is in `Twin/Zeta.lean`.
+This file is a twin of the conversion loop of A§1.8 at the level of its step order. It has the quick check, the head reduction without delta (`whnf_core`), lazy delta with heights and the congruence of applications. It proves the reordering lemmas O1, O2, O3, O5 and O7 of the table in spec 05.7.3. Lemma O4 is in `Twin/Zeta.lean`.
 
 The twin is a model, not the Aeneas model of the Rust code. The terms have no binders and no types, and `whnf_core` is a parameter. The lemmas show that each reordering of engine F gives the answer of the official order on this model. The link to the Rust code comes with the Aeneas model (spec 10.4.1).
 
@@ -325,6 +325,21 @@ theorem fStep_eq_offStep (K : Kernel) (C : Tm → Tm → Bool) (rec : Proc) (t s
 theorem cache_true {K : Kernel} {C : Tm → Tm → Bool} (hC : CacheTrue K C) {t s : Tm}
     (h : C t s = true) : ∃ n, conv K n t s = some true :=
   hC t s h
+
+/-- O7: a term is equal to itself at the start of a step. This is the quick check of the official step 1. Engine F uses it on two values of the same form (`same_value`). -/
+theorem same_true (K : Kernel) (t : Tm) : conv K 1 t t = some true := by
+  simp [conv, offStep]
+
+/-- Congruence gives "equal" on a term and itself. -/
+theorem congr_same (K : Kernel) (t : Tm) : congr (conv K 1) t t = some true := by
+  cases t <;> simp [congr, same_true]
+
+/-- O7 inside lazy delta: on a term and itself, lazy delta gives "equal". Engine F stops lazy delta when both sides have the same form, so its answer is the answer of the official order. -/
+theorem lazyDelta_same (K : Kernel) (t : Tm) : lazyDelta K (conv K 1) t t = some true := by
+  unfold lazyDelta
+  cases h : K.height t with
+  | none => simp [congr_same]
+  | some a => simp [congr_same]
 
 /-- The main theorem: each answer of engine F is an answer of the official order. -/
 theorem convF_conv {K : Kernel} {C : Tm → Tm → Bool} (hC : CacheTrue K C) :

@@ -724,6 +724,53 @@ fn engine_f_gives_the_errors_of_engine_r() {
 }
 
 #[test]
+fn engine_f_continues_after_engine_r_confirms_a_query() {
+    let mut t = engine_f(false);
+    let (nat, _) = t.nat();
+    // `P : Prop`, `p q : P`, `C : P → Type`, `c : C p` and `D : P → Type := fun h => C h`.
+    let s0 = t.sort(0);
+    let s1 = t.sort(1);
+    let d = t.axiom("P", &[], s0, Safety::Safe);
+    assert_eq!(t.add(&d), None);
+    let pp = t.k("P");
+    for n in ["p", "q"] {
+        let d = t.axiom(n, &[], pp, Safety::Safe);
+        assert_eq!(t.add(&d), None);
+    }
+    let (p, q) = (t.k("p"), t.k("q"));
+    let cty = t.pi("h", pp, s1);
+    let d = t.axiom("C", &[], cty, Safety::Safe);
+    assert_eq!(t.add(&d), None);
+    let cc = t.k("C");
+    let cp = t.app(cc, &[p]);
+    let d = t.axiom("c", &[], cp, Safety::Safe);
+    assert_eq!(t.add(&d), None);
+    let b0 = t.bv(0);
+    let ch = t.app(cc, &[b0]);
+    let dv = t.lam("h", pp, ch);
+    let d = t.defn("D", cty, dv, Safety::Safe);
+    assert_eq!(t.add(&Decl::Defn(d)), None);
+    // `g : D q → Nat` and `v : Nat := g c`. The check of the argument `c` unfolds `D` (a delta step) and compares `p` and `q` by proof irrelevance (a type-directed rule). So the answer is in the confirm set of spec 05.1, and engine R confirms it.
+    let dd = t.k("D");
+    let dq = t.app(dd, &[q]);
+    let gty = t.pi("x", dq, nat);
+    let d = t.axiom("g", &[], gty, Safety::Safe);
+    assert_eq!(t.add(&d), None);
+    let g = t.k("g");
+    let c = t.k("c");
+    let gc = t.app(g, &[c]);
+    let before = t.c.f_stats;
+    let d = t.defn("v", nat, gc, Safety::Safe);
+    assert_eq!(t.add(&Decl::Defn(d)), None);
+    let s = t.c.f_stats;
+    // Engine F accepts the type and the value of `v`. It does not stop on the answer in the confirm set.
+    assert_eq!(s.infer - before.infer, 2);
+    assert_eq!(s.infer_ok - before.infer_ok, 2);
+    assert!(s.confirmed > before.confirmed);
+    assert_eq!(s.disagree, 0);
+}
+
+#[test]
 fn engine_f_checks_a_long_let_chain() {
     // The checker recurses on the depth of the terms, so the test runs in a thread with a large stack.
     std::thread::Builder::new()

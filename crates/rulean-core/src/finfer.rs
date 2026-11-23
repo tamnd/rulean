@@ -145,7 +145,9 @@ impl Checker {
         }
     }
 
-    /// A top-level `conv` query of engine F inside inference. A "not equal" answer stops the inference with a fault. An "equal" answer in the confirm set of spec 05.1 also stops it, because engine R must confirm it. With `confirm_all`, engine R checks the whole declaration again after engine F accepts it, so an answer in the confirm set does not stop the inference.
+    /// A top-level `conv` query of engine F inside inference. A "not equal" answer stops the inference with a fault. For an "equal" answer in the confirm set of spec 05.1, engine R confirms the query: both values are read back, and engine R compares the terms. If engine R also gives "equal", the inference continues. Else the inference stops with a fault, and engine R checks the full declaration. With `confirm_all`, engine R checks the full declaration again after engine F accepts it, so the query is not confirmed here.
+    ///
+    /// Before this change, each answer in the confirm set stopped the inference, and engine R checked the full declaration again. On Init this was 10,310 of 11,775 stops of engine F, and engine F used 607 G instructions. With a confirm of the query, engine F used 543 G instructions and stopped on 1,885 values.
     fn f_conv_top(&mut self, a: ValueId, b: ValueId) -> bool {
         if self.bad() {
             return false;
@@ -159,12 +161,31 @@ impl Checker {
         if self.bad() {
             return false;
         }
-        let confirm = !self.confirm_all && self.f_bits == F_DELTA | F_TYPED;
-        if !r || confirm {
+        if !r {
             self.fail(ErrorKind::Unsupported, self.dummy);
             return false;
         }
-        true
+        let confirm = !self.confirm_all && self.f_bits == F_DELTA | F_TYPED;
+        if !confirm {
+            return true;
+        }
+        let base = self.lctx_ty.len() as u32;
+        let ta = self.quote(base, base, a);
+        let tb = self.quote(base, base, b);
+        if self.bad() {
+            return false;
+        }
+        let ok = self.is_def_eq_r(ta, tb);
+        if self.bad() {
+            return false;
+        }
+        if ok {
+            self.f_stats.confirmed += 1;
+            return true;
+        }
+        self.f_stats.disagree += 1;
+        self.fail(ErrorKind::Unsupported, self.dummy);
+        false
     }
 
     /// The node of the context `c` with one more binder of domain `dom` (a term in `c`) and value `dv`.

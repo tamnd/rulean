@@ -559,7 +559,7 @@ fn f_proj(t: &mut T, x: u32, delta: bool) -> ExprId {
     t.app(f, &[p])
 }
 
-/// Adds `d : (x : Bx A) -> (h : H) -> (k1 : K1 -> A) -> (k2 : K2 -> A) -> A := fun x h k1 k2 => let b : A := k1 h; k2 h`. `H` is in the context [x], `K1` in [x, h] and `K2` in [x, h, k1]. The check of `k1 h` is the first query, and the check of `k2 h` is the second query, and both use the value of `H`. The result is the number of the checks of `d` that engine F accepts.
+/// Adds `d : (x : Bx A) -> (h : H) -> (k1 : K1 -> A) -> (k2 : K2 -> A) -> A := fun x h k1 k2 => let b : A := k1 h; k2 h`. `H` is in the context [x], `K1` in [x, h] and `K2` in [x, h, k1]. The check of `k1 h` is the first query, and the check of `k2 h` is the second query, and both use the value of `H`. Engine F must accept the type and the value of `d`. The result is the number of the answers of engine F that engine R confirmed in the check of `d`.
 fn add_d(t: &mut T, h_ty: ExprId, k1_dom: ExprId, k2_dom: ExprId) -> u64 {
     let a = t.k("A");
     let bx = t.k("Bx");
@@ -583,10 +583,12 @@ fn add_d(t: &mut T, h_ty: ExprId, k1_dom: ExprId, k2_dom: ExprId) -> u64 {
     add_const(t, "d", dty, Some(value));
     let s = t.c.f_stats;
     assert_eq!(s.infer - before.infer, 2);
-    s.infer_ok - before.infer_ok
+    assert_eq!(s.infer_ok - before.infer_ok, 2);
+    assert_eq!(s.disagree, before.disagree);
+    s.confirmed - before.confirmed
 }
 
-// The confirm set of spec 05.1: engine R confirms an answer of engine F that uses a delta step and a type-directed rule. In the two tests below, one of the two rules is in the first query, and the second query gets its result from a cache. Engine F accepts the type of `d`, and the check of the value is in the confirm set, so engine F stops and engine R checks the declaration.
+// The confirm set of spec 05.1: engine R confirms an answer of engine F that uses a delta step and a type-directed rule. In the two tests below, one of the two rules is in the first query, and the second query gets its result from a cache. An answer of the check of the value is in the confirm set, so engine R confirms that query, and then engine F continues and accepts the value.
 
 #[test]
 fn a_force_cache_hit_keeps_the_rules_of_its_steps() {

@@ -1,6 +1,6 @@
 name: corpus
 
-# The weekly corpus run of spec 11.2: rulean on the large tests of the Lean Kernel Arena that use Lean v4.36.0, from the export and from the oleans, and the cross-validation of the .olean reader with lean4export (spec 07.3.6). The Arena exports are too large to keep, so each job makes its export again from the project at the commit of the Arena test. A step that fails does not stop the next steps, so one run gives as much data as possible.
+# The weekly corpus run of spec 11.2: rulean on the large tests of the Lean Kernel Arena that use Lean v4.36.0, from the export and from the oleans, and the cross-validation of the .olean reader with lean4export (spec 07.3.6). It also runs the official kernel on the export and checks the gates of the full suite of spec 08.7.2. The Arena exports are too large to keep, so each job makes its export again from the project at the commit of the Arena test. A step that fails does not stop the next steps, so one run gives as much data as possible.
 on:
   schedule:
     - cron: "17 4 * * 0"
@@ -15,7 +15,7 @@ on:
         options: [all, mathlib, cslib, cedar]
         default: all
       steps:
-        description: The steps to run. With olean, the job does not run rulean check on the export, so a test of the .olean reader takes less time.
+        description: The steps to run. With olean, the job does not run rulean check and the official kernel on the export, so a test of the .olean reader takes less time.
         type: choice
         options: [all, olean]
         default: all
@@ -84,9 +84,18 @@ jobs:
         name: leanexport
         run: scripts/corpus.sh "$TEST" export "$WORK"
       # The weekly run has no inputs, and an empty input is not 'olean', so the weekly run has this step.
-      - if: ${{ !cancelled() && steps.export.outcome == 'success' && inputs.steps != 'olean' }}
+      - id: check
+        if: ${{ !cancelled() && steps.export.outcome == 'success' && inputs.steps != 'olean' }}
         name: rulean check on the export
         run: scripts/corpus.sh "$TEST" check "$WORK"
+      - id: official
+        if: ${{ !cancelled() && steps.export.outcome == 'success' && inputs.steps != 'olean' }}
+        name: the official kernel on the export
+        run: scripts/corpus.sh "$TEST" official "$WORK"
+      # The full suite of spec 08.7.2. The step runs also when one of the two checks fails, because the gate then records the exit status.
+      - if: ${{ !cancelled() && steps.check.outcome != 'skipped' && steps.official.outcome != 'skipped' }}
+        name: "gate: verdict, CPU time ratio at least 10 (P1.a, P1.c), memory at most 4 GiB (P1.f)"
+        run: scripts/corpus-gate.sh "$TEST" "$WORK" | tee "$WORK/out/gate.txt"
       - if: ${{ !cancelled() && steps.fetch.outcome == 'success' }}
         name: rulean olean on the oleans
         run: scripts/corpus.sh "$TEST" olean "$WORK"
@@ -98,11 +107,14 @@ jobs:
         run: |
           {
             echo "## rulean on $TEST, $THREADS threads"
-            for s in check olean compare; do
+            for s in check official olean compare; do
               if [ -f "$WORK/out/$s.time" ]; then
                 echo "- $s: $(grep -E 'Elapsed|Maximum resident' "$WORK/out/$s.time" | sed 's/^[[:space:]]*//' | paste -sd ',' -)"
               fi
             done
+            if [ -f "$WORK/out/gate.txt" ]; then
+              sed 's/^/- /' "$WORK/out/gate.txt"
+            fi
             if [ -f "$WORK/out/compare.txt" ]; then
               echo "- $(tail -n 1 "$WORK/out/compare.txt")"
             fi

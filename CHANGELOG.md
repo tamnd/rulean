@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ### Added
 
+- The weekly workflow `corpus` has the full suite of spec 08.7.2. After `rulean check`, it runs the official kernel `leanchecker --from-export` on the same export, and `scripts/corpus-gate.sh` checks that both accept, that the ratio of the CPU times is at least 10 (P1.a on Mathlib, P1.c on CSLib and Cedar), and that the peak memory of rulean is at most 4 GiB (P1.f). The runner has no hardware counters, so the ratio of CPU times is not the Arena measure.
 - The manual workflow `profile` can profile one Arena test, for example `perf/magma-list-deep-n21`, with engine R or engine F (spec 08.7.3). `scripts/profile.sh` takes the name of the test and the directory of `scripts/arena-fetch.sh` in `ARENA_DIR`, and `ENGINE` selects the engine.
 
 ### Fixed

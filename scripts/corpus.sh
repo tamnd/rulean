@@ -8,15 +8,16 @@
 # - fetch: gets the project at the commit of the Arena test, does the pre-build step of the Arena test, and builds the module with `lake build`, as the Arena does.
 # - export: exports the module with leanexport into WORK/export.ndjson, and compares its SHA-256 digest with the digest of the Arena export.
 # - check: runs `rulean check` on the export, with a JSON report in WORK/out/check.json.
+# - official: runs the official kernel `leanchecker --from-export` of the same Lean release on the export. scripts/corpus-gate.sh compares its time with the time of the step check (the full suite of spec 08.7.2).
 # - olean: runs `rulean olean` on the oleans of the module, with a JSON report in WORK/out/olean.json.
 # - compare: runs olean_compare on the export and the oleans, with the output in WORK/out/compare.txt.
 #
-# The `lean`, `lake` and `leanexport` of Lean v4.36.0 must be on PATH. RULEAN is the rulean binary, and the default is target/release/rulean. COMPARE is the example olean_compare of rulean-olean, and the default is target/release/examples/olean_compare. THREADS is the number of threads of the checks, and the default is 1. Each worker has its own copy of the store, so more threads need more memory. The steps check, olean and compare write the output of GNU time into WORK/out, so the peak memory is in the output.
+# The `lean`, `lake` and `leanexport` of Lean v4.36.0 must be on PATH. RULEAN is the rulean binary, and the default is target/release/rulean. COMPARE is the example olean_compare of rulean-olean, and the default is target/release/examples/olean_compare. THREADS is the number of threads of the checks, and the default is 1. Each worker has its own copy of the store, so more threads need more memory. The steps check, official, olean and compare write the output of GNU time into WORK/out, so the peak memory is in the output.
 
 set -euo pipefail
 
 if [ "$#" -ne 3 ]; then
-  echo "usage: $0 mathlib|cslib|cedar fetch|export|check|olean|compare WORK" >&2
+  echo "usage: $0 mathlib|cslib|cedar fetch|export|check|official|olean|compare WORK" >&2
   exit 64
 fi
 
@@ -107,6 +108,9 @@ case "$step" in
     ;;
   check)
     /usr/bin/time -v -o "$work/out/check.time" "$rulean" check --threads "$threads" --format text --report "$work/out/check.json" "$export"
+    ;;
+  official)
+    /usr/bin/time -v -o "$work/out/official.time" leanchecker --from-export "$export" >"$work/out/official.txt"
     ;;
   olean)
     LEAN_PATH="$(search_path)" /usr/bin/time -v -o "$work/out/olean.time" "$rulean" olean --threads "$threads" --format text --report "$work/out/olean.json" "$module"

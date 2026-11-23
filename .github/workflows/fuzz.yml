@@ -1,13 +1,15 @@
 name: fuzz
 
 # The byte fuzzing of spec 11.5.1: the .olean reader, the NDJSON parser and the .rlb decoder, with cargo-fuzz. libFuzzer is C++, so it is only in this job and never in the shipped build. The job runs each week, by hand, and on a pull request that changes fuzz/.
+#
+# The weekly run has 2 shards for each target. Each shard runs 4 hours with 4 workers, so the run is 3 x 2 x 4 x 4 = 96 CPU-hours (spec 11.5). The corpus of each shard is in the Actions cache, so each week starts from the corpus of the week before.
 on:
   schedule:
     - cron: "23 4 * * 0"
   workflow_dispatch:
     inputs:
       seconds:
-        description: The run time of each target, in seconds
+        description: The run time of each shard, in seconds
         default: "1200"
   pull_request:
     paths:
@@ -32,16 +34,18 @@ env:
 
 jobs:
   fuzz:
-    name: fuzz ${{ matrix.target }}
+    name: fuzz ${{ matrix.target }} ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
         target: [olean, ndjson, rlb]
+        shard: ${{ fromJSON(github.event_name == 'pull_request' && '[1]' || '[1, 2]') }}
     env:
-      # A pull request only checks that the target builds and runs.
-      SECONDS_EACH: ${{ github.event_name == 'pull_request' && '60' || inputs.seconds || '1200' }}
+      # A pull request only checks that the target builds and runs. The weekly run takes 4 hours for each shard.
+      SECONDS_EACH: ${{ github.event_name == 'pull_request' && '60' || inputs.seconds || '14400' }}
+      WORKERS: ${{ github.event_name == 'pull_request' && '1' || '4' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -49,6 +53,13 @@ jobs:
       - run: rustup toolchain install nightly --profile minimal
       - run: cargo install --locked cargo-fuzz --version "$CARGO_FUZZ_VERSION"
       - run: cargo test --locked --manifest-path fuzz/Cargo.toml --lib
+      - name: restore the corpus
+        if: github.event_name != 'pull_request'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ matrix.shard }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-${{ matrix.shard }}-
       - name: seeds
         env:
           TARGET: ${{ matrix.target }}
@@ -70,7 +81,13 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           cd fuzz
-          cargo +nightly fuzz run "$TARGET" "corpus/$TARGET" -- -max_total_time="$SECONDS_EACH" -rss_limit_mb=2048 -timeout=10 -print_final_stats=1
+          cargo +nightly fuzz run "$TARGET" "corpus/$TARGET" -- -fork="$WORKERS" -max_total_time="$SECONDS_EACH" -rss_limit_mb=2048 -timeout=10 -print_final_stats=1
+      - name: save the corpus
+        if: always() && github.event_name != 'pull_request'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ matrix.shard }}-${{ github.run_id }}
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

@@ -83,7 +83,7 @@ Fuzz runs take 100 CPU-hours each week. Every find becomes a regression test.
 
 State of the fuzzing:
 
-- Byte fuzzing has three targets in `fuzz/`: `olean`, `ndjson` and `rlb`. The workflow `fuzz` runs each target for 60 s on a pull request that changes the readers, and for 20 minutes each week. This is about 1 CPU-hour each week, not 100.
+- Byte fuzzing has three targets in `fuzz/`: `olean`, `ndjson` and `rlb`. The workflow `fuzz` runs each target for 60 s on a pull request that changes the readers. Each week, it runs 2 shards of each target, and each shard runs 4 hours with 4 workers (libFuzzer `-fork=4`). This is 96 CPU-hours each week. The corpus of each shard is in the Actions cache, so each week starts from the corpus of the week before. The first weekly run with this budget is not done yet.
 - The first local run of 10 minutes for each target found one fault in the `.rlb` decoder: after an error, the count of a list was not checked, and the decoder asked for about 6 GB. The fix makes a count after an error zero. The find is a regression test in `crates/rulean-format/tests/fuzz/`.
 - A second local run of 10 minutes for each target, after the fix, found nothing. It ran 1.2 M inputs on `olean`, 3.2 M on `ndjson` and 21.6 M on `rlb`.
 - Grammar fuzzing and type-directed fuzzing are not started.

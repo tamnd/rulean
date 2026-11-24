@@ -566,7 +566,7 @@ impl Checker {
                 return ExprId(r);
             }
         }
-        if !self.enter(e) {
+        if !self.enter_beat(e) {
             return self.dummy;
         }
         let (r, cache) = self.whnf_core_node(e, cheap_rec, cheap_proj);

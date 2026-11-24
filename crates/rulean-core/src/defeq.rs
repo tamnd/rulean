@@ -633,7 +633,7 @@ impl Checker {
         if self.bad() {
             return false;
         }
-        if !self.enter(t) {
+        if !self.enter_beat(t) {
             return false;
         }
         let r = self.is_def_eq_core_body(t, s);

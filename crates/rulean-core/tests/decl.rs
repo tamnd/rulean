@@ -836,3 +836,30 @@ fn memory_budget_stops_the_check() {
     assert_eq!(add_many(&mut t, nat, zero, 5000), None);
     assert!(t.c.memory() < 1 << 30);
 }
+
+#[test]
+fn heartbeat_limit_stops_the_check() {
+    // The count of a declaration without a limit.
+    let mut t = T::new();
+    let (nat, zero) = t.nat();
+    let d = Decl::Defn(t.defn("a", nat, zero, Safety::Safe));
+    assert_eq!(t.c.max_heartbeat, 0);
+    assert_eq!(t.add(&d), None);
+    let h = t.c.heartbeats();
+    assert!(h > 1, "the check counts {h} heartbeats");
+    // The count starts at 0 for each declaration.
+    let d2 = Decl::Defn(t.defn("b", nat, zero, Safety::Safe));
+    assert_eq!(t.add(&d2), None);
+    assert!(t.c.heartbeats() <= h);
+    // The limit `h` is sufficient, and the limit `h - 1` gives `Heartbeat`.
+    let mut t = T::new();
+    let (nat, zero) = t.nat();
+    t.c.max_heartbeat = h;
+    let d = Decl::Defn(t.defn("a", nat, zero, Safety::Safe));
+    assert_eq!(t.add(&d), None);
+    let mut t = T::new();
+    let (nat, zero) = t.nat();
+    t.c.max_heartbeat = h - 1;
+    let d = Decl::Defn(t.defn("a", nat, zero, Safety::Safe));
+    assert_eq!(t.add(&d), Some(ErrorKind::Heartbeat));
+}

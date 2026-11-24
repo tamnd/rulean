@@ -4,7 +4,9 @@
 //!
 //! The call makes a new checker. It mirrors the constants that the check can use from the Lean environment (`lean_environment_find`): the constants that the declaration refers to, the constants that their types and values refer to, the families of the inductive types, and the constants that the checker knows by name. A partial mirror is not sound, because a check can accept a declaration when a constant that it needs is not there. For example, a positivity check cannot see an occurrence behind a definition that it cannot unfold. The mirror is not kept between calls yet (spec 09.6.3 asks for a cache).
 //!
-//! If rulean accepts the declaration, the call adds the new constants to the Lean environment with `lean_environment_add`. If rulean rejects it, the call gives a `Kernel.Exception`. The kinds `unknownConstant`, `alreadyDeclared`, `thmTypeIsNotProp`, `excessiveMemory` and `deepRecursion` have the constructors of the C++ kernel. The other kinds give `other` with a message. The heartbeat limit, the recursion limit and the cancel token have no effect yet.
+//! If rulean accepts the declaration, the call adds the new constants to the Lean environment with `lean_environment_add`. If rulean rejects it, the call gives a `Kernel.Exception`. The kinds `unknownConstant`, `alreadyDeclared`, `thmTypeIsNotProp`, `deterministicTimeout`, `excessiveMemory` and `deepRecursion` have the constructors of the C++ kernel. The other kinds give `other` with a message.
+//!
+//! `max_heartbeat` is the heartbeat limit of the checker (spec 09.6.4). The C++ kernel counts one heartbeat for each call of `infer_type_core`, `whnf_core` and `is_def_eq_core`, and the checker counts one at the same functions. The C++ count is for each thread and starts at 0 at the start of a task, but the count of rulean starts at 0 for each declaration. The term functions have no limit, because the C++ functions use the limit of the thread and Lean does not export it. The recursion limit and the cancel token have no effect yet.
 //!
 //! `Kernel::is_def_eq`, `Kernel::whnf` and `Kernel::check` have the contracts of `lean_kernel_is_def_eq`, `lean_kernel_whnf` and `lean_kernel_check`. They take a `Lean.Environment`, a `LocalContext` and terms. The call converts the local context and the terms, mirrors the constants that they refer to, and runs the checker in the local context. A result term goes back to Lean with the `FVarId` of each free variable.
 //!
@@ -51,6 +53,7 @@ const UNKNOWN_CONSTANT: u8 = 0;
 const ALREADY_DECLARED: u8 = 1;
 const THM_TYPE_IS_NOT_PROP: u8 = 11;
 const OTHER: u8 = 12;
+const DETERMINISTIC_TIMEOUT: u64 = 13;
 const EXCESSIVE_MEMORY: u64 = 14;
 const DEEP_RECURSION: u64 = 15;
 
@@ -59,6 +62,7 @@ enum Exc {
     Unknown(NameId),
     Already(NameId),
     ThmNotProp(NameId, ExprId),
+    Timeout,
     Memory,
     DeepRecursion,
     Other(String),
@@ -119,13 +123,14 @@ impl<'a> Kernel<'a> {
     pub unsafe fn add_decl(
         &self,
         env: u64,
-        _max_heartbeat: usize,
+        max_heartbeat: usize,
         _max_rec_depth: usize,
         decl: u64,
         _cancel: u64,
     ) -> u64 {
         let mut chk = Checker::new(Store::new());
         chk.kernel_api = true;
+        chk.max_heartbeat = max_heartbeat as u64;
         let d = match conv::declaration(&self.h, &mut chk.st, decl) {
             Ok(d) => d,
             // SAFETY: the caller gives `env`.
@@ -564,9 +569,10 @@ impl<'a> Kernel<'a> {
                     }
                 }
             }
-            Exc::Memory | Exc::DeepRecursion | Exc::Other(_) => {
+            Exc::Timeout | Exc::Memory | Exc::DeepRecursion | Exc::Other(_) => {
                 m.dec(env);
                 match x {
+                    Exc::Timeout => boxed(DETERMINISTIC_TIMEOUT),
                     Exc::Memory => boxed(EXCESSIVE_MEMORY),
                     Exc::DeepRecursion => boxed(DEEP_RECURSION),
                     Exc::Other(msg) => {
@@ -603,6 +609,7 @@ fn exception(chk: &Checker, d: &Decl, kind: ErrorKind) -> Exc {
             Decl::Thm(t) => Exc::ThmNotProp(t.name, t.ty),
             _ => Exc::Other(message(kind)),
         },
+        ErrorKind::Heartbeat => Exc::Timeout,
         ErrorKind::MemoryLimit => Exc::Memory,
         ErrorKind::DeepRecursion => Exc::DeepRecursion,
         _ => Exc::Other(message(kind)),
@@ -620,6 +627,7 @@ fn term_exception(chk: &Checker, terms: &[ExprId], kind: ErrorKind) -> Exc {
                 None => Exc::Other(message(kind)),
             }
         }
+        ErrorKind::Heartbeat => Exc::Timeout,
         ErrorKind::MemoryLimit => Exc::Memory,
         ErrorKind::DeepRecursion => Exc::DeepRecursion,
         _ => Exc::Other(message(kind)),

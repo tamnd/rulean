@@ -572,6 +572,7 @@ impl Checker {
     /// The terms that the check of an axiom, a definition, a theorem, an opaque constant or a mutual block makes go to the scratch tier of the store, and the call removes them at the end (spec 04.8). These constants keep only input terms in the environment, so no scratch handle stays. An inductive or a quotient declaration adds terms that the checker makes, such as the recursor rules, so it uses the frozen tier. If the fault is at a scratch term, `Fault::at` is the dummy term after the call.
     pub fn add_decl(&mut self, d: &Decl) -> Option<Fault> {
         self.sess_start();
+        self.heartbeats = 0;
         let r0 = match d {
             Decl::Axiom(a) => {
                 self.st.set_scratch(true);

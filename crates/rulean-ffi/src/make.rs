@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use rulean_core::env::{ConstInfo, ConstKind};
-use rulean_format::{Hints, QuotKind, Safety};
+use rulean_format::{Decl, Hints, QuotKind, Safety};
 use rulean_nat::Nat;
 use rulean_store::{BinderInfo, Expr, ExprId, Level, LevelId, Literal, Name, NameId, Store};
 
@@ -404,47 +404,124 @@ impl<'a, M: Make> Encoder<'a, M> {
         self.take(o)
     }
 
-    fn cval(&mut self, k: &ConstInfo) -> Result<u64, Fault> {
-        let n = self.name(k.name);
-        let l = self.names(&k.lparams);
-        let t = self.expr(k.ty)?;
+    /// Writes each term of `es` into the table. After this, `expr` of these terms cannot fail, so a caller that makes objects after it does not lose them on a fault.
+    fn prepare(&mut self, es: &[ExprId]) -> Result<(), Fault> {
+        for &e in es {
+            self.expr_ref(e)?;
+        }
+        Ok(())
+    }
+
+    /// The `ConstantVal` of a constant: its name, its level parameters and its type.
+    fn cval(&mut self, name: NameId, lparams: &[NameId], ty: ExprId) -> Result<u64, Fault> {
+        let n = self.name(name);
+        let l = self.names(lparams);
+        let t = self.expr(ty)?;
         Ok(self.m.ctor(0, &[n, l, t], &[]))
+    }
+
+    fn hints(&mut self, h: Hints) -> u64 {
+        match h {
+            Hints::Opaque => boxed(0),
+            Hints::Abbrev => boxed(1),
+            Hints::Regular(h) => self.m.ctor(2, &[], &h.to_le_bytes()),
+        }
+    }
+
+    /// The `DefinitionVal` of a definition.
+    #[allow(clippy::too_many_arguments)]
+    fn defn_val(
+        &mut self,
+        name: NameId,
+        lparams: &[NameId],
+        ty: ExprId,
+        value: ExprId,
+        hints: Hints,
+        safety: Safety,
+        all: &[NameId],
+    ) -> Result<u64, Fault> {
+        let cv = self.cval(name, lparams, ty)?;
+        let value = self.expr(value)?;
+        let hints = self.hints(hints);
+        let all = self.names(all);
+        let safety = match safety {
+            Safety::Unsafe => 0,
+            Safety::Safe => 1,
+            Safety::Partial => 2,
+        };
+        Ok(self.m.ctor(0, &[cv, value, hints, all], &[safety]))
+    }
+
+    /// The `TheoremVal` of a theorem.
+    fn thm_val(
+        &mut self,
+        name: NameId,
+        lparams: &[NameId],
+        ty: ExprId,
+        value: ExprId,
+        all: &[NameId],
+    ) -> Result<u64, Fault> {
+        let cv = self.cval(name, lparams, ty)?;
+        let value = self.expr(value)?;
+        let all = self.names(all);
+        Ok(self.m.ctor(0, &[cv, value, all], &[]))
+    }
+
+    /// The `OpaqueVal` of an opaque constant.
+    fn opaque_val(
+        &mut self,
+        name: NameId,
+        lparams: &[NameId],
+        ty: ExprId,
+        value: ExprId,
+        unsafe_: bool,
+        all: &[NameId],
+    ) -> Result<u64, Fault> {
+        let cv = self.cval(name, lparams, ty)?;
+        let value = self.expr(value)?;
+        let all = self.names(all);
+        Ok(self.m.ctor(0, &[cv, value, all], &[u8::from(unsafe_)]))
+    }
+
+    /// The `List` of the objects `items`. It consumes the references of `items`.
+    fn list(&mut self, items: &[u64]) -> u64 {
+        let mut l = boxed(0);
+        for &x in items.iter().rev() {
+            l = self.m.ctor(1, &[x, l], &[]);
+        }
+        l
     }
 
     /// The `ConstantInfo` object of `k`. The result is a new reference.
     ///
     /// `all` is the field `all` of a definition, a theorem or an opaque constant. The environment of the checker does not keep this field for these kinds, so the caller gives it, for example from the declaration. For the other kinds, the call does not use it.
     pub fn constant(&mut self, k: &ConstInfo, all: &[NameId]) -> Result<u64, Fault> {
-        let cv = self.cval(k)?;
+        let mut es = vec![k.ty];
+        match &k.kind {
+            ConstKind::Defn { value, .. }
+            | ConstKind::Thm { value }
+            | ConstKind::Opaque { value } => es.push(*value),
+            ConstKind::Rec(r) => es.extend(r.rules.iter().map(|rule| rule.rhs)),
+            _ => {}
+        }
+        self.prepare(&es)?;
         let uns = u8::from(k.safety == Safety::Unsafe);
         let (t, v) = match &k.kind {
-            ConstKind::Axiom => (0, self.m.ctor(0, &[cv], &[uns])),
-            ConstKind::Defn { value, hints } => {
-                let value = self.expr(*value)?;
-                let hints = match hints {
-                    Hints::Opaque => boxed(0),
-                    Hints::Abbrev => boxed(1),
-                    Hints::Regular(h) => self.m.ctor(2, &[], &h.to_le_bytes()),
-                };
-                let all = self.names(all);
-                let safety = match k.safety {
-                    Safety::Unsafe => 0,
-                    Safety::Safe => 1,
-                    Safety::Partial => 2,
-                };
-                (1, self.m.ctor(0, &[cv, value, hints, all], &[safety]))
+            ConstKind::Axiom => {
+                let cv = self.cval(k.name, &k.lparams, k.ty)?;
+                (0, self.m.ctor(0, &[cv], &[uns]))
             }
-            ConstKind::Thm { value } => {
-                let value = self.expr(*value)?;
-                let all = self.names(all);
-                (2, self.m.ctor(0, &[cv, value, all], &[]))
-            }
-            ConstKind::Opaque { value } => {
-                let value = self.expr(*value)?;
-                let all = self.names(all);
-                (3, self.m.ctor(0, &[cv, value, all], &[uns]))
-            }
+            ConstKind::Defn { value, hints } => (
+                1,
+                self.defn_val(k.name, &k.lparams, k.ty, *value, *hints, k.safety, all)?,
+            ),
+            ConstKind::Thm { value } => (2, self.thm_val(k.name, &k.lparams, k.ty, *value, all)?),
+            ConstKind::Opaque { value } => (
+                3,
+                self.opaque_val(k.name, &k.lparams, k.ty, *value, uns == 1, all)?,
+            ),
             ConstKind::Quot { kind } => {
+                let cv = self.cval(k.name, &k.lparams, k.ty)?;
                 let q = match kind {
                     QuotKind::Type => 0,
                     QuotKind::Ctor => 1,
@@ -454,6 +531,7 @@ impl<'a, M: Make> Encoder<'a, M> {
                 (4, self.m.ctor(0, &[cv], &[q]))
             }
             ConstKind::Induct(i) => {
+                let cv = self.cval(k.name, &k.lparams, k.ty)?;
                 let all = self.names(&i.all);
                 let ctors = self.names(&i.ctors);
                 let objs = [
@@ -468,6 +546,7 @@ impl<'a, M: Make> Encoder<'a, M> {
                 (5, self.m.ctor(0, &objs, &sc))
             }
             ConstKind::Ctor(c) => {
+                let cv = self.cval(k.name, &k.lparams, k.ty)?;
                 let induct = self.name(c.induct);
                 let objs = [
                     cv,
@@ -479,6 +558,7 @@ impl<'a, M: Make> Encoder<'a, M> {
                 (6, self.m.ctor(0, &objs, &[uns]))
             }
             ConstKind::Rec(r) => {
+                let cv = self.cval(k.name, &k.lparams, k.ty)?;
                 let all = self.names(&r.all);
                 let mut rules = Vec::with_capacity(r.rules.len());
                 for rule in &r.rules {
@@ -489,10 +569,7 @@ impl<'a, M: Make> Encoder<'a, M> {
                             .ctor(0, &[c, boxed(u64::from(rule.nfields)), rhs], &[]),
                     );
                 }
-                let mut list = boxed(0);
-                for &x in rules.iter().rev() {
-                    list = self.m.ctor(1, &[x, list], &[]);
-                }
+                let list = self.list(&rules);
                 let objs = [
                     cv,
                     all,
@@ -506,5 +583,91 @@ impl<'a, M: Make> Encoder<'a, M> {
             }
         };
         Ok(self.m.ctor(t, &[v], &[]))
+    }
+
+    /// The `Declaration` object of `d`. The result is a new reference.
+    ///
+    /// A `quotDecl` is the boxed scalar 4. An inductive block gives an `inductDecl` with its types and their constructors, and without its recursors, because the kernel makes them. The constructors of a type are the constructors of the block with that type in their field `induct`, in the order of `cidx`. The level parameters, the number of parameters and the safety of the block are those of its first type.
+    pub fn declaration(&mut self, d: &Decl) -> Result<u64, Fault> {
+        let es: Vec<ExprId> = match d {
+            Decl::Axiom(a) => vec![a.ty],
+            Decl::Defn(x) => vec![x.ty, x.value],
+            Decl::Thm(x) => vec![x.ty, x.value],
+            Decl::Opaque(x) => vec![x.ty, x.value],
+            Decl::Quot(_) => Vec::new(),
+            Decl::Mutual(ds) => ds.iter().flat_map(|x| [x.ty, x.value]).collect(),
+            Decl::Induct(b) => b
+                .types
+                .iter()
+                .map(|t| t.ty)
+                .chain(b.ctors.iter().map(|c| c.ty))
+                .collect(),
+        };
+        self.prepare(&es)?;
+        Ok(match d {
+            Decl::Axiom(a) => {
+                let cv = self.cval(a.name, &a.lparams, a.ty)?;
+                let v = self
+                    .m
+                    .ctor(0, &[cv], &[u8::from(a.safety == Safety::Unsafe)]);
+                self.m.ctor(0, &[v], &[])
+            }
+            Decl::Defn(x) => {
+                let v =
+                    self.defn_val(x.name, &x.lparams, x.ty, x.value, x.hints, x.safety, &x.all)?;
+                self.m.ctor(1, &[v], &[])
+            }
+            Decl::Thm(x) => {
+                let v = self.thm_val(x.name, &x.lparams, x.ty, x.value, &x.all)?;
+                self.m.ctor(2, &[v], &[])
+            }
+            Decl::Opaque(x) => {
+                let v = self.opaque_val(
+                    x.name,
+                    &x.lparams,
+                    x.ty,
+                    x.value,
+                    x.safety == Safety::Unsafe,
+                    &x.all,
+                )?;
+                self.m.ctor(3, &[v], &[])
+            }
+            Decl::Quot(_) => boxed(4),
+            Decl::Mutual(ds) => {
+                let mut vals = Vec::with_capacity(ds.len());
+                for x in ds {
+                    vals.push(
+                        self.defn_val(
+                            x.name, &x.lparams, x.ty, x.value, x.hints, x.safety, &x.all,
+                        )?,
+                    );
+                }
+                let l = self.list(&vals);
+                self.m.ctor(5, &[l], &[])
+            }
+            Decl::Induct(b) => {
+                let first = b.types.first();
+                let lps = self.names(first.map_or(&[][..], |t| &t.lparams[..]));
+                let nparams = boxed(first.map_or(0, |t| u64::from(t.num_params)));
+                let uns = u8::from(first.is_some_and(|t| t.safety == Safety::Unsafe));
+                let mut types = Vec::with_capacity(b.types.len());
+                for t in &b.types {
+                    let mut cs: Vec<_> = b.ctors.iter().filter(|c| c.induct == t.name).collect();
+                    cs.sort_by_key(|c| c.cidx);
+                    let mut objs = Vec::with_capacity(cs.len());
+                    for c in cs {
+                        let n = self.name(c.name);
+                        let ty = self.expr(c.ty)?;
+                        objs.push(self.m.ctor(0, &[n, ty], &[]));
+                    }
+                    let ctors = self.list(&objs);
+                    let n = self.name(t.name);
+                    let ty = self.expr(t.ty)?;
+                    types.push(self.m.ctor(0, &[n, ty, ctors], &[]));
+                }
+                let types = self.list(&types);
+                self.m.ctor(6, &[lps, nparams, types], &[uns])
+            }
+        })
     }
 }

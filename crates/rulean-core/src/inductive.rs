@@ -1308,7 +1308,8 @@ impl Checker {
         let r2 = self.mk_binding(&indices, r1, false, false);
         let r3 = self.mk_binding(&s.minors, r2, false, false);
         let r4 = self.mk_binding(&s.motives, r3, false, false);
-        let rec_ty = self.mk_binding(&s.params, r4, false, false);
+        let r5 = self.mk_binding(&s.params, r4, false, false);
+        let rec_ty = self.infer_implicit(r5);
         let mut rules = Vec::new();
         self.mk_rec_rules(s, k, &mut rules);
         let rn = names::rec_name(&mut self.st, s.names[k]);
@@ -1327,6 +1328,43 @@ impl Checker {
         };
         let lps = Checker::rec_lparams(s);
         self.add_const(rn, lps, rec_ty, s.safety, ConstKind::Rec(info));
+    }
+
+    /// `infer_implicit(t, true)` of the C++ kernel. A binder with the default binder information becomes implicit when its variable occurs in the domain of a later explicit binder. An occurrence in the domain of a later implicit binder also counts when the variable of that binder occurs in the same way. The body after the last binder does not count. The binder information has no effect on the check, but the elaborator reads it from the recursor in the in-process mode (spec 09.6).
+    fn infer_implicit(&mut self, t: ExprId) -> ExprId {
+        let mut bs = Vec::new();
+        let mut e = t;
+        while let Expr::Pi(b) = self.st.node(e) {
+            bs.push(b);
+            e = b.body;
+        }
+        let n = bs.len();
+        // `reach[q]` is true when the variable of binder `q` occurs in the domain of a later explicit binder, directly or through implicit binders.
+        let mut reach = alloc::vec![false; n];
+        let mut q = n;
+        while q > 0 {
+            q -= 1;
+            let mut r = q + 1;
+            while r < n && !reach[q] {
+                let shift = (r - q - 1) as u32;
+                if (bs[r].info == BinderInfo::Default || reach[r])
+                    && expr::has_loose_bvar(&self.st, &mut self.x, bs[r].dom, shift)
+                {
+                    reach[q] = true;
+                }
+                r += 1;
+            }
+            if bs[q].info == BinderInfo::Default && reach[q] {
+                bs[q].info = BinderInfo::Implicit;
+            }
+        }
+        let mut q = n;
+        while q > 0 {
+            q -= 1;
+            let b = bs[q];
+            e = self.st.mk_pi(b.name, b.info, b.dom, e);
+        }
+        e
     }
 
     /// `mk_rec_rules`. The minor premise of constructor `c` is `s.minors[c]`.

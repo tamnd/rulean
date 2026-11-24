@@ -86,6 +86,8 @@ Then `check_recursors` type-checks the generated types and rules (#14808), in in
 
 **The generated recursor is compared with the exported one up to α-equivalence.** Binder names and binder info are not compared. Level parameter names are compared up to a consistent renaming, because later constants refer to level parameters by position.
 
+The generated recursor still has the binder names and the binder info of the C++ kernel, because in the in-process mode (09.6) the elaborator reads them. After the recursor type is built, rulean does what `infer_implicit(rec_ty, true)` does in `inductive.cpp`: a binder with the default binder info becomes implicit when its variable occurs in the domain of a later explicit binder, directly or through a later implicit binder. The body after the last binder does not count. In the usual case the parameters, the motives and the indices become implicit, and the minor premises and the major premise are explicit. The four quotient constants have the names and the binder info of `quot.cpp`, for example `Quot.lift.{u, v} {α : Sort u} {r : α → α → Prop} {β : Sort v} (f : α → β)`, and each arrow has the binder name `a`.
+
 ## 06.7 Independent cross-check with ind-models
 
 ind-models (research C§1.5) is a Lean tool by Joachim Breitner. It builds a set-theoretic model for each inductive declaration, and it rejected the bad recursors of #14613, #14616 and #14806.

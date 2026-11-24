@@ -142,3 +142,5 @@ Symbol interposition (option C) is not supported. It is fragile, and macOS block
 ### 09.6.5 Trust in in-process mode
 
 In-process mode is not covered by theorem T1 (10.1). The input comes from Lean objects, not from bytes. The conversion layer is in the hardened class (03.2). It is tested by running the whole Lean test suite and a full `lake build` of Mathlib with the rulean kernel, and by comparing every `addDecl` result with the C++ kernel in a dual-kernel build (11.3).
+
+The test `tests/dual.rs` of `rulean-ffi` does this comparison in one process before the dual-kernel build is ready. It loads `libleanshared` of Lean v4.36.0, writes each test declaration as a `Declaration` object, and gives the same object to `lean_add_decl` of the C++ kernel and to rulean through the conversion of 09.6.3. The two verdicts must be the same. Then the test reads each new constant from the C++ environment with `lean_environment_find` and requires that it is the same constant as in rulean, with the same binder names and binder info. The CI job `ffi-runtime` runs the test on Linux.

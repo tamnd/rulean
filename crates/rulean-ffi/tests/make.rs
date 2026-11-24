@@ -10,11 +10,11 @@ use common::qname as name;
 use common::{sample, thm};
 use rulean_core::env::{ConstInfo, ConstKind};
 use rulean_ffi::FaultKind;
-use rulean_ffi::conv::Converter;
+use rulean_ffi::conv::{self, Converter};
 use rulean_ffi::heap::{Heap, OwnedHeap, boxed};
 use rulean_ffi::live::LiveHeap;
 use rulean_ffi::make::Encoder;
-use rulean_format::{Hints, Safety};
+use rulean_format::{Axiom, Ctor, Decl, Defn, Hints, Induct, InductType, Opaque, Safety, Thm};
 use rulean_store::Store;
 
 /// Writes `k` as an object and reads it back, through `LiveHeap` if `live` is true.
@@ -164,4 +164,109 @@ fn a_free_variable_is_a_fault() {
         .constant(&k, &[])
         .expect_err("a fault");
     assert_eq!(f.kind, FaultKind::FreeVar);
+}
+
+/// Writes `d` as a `Declaration` object and reads it back.
+fn decl_round_trip(st: &mut Store, d: &Decl) -> Decl {
+    let mut h = OwnedHeap::new();
+    let o = Encoder::new(&mut h, st).declaration(d).expect("an object");
+    conv::declaration(&h, st, o).expect("a declaration")
+}
+
+#[test]
+fn each_kind_of_declaration_round_trips() {
+    let mut st = Store::new();
+    let u = name(&mut st, "u");
+    let l = st.level_param(u);
+    let ty = st.mk_sort(l);
+    let z = st.level_zero();
+    let prop = st.mk_sort(z);
+    let b0 = st.mk_bvar(0);
+    let x = name(&mut st, "x");
+    let id = st.mk_lam(x, rulean_store::BinderInfo::Default, prop, b0);
+    let pi = st.mk_pi(x, rulean_store::BinderInfo::Default, prop, prop);
+    let a = name(&mut st, "a");
+    let f = name(&mut st, "f");
+    let g = name(&mut st, "g");
+    let defn = |n, safety| Defn {
+        name: n,
+        lparams: vec![u],
+        ty: pi,
+        value: id,
+        hints: Hints::Regular(7),
+        safety,
+        all: vec![f, g],
+    };
+    let same = [
+        Decl::Axiom(Axiom {
+            name: a,
+            lparams: vec![u],
+            ty,
+            safety: Safety::Unsafe,
+        }),
+        Decl::Defn(defn(f, Safety::Partial)),
+        Decl::Thm(Thm {
+            name: a,
+            lparams: Vec::new(),
+            ty: pi,
+            value: id,
+            all: vec![a],
+        }),
+        Decl::Opaque(Opaque {
+            name: a,
+            lparams: Vec::new(),
+            ty: pi,
+            value: id,
+            safety: Safety::Safe,
+            all: vec![a],
+        }),
+        Decl::Mutual(vec![defn(f, Safety::Unsafe), defn(g, Safety::Unsafe)]),
+    ];
+    for d in &same {
+        assert_eq!(&decl_round_trip(&mut st, d), d);
+    }
+
+    // An inductive block gives the types and the constructors. The constructors come in the order of `cidx`.
+    let t = name(&mut st, "T");
+    let t_mk = name(&mut st, "T.mk");
+    let t_nil = name(&mut st, "T.nil");
+    let none = st.level_list(&[]);
+    let tc = st.mk_const(t, none);
+    let ctor = |n, cidx| Ctor {
+        name: n,
+        lparams: Vec::new(),
+        ty: tc,
+        induct: t,
+        cidx,
+        num_params: 0,
+        num_fields: 0,
+        safety: Safety::Safe,
+    };
+    let d = Decl::Induct(Induct {
+        types: vec![InductType {
+            name: t,
+            lparams: Vec::new(),
+            ty: prop,
+            num_params: 0,
+            num_indices: 0,
+            all: vec![t],
+            ctors: vec![t_nil, t_mk],
+            num_nested: 0,
+            is_rec: false,
+            is_reflexive: false,
+            safety: Safety::Safe,
+        }],
+        ctors: vec![ctor(t_mk, 1), ctor(t_nil, 0)],
+        recs: Vec::new(),
+    });
+    let Decl::Induct(got) = decl_round_trip(&mut st, &d) else {
+        panic!("an inductive block");
+    };
+    assert_eq!(got.types.len(), 1);
+    assert_eq!(got.types[0].name, t);
+    assert_eq!(got.types[0].ty, prop);
+    assert_eq!(got.types[0].ctors, vec![t_nil, t_mk]);
+    let names: Vec<_> = got.ctors.iter().map(|c| (c.name, c.ty)).collect();
+    assert_eq!(names, vec![(t_nil, tc), (t_mk, tc)]);
+    assert!(got.recs.is_empty());
 }

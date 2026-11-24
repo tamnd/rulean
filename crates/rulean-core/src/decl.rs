@@ -10,6 +10,12 @@ use crate::env::{ConstInfo, ConstKind};
 use crate::expr;
 use crate::tc::{Checker, ErrorKind, Fault};
 
+/// The binder name `α` in UTF-8.
+const ALPHA: &[u8] = "α".as_bytes();
+
+/// The binder name `β` in UTF-8.
+const BETA: &[u8] = "β".as_bytes();
+
 /// The safety of the checker for a declaration that is not unsafe. The official kernel checks a partial definition with a safe checker too.
 fn checker_safety(s: Safety) -> Safety {
     if s == Safety::Unsafe {
@@ -318,7 +324,7 @@ impl Checker {
         None
     }
 
-    // Quotients.
+    // Quotients. The reference types have the binder names and the binder information of `quot.cpp`, so that the constants are the same as the constants of the C++ kernel (spec 09.6).
 
     /// `Sort u` for a level parameter name.
     fn sort_param(&mut self, n: NameId) -> (LevelId, ExprId) {
@@ -331,13 +337,23 @@ impl Checker {
         self.st.mk_sort(z)
     }
 
+    /// `mk_arrow` of the C++ kernel: a binder with the name `a` and the default binder information.
     fn arrow(&mut self, a: ExprId, b: ExprId) -> ExprId {
-        let n = self.st.anon();
+        self.exp(b"a", a, b)
+    }
+
+    /// A binder with the name `s` and the default binder information.
+    fn exp(&mut self, s: &[u8], a: ExprId, b: ExprId) -> ExprId {
+        let root = self.st.anon();
+        let n = self.st.name_str_bytes(root, s);
         self.st.mk_pi(n, BinderInfo::Default, a, b)
     }
 
-    fn pi(&mut self, a: ExprId, b: ExprId) -> ExprId {
-        self.arrow(a, b)
+    /// An implicit binder with the name `s`.
+    fn imp(&mut self, s: &[u8], a: ExprId, b: ExprId) -> ExprId {
+        let root = self.st.anon();
+        let n = self.st.name_str_bytes(root, s);
+        self.st.mk_pi(n, BinderInfo::Implicit, a, b)
     }
 
     fn bv(&mut self, i: u32) -> ExprId {
@@ -381,7 +397,7 @@ impl Checker {
         }
         let (_, su) = self.sort_param(eq_lps[0]);
         let rel = self.relation(0);
-        let want = self.pi(su, rel);
+        let want = self.imp(ALPHA, su, rel);
         if !self.eq(want, eq_ty) {
             self.fail(ErrorKind::BadQuot, at);
             return;
@@ -400,8 +416,8 @@ impl Checker {
         let eq_c = self.const1(self.b.eq, u);
         let (b0, b1) = (self.bv(0), self.bv(1));
         let body = self.st.mk_apps(eq_c, &[b1, b0, b0]);
-        let inner = self.pi(b0, body);
-        let want = self.pi(su, inner);
+        let inner = self.exp(b"a", b0, body);
+        let want = self.imp(ALPHA, su, inner);
         if !self.eq(want, refl_ty) {
             self.fail(ErrorKind::BadQuot, at);
         }
@@ -412,8 +428,8 @@ impl Checker {
         let (_, su) = self.sort_param(un);
         let rel = self.relation(0);
         let (_, su2) = self.sort_param(un);
-        let inner = self.pi(rel, su2);
-        self.pi(su, inner)
+        let inner = self.exp(b"r", rel, su2);
+        self.imp(ALPHA, su, inner)
     }
 
     /// The reference type of `Quot.mk.{u}`.
@@ -423,9 +439,9 @@ impl Checker {
         let q = self.const1(self.b.quot, u);
         let (b1, b2) = (self.bv(1), self.bv(2));
         let qr = self.st.mk_apps(q, &[b2, b1]);
-        let a = self.pi(b1, qr);
-        let r = self.pi(rel, a);
-        self.pi(su, r)
+        let a = self.exp(b"a", b1, qr);
+        let r = self.exp(b"r", rel, a);
+        self.imp(ALPHA, su, r)
     }
 
     /// The reference type of `Quot.lift.{u, v}`.
@@ -445,19 +461,19 @@ impl Checker {
         let rab = self.st.mk_apps(b4, &[b1, b0]);
         let h = self.arrow(rab, eq_ab);
         let b_dom = self.bv(4);
-        let all_b = self.pi(b_dom, h);
+        let all_b = self.exp(b"b", b_dom, h);
         let a_dom = self.bv(3);
-        let sanity = self.pi(a_dom, all_b);
+        let sanity = self.exp(b"a", a_dom, all_b);
         // Quot r → β at depth 5.
         let q = self.const1(self.b.quot, u);
         let qr = self.st.mk_apps(q, &[b4, b3]);
         let beta = self.bv(3);
         let last = self.arrow(qr, beta);
         let s = self.arrow(sanity, last);
-        let f = self.pi(f_ty, s);
-        let b = self.pi(sv, f);
-        let r = self.pi(rel, b);
-        self.pi(su, r)
+        let f = self.exp(b"f", f_ty, s);
+        let b = self.imp(BETA, sv, f);
+        let r = self.imp(b"r", rel, b);
+        self.imp(ALPHA, su, r)
     }
 
     /// The reference type of `Quot.ind.{u}`.
@@ -474,15 +490,15 @@ impl Checker {
         // mk : ∀ a : α, β (Quot.mk r a) at depth 3.
         let mka = self.st.mk_apps(mk, &[b3, b2, b0]);
         let body = self.st.mk_app(b1, mka);
-        let mk_ty = self.pi(b2, body);
+        let mk_ty = self.exp(b"a", b2, body);
         // ∀ q : Quot r, β q at depth 4.
         let q4 = self.st.mk_apps(q, &[b3, b2]);
         let bq = self.st.mk_app(b2, b0);
-        let all_q = self.pi(q4, bq);
-        let m = self.pi(mk_ty, all_q);
-        let b = self.pi(beta_ty, m);
-        let r = self.pi(rel, b);
-        self.pi(su, r)
+        let all_q = self.exp(b"q", q4, bq);
+        let m = self.exp(b"mk", mk_ty, all_q);
+        let b = self.imp(BETA, beta_ty, m);
+        let r = self.imp(b"r", rel, b);
+        self.imp(ALPHA, su, r)
     }
 
     /// The level parameter names and the reference type of a quotient constant.

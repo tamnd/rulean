@@ -15,7 +15,7 @@ use std::ffi::CStr;
 
 use rulean_core::env::{ConstInfo, ConstKind};
 use rulean_core::tc::{Checker, ErrorKind};
-use rulean_format::Decl;
+use rulean_format::{Decl, Safety};
 use rulean_store::{Expr, ExprId, NameId, Store};
 
 use crate::conv::{self, Converter};
@@ -124,6 +124,28 @@ impl<'a> Kernel<'a> {
             return unsafe { self.error(env, &chk.st, exc) };
         }
         let mut e = env;
+        // SAFETY: the caller gives `decl`.
+        if let Some(infos) = unsafe { self.shared_infos(decl) } {
+            for n in declared_names(&chk, &d) {
+                // SAFETY: `e` is a live environment.
+                if let Some(ci) = unsafe { self.lookup(e, &chk.st, n) } {
+                    // SAFETY: the call owns `ci` and each object of `infos`.
+                    unsafe {
+                        self.rt.dec(ci);
+                        for i in infos {
+                            self.rt.dec(i);
+                        }
+                        return self.error(e, &chk.st, Exc::Already(n));
+                    }
+                }
+            }
+            for ci in infos {
+                // SAFETY: `add` consumes the environment and the constant, and gives a new environment.
+                e = unsafe { (self.add)(e, ci) };
+            }
+            // SAFETY: the maker makes `Except.ok e`, and the result owns `e`.
+            return unsafe { LeanMake::new(self.rt) }.ctor(1, &[e], &[]);
+        }
         for s in before + 1..=chk.env.len() {
             let k = chk.env.at(s as u32).clone();
             // SAFETY: `e` is a live environment.
@@ -162,6 +184,84 @@ impl<'a> Kernel<'a> {
         unsafe { LeanMake::new(self.rt) }.ctor(1, &[e], &[])
     }
 
+    /// `Lean.Kernel.Environment.addDeclWithoutChecking`. The call consumes `env` and borrows `decl`, as `lean_add_decl_without_checking` does. The result is a new `Except Kernel.Exception Kernel.Environment` object.
+    ///
+    /// The call does what the C++ kernel does when `check` is false. An axiom, a definition, a theorem and an opaque constant get no check. A mutual block must not be empty and must be unsafe or partial, and its members get no other check. An inductive block and the quotient get the full check of `add_decl`, because the C++ kernel always checks them.
+    ///
+    /// # Safety
+    ///
+    /// `env` is a `Kernel.Environment` object and `decl` is a `Declaration` object of the runtime.
+    pub unsafe fn add_decl_without_checking(&self, env: u64, decl: u64) -> u64 {
+        let mut st = Store::new();
+        let d = match conv::declaration(&self.h, &mut st, decl) {
+            Ok(d) => d,
+            // SAFETY: the caller gives `env`.
+            Err(f) => return unsafe { self.error(env, &st, Exc::Other(f.to_string())) },
+        };
+        let bad_mutual = match &d {
+            Decl::Quot(_) | Decl::Induct(_) => {
+                // SAFETY: the caller gives `env` and `decl`.
+                return unsafe { self.add_decl(env, 0, 0, decl, boxed(0)) };
+            }
+            Decl::Mutual(ds) if ds.is_empty() => Some("invalid empty mutual definition"),
+            Decl::Mutual(ds) if ds[0].safety == Safety::Safe => {
+                Some("invalid mutual definition, declaration is not tagged as unsafe/partial")
+            }
+            _ => None,
+        };
+        if let Some(msg) = bad_mutual {
+            // SAFETY: the caller gives `env`.
+            return unsafe { self.error(env, &st, Exc::Other(format!("{msg} (rulean)"))) };
+        }
+        // SAFETY: the caller gives `decl`, and the conversion found a kind without recursors.
+        let infos = unsafe { self.shared_infos(decl) }.expect("a declaration without recursors");
+        let mut e = env;
+        for ci in infos {
+            // SAFETY: `add` consumes the environment and the constant, and gives a new environment.
+            e = unsafe { (self.add)(e, ci) };
+        }
+        // SAFETY: the maker makes `Except.ok e`, and the result owns `e`.
+        unsafe { LeanMake::new(self.rt) }.ctor(1, &[e], &[])
+    }
+
+    /// The `ConstantInfo` objects that the C++ kernel adds for an axiom, a definition, a theorem, an opaque constant or a mutual block, as new references, or `None` for the other kinds.
+    ///
+    /// The C++ kernel puts the `*Val` object of the declaration into the `ConstantInfo` (`constant_info(d)` in `environment.cpp`), so the call does the same. The terms keep their `mdata`, which the conversion into the store removes. The constructors `axiomDecl`, `defnDecl`, `thmDecl` and `opaqueDecl` have the tags 0 to 3, and so do `axiomInfo`, `defnInfo`, `thmInfo` and `opaqueInfo`. `mutualDefnDecl` has the tag 5 and a list of `DefinitionVal`.
+    ///
+    /// # Safety
+    ///
+    /// `decl` is a live `Declaration` object. The call does not consume it.
+    unsafe fn shared_infos(&self, decl: u64) -> Option<Vec<u64>> {
+        if decl & 1 == 1 {
+            return None;
+        }
+        let tag = (self.word(decl) >> 56) as u8;
+        // SAFETY: the maker gets only objects of the runtime.
+        let mut m = unsafe { LeanMake::new(self.rt) };
+        let mut vals = Vec::new();
+        match tag {
+            0..=3 => vals.push(self.field(decl, 0)),
+            5 => {
+                let mut l = self.field(decl, 0);
+                while l & 1 == 0 {
+                    vals.push(self.field(l, 0));
+                    l = self.field(l, 1);
+                }
+            }
+            _ => return None,
+        }
+        let info = if tag == 5 { 1 } else { tag };
+        let infos = vals
+            .into_iter()
+            .map(|v| {
+                // SAFETY: `v` is a field of `decl`, which is live. The constructor consumes the new reference.
+                unsafe { self.rt.inc(v) };
+                m.ctor(info, &[v], &[])
+            })
+            .collect();
+        Some(infos)
+    }
+
     /// The `ConstantInfo` object of the constant `n` of `env`, as a new reference, or `None`.
     ///
     /// # Safety
@@ -189,8 +289,13 @@ impl<'a> Kernel<'a> {
 
     /// The object field `i` of the constructor object `o`.
     fn field(&self, o: u64, i: u64) -> u64 {
+        self.word(o + 8 + 8 * i)
+    }
+
+    /// The word at the address `a`. The word at the address of an object is its header, and the tag is the high byte.
+    fn word(&self, a: u64) -> u64 {
         let mut b = [0u8; 8];
-        let ok = self.h.read(o + 8 + 8 * i, &mut b);
+        let ok = self.h.read(a, &mut b);
         assert!(ok, "a field of a Lean object is not readable");
         u64::from_le_bytes(b)
     }

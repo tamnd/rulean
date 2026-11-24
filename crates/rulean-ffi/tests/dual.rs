@@ -4,7 +4,9 @@
 //!
 //! Each declaration also goes to `Kernel::add_decl`, the `addDecl` of rulean on the Lean runtime, with the same environment as the C++ kernel. The verdict must be the same. For an accepted declaration, the new constants of the two result environments must be the same. For a rejection, the two `Kernel.Exception` objects must have the same constructor, if `Kernel::add_decl` maps the kind.
 //!
-//! With the feature `export`, each declaration also goes to the exported symbol `lean_add_decl` of rulean, and the result must be the result of `Kernel::add_decl`.
+//! Each declaration also goes to `lean_add_decl_without_checking` of the C++ kernel and to `Kernel::add_decl_without_checking`, with the same environment. The verdicts and the declared constants must be the same. These results are not used for the next declaration.
+//!
+//! With the feature `export`, each declaration also goes to the exported symbols `lean_add_decl` and `lean_add_decl_without_checking` of rulean, and the results must be the results of `Kernel::add_decl` and `Kernel::add_decl_without_checking`.
 //!
 //! The library comes from `RULEAN_LEAN_LIB` or the elan toolchain, as in `tests/runtime.rs`.
 
@@ -73,6 +75,7 @@ fn tag(h: &LiveHeap, o: u64) -> u8 {
 }
 
 type AddDecl = unsafe extern "C" fn(u64, usize, usize, u64, u64) -> u64;
+type AddUnchecked = unsafe extern "C" fn(u64, u64) -> u64;
 type Find = unsafe extern "C" fn(u64, u64) -> u64;
 
 /// The two kernels and their environments.
@@ -80,6 +83,8 @@ struct Dual<'a> {
     rt: &'a Runtime,
     h: LiveHeap,
     add_decl: AddDecl,
+    /// `lean_add_decl_without_checking` of the C++ kernel.
+    unchecked: AddUnchecked,
     find: Find,
     /// The in-process kernel of rulean on the Lean runtime.
     kernel: Kernel<'a>,
@@ -125,6 +130,7 @@ impl Dual<'_> {
         let before = self.chk.env.len();
         let got = conv::declaration(&self.h, &mut self.chk.st, o).expect("a declaration");
         let ours = self.chk.add_decl(&got).is_none();
+        self.same_unchecked(&got, o);
         // `Except.error` has the tag 0 and `Except.ok` has the tag 1.
         let cpp = tag(&self.h, r) == 1;
         let kernel = tag(&self.h, r2) == 1;
@@ -204,6 +210,82 @@ impl Dual<'_> {
         unsafe { self.rt.dec(r3) };
     }
 
+    /// Gives the declaration object `o` to `lean_add_decl_without_checking` of the C++ kernel and to `Kernel::add_decl_without_checking`, with the current environment. The verdicts must be the same. For an accepted declaration, the constants that `d` declares must be the same in the two result environments. With the feature `export`, the exported symbol must give the result of `Kernel::add_decl_without_checking`.
+    fn same_unchecked(&mut self, d: &Decl, o: u64) {
+        // SAFETY: `env` and `o` are live objects. The two functions consume the environment, so the test gives each a new reference.
+        let (r, r2) = unsafe {
+            self.rt.inc(self.env);
+            let r = (self.unchecked)(self.env, o);
+            self.rt.inc(self.env);
+            let r2 = self.kernel.add_decl_without_checking(self.env, o);
+            (r, r2)
+        };
+        let ok = tag(&self.h, r) == 1;
+        assert_eq!(
+            tag(&self.h, r2) == 1,
+            ok,
+            "the unchecked add of rulean and the C++ kernel differ on {d:?}"
+        );
+        let a = word(&self.h, r + 8);
+        let b = word(&self.h, r2 + 8);
+        if ok {
+            for n in declared(d) {
+                let x = self.constant(a, n);
+                assert!(
+                    x.is_some(),
+                    "the unchecked add of the C++ kernel has no {n:?}"
+                );
+                assert_eq!(
+                    x,
+                    self.constant(b, n),
+                    "the unchecked add of the two kernels differs at {n:?}"
+                );
+            }
+        } else if exc_tag(&self.h, b) != 12 {
+            assert_eq!(
+                exc_tag(&self.h, a),
+                exc_tag(&self.h, b),
+                "the unchecked add gives a different exception for {d:?}"
+            );
+        }
+        #[cfg(feature = "export")]
+        {
+            // SAFETY: `env` and `o` are live objects, and the process has the Lean runtime. The symbol consumes the environment, so the test gives it a new reference.
+            let r3 = unsafe {
+                self.rt.inc(self.env);
+                rulean_ffi::export::lean_add_decl_without_checking(self.env, o)
+            };
+            assert_eq!(
+                tag(&self.h, r3) == 1,
+                ok,
+                "the exported unchecked add gives a different verdict for {d:?}"
+            );
+            let c = word(&self.h, r3 + 8);
+            if ok {
+                for n in declared(d) {
+                    assert_eq!(
+                        self.constant(b, n),
+                        self.constant(c, n),
+                        "the exported unchecked add differs at {n:?}"
+                    );
+                }
+            } else {
+                assert_eq!(
+                    exc_tag(&self.h, b),
+                    exc_tag(&self.h, c),
+                    "the exported unchecked add gives a different exception for {d:?}"
+                );
+            }
+            // SAFETY: the test owns `r3`.
+            unsafe { self.rt.dec(r3) };
+        }
+        // SAFETY: the test owns `r` and `r2`.
+        unsafe {
+            self.rt.dec(r);
+            self.rt.dec(r2);
+        }
+    }
+
     /// The constant `n` of the Lean environment `env`, converted into the store of the checker.
     fn constant(&mut self, env: u64, n: NameId) -> Option<ConstInfo> {
         let name = {
@@ -237,6 +319,24 @@ impl Dual<'_> {
         let ours = self.chk.env.at(slot).clone();
         let theirs = self.constant(self.env, n);
         assert_eq!(theirs, Some(ours), "{s} is not the same in the two kernels");
+    }
+}
+
+/// The names of the constants that `d` declares, without the names that the check of an inductive block makes. The quotient gives no names, because the check of `Quot` is the same in the two kinds of add.
+fn declared(d: &Decl) -> Vec<NameId> {
+    match d {
+        Decl::Axiom(a) => vec![a.name],
+        Decl::Defn(x) => vec![x.name],
+        Decl::Thm(t) => vec![t.name],
+        Decl::Opaque(o) => vec![o.name],
+        Decl::Mutual(ds) => ds.iter().map(|x| x.name).collect(),
+        Decl::Induct(b) => b
+            .types
+            .iter()
+            .map(|t| t.name)
+            .chain(b.ctors.iter().map(|c| c.name))
+            .collect(),
+        Decl::Quot(_) => Vec::new(),
     }
 }
 
@@ -333,11 +433,12 @@ fn the_two_kernels_give_the_same_verdicts() {
     // SAFETY: the library is the `libleanshared` of Lean v4.36.0, and this test is the only code of the process that uses Lean.
     let rt = unsafe { Runtime::open(&lib) }.expect("the Lean runtime");
     // SAFETY: these are the types of the Lean functions of v4.36.0.
-    let (mk_env, to_kernel, add_decl, find) = unsafe {
+    let (mk_env, to_kernel, add_decl, unchecked, find) = unsafe {
         (
             func::<unsafe extern "C" fn(u32, u64) -> u64>(&rt, c"l_Lean_mkEmptyEnvironment"),
             func::<unsafe extern "C" fn(u64) -> u64>(&rt, c"lean_elab_environment_to_kernel_env"),
             func::<AddDecl>(&rt, c"lean_add_decl"),
+            func::<AddUnchecked>(&rt, c"lean_add_decl_without_checking"),
             func::<Find>(&rt, c"lean_environment_find"),
         )
     };
@@ -361,6 +462,7 @@ fn the_two_kernels_give_the_same_verdicts() {
         rt: &rt,
         h,
         add_decl,
+        unchecked,
         find,
         kernel,
         env,

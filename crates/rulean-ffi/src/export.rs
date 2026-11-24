@@ -1,10 +1,10 @@
 //! The symbols that a build of Lean with rulean as its kernel links (spec 09.6.2).
 //!
-//! The feature `export` enables this module. The command `cargo rustc -p rulean-ffi --release --features export --crate-type staticlib` makes the static library. The library exports `lean_add_decl` with the signature of the C++ kernel of Lean v4.36.0, so it can replace the object of `src/kernel` that has this symbol. The other symbols of spec 09.6.2 are not done yet.
+//! The feature `export` enables this module. The command `cargo rustc -p rulean-ffi --release --features export --crate-type staticlib` makes the static library. The library exports `lean_add_decl` and `lean_add_decl_without_checking` with the signatures of the C++ kernel of Lean v4.36.0, so it can replace the object of `src/kernel` that has these symbols. The other symbols of spec 09.6.2 are not done yet.
 //!
 //! Each thread that calls a symbol gets its own `Kernel`. The `Kernel` finds the functions of the Lean runtime in the images of the process, on the first call of the thread. The `Runtime` of the thread stays alive until the process stops.
 //!
-//! The process must not have two definitions of `lean_add_decl` that Lean can call. A test binary with this feature can load `libleanshared` with `dlopen`, because the test finds the symbol of the C++ kernel through the handle of the library.
+//! The process must not have two definitions of a symbol that Lean can call. A test binary with this feature can load `libleanshared` with `dlopen`, because the test finds the symbols of the C++ kernel through the handle of the library.
 //!
 //! This module, `rt`, `live` and `kernel` are the only modules of the crate with `unsafe` code (spec 12).
 
@@ -62,4 +62,15 @@ pub unsafe extern "C" fn lean_add_decl(
 ) -> u64 {
     // SAFETY: the contract of the function is the contract of `with_kernel` and of `Kernel::add_decl`.
     unsafe { with_kernel(|k| k.add_decl(env, max_heartbeat, max_rec_depth, decl, cancel)) }
+}
+
+/// `Lean.Kernel.Environment.addDeclWithoutChecking` of Lean v4.36.0, with rulean as the kernel. It has the contract of `Kernel::add_decl_without_checking`: the call consumes `env` and borrows `decl`, and it gives a new `Except Kernel.Exception Kernel.Environment` object.
+///
+/// # Safety
+///
+/// The process has Lean v4.36.0 in it, and Lean is initialized. `env` is a `Kernel.Environment` object and `decl` is a `Declaration` object.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lean_add_decl_without_checking(env: u64, decl: u64) -> u64 {
+    // SAFETY: the contract of the function is the contract of `with_kernel` and of `Kernel::add_decl_without_checking`.
+    unsafe { with_kernel(|k| k.add_decl_without_checking(env, decl)) }
 }

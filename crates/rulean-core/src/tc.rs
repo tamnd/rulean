@@ -70,6 +70,8 @@ pub enum ErrorKind {
     ArenaFull,
     /// The checker uses more memory than `--max-memory` allows (spec 12.3). This is a resource failure and not a verdict.
     MemoryLimit,
+    /// The heartbeats of the declaration are above `max_heartbeat` (`deterministicTimeout`, spec 09.6.4). This is a resource failure and not a verdict.
+    Heartbeat,
     /// Engine F cannot follow a rule of the profile on this query, so engine R must decide it. Engine F removes this fault, so it is never a verdict.
     FDefer,
     /// A constant of the environment does not have the expected kind. The official kernel fails with an assertion here.
@@ -388,6 +390,10 @@ pub struct Checker {
     pub(crate) ticks: u32,
     /// The calls of `enter` since the checker was made. This is the work count of the report (spec 08.7.4). It does not depend on the machine, so a gate can compare it with a fixed baseline.
     pub steps: u64,
+    /// The heartbeat limit of a declaration (spec 09.6.4). 0 is no limit, and this is the default.
+    pub max_heartbeat: u64,
+    /// The heartbeats since the start of the declaration. The C++ kernel counts one heartbeat for each call of `infer_type_core`, `whnf_core` and `is_def_eq_core` (`check_system`), and the checker counts one at the same functions.
+    pub(crate) heartbeats: u64,
     /// The memory of the other checkers of the run in bytes, as the driver last saw it. With `--threads`, the checkers share one budget, and the driver sets this value before each job. The core has no shared state, so the driver keeps the total.
     pub mem_others: usize,
     /// The memory of this checker that the driver last added to the total of the run.
@@ -455,6 +461,8 @@ impl Checker {
             max_memory: usize::MAX,
             ticks: 0,
             steps: 0,
+            max_heartbeat: 0,
+            heartbeats: 0,
             mem_others: 0,
             mem_published: 0,
             fault: None,
@@ -583,6 +591,30 @@ impl Checker {
         self.max_memory != usize::MAX
             && (self.st.is_full()
                 || self.memory().saturating_add(self.mem_others) > self.max_memory)
+    }
+
+    /// `enter`, then one heartbeat (`check_system` of the C++ kernel). It gives false and records a fault if the heartbeats are above `max_heartbeat`.
+    pub(crate) fn enter_beat(&mut self, at: ExprId) -> bool {
+        if !self.enter(at) {
+            return false;
+        }
+        self.heartbeats = self.heartbeats.saturating_add(1);
+        if self.max_heartbeat != 0 && self.heartbeats > self.max_heartbeat {
+            self.leave();
+            self.fail(ErrorKind::Heartbeat, at);
+            return false;
+        }
+        true
+    }
+
+    /// The heartbeats since the start of the declaration, or since `reset_heartbeats`.
+    pub fn heartbeats(&self) -> u64 {
+        self.heartbeats
+    }
+
+    /// Sets the heartbeats to 0. `add_decl` does this at the start of each declaration.
+    pub fn reset_heartbeats(&mut self) {
+        self.heartbeats = 0;
     }
 
     pub(crate) fn leave(&mut self) {
@@ -1194,7 +1226,7 @@ impl Checker {
         if expr::has_loose_bvars(&self.st, e) {
             return self.fail(ErrorKind::LooseBVar, e);
         }
-        if !self.enter(e) {
+        if !self.enter_beat(e) {
             return self.dummy;
         }
         let mode = infer_only as u32;

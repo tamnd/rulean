@@ -8,6 +8,8 @@
 //!
 //! With the feature `export`, each declaration also goes to the exported symbols `lean_add_decl` and `lean_add_decl_without_checking` of rulean, and the results must be the results of `Kernel::add_decl` and `Kernel::add_decl_without_checking`.
 //!
+//! For each accepted declaration, the test finds the heartbeats of the C++ kernel and of `Kernel::add_decl`: the smallest limit with which the kernel accepts. A smaller limit must give `deterministicTimeout`. The count of rulean must not be above the count of the C++ kernel (spec 09.6.4). The test sets the heartbeats of the thread to 0 with `lean::reset_heartbeat` before each call.
+//!
 //! After the declarations, the test gives terms in a local context to `lean_kernel_is_def_eq`, `lean_kernel_whnf` and `lean_kernel_check` of the C++ kernel and to `Kernel::is_def_eq`, `Kernel::whnf` and `Kernel::check`, with the final environment. The results must be the same. With the feature `export`, the exported symbols of rulean must give the same results.
 //!
 //! The library comes from `RULEAN_LEAN_LIB` or the elan toolchain, as in `tests/runtime.rs`.
@@ -79,6 +81,10 @@ fn tag(h: &LiveHeap, o: u64) -> u8 {
 type AddDecl = unsafe extern "C" fn(u64, usize, usize, u64, u64) -> u64;
 type AddUnchecked = unsafe extern "C" fn(u64, u64) -> u64;
 type Find = unsafe extern "C" fn(u64, u64) -> u64;
+type Reset = unsafe extern "C" fn();
+
+/// The tag of `Kernel.Exception.deterministicTimeout`.
+const TIMEOUT: u64 = 13;
 
 /// The two kernels and their environments.
 struct Dual<'a> {
@@ -88,6 +94,8 @@ struct Dual<'a> {
     /// `lean_add_decl_without_checking` of the C++ kernel.
     unchecked: AddUnchecked,
     find: Find,
+    /// `lean::reset_heartbeat` of the C++ runtime. It sets the heartbeats of the thread to 0.
+    reset: Reset,
     /// The in-process kernel of rulean on the Lean runtime.
     kernel: Kernel<'a>,
     /// The C++ kernel environment. The test owns one reference.
@@ -105,6 +113,8 @@ struct Verdicts {
     kernel: bool,
     /// For a rejection, the tags of the `Kernel.Exception` of the C++ kernel and of `Kernel::add_decl`.
     tags: Option<(u64, u64)>,
+    /// For an accepted declaration, the heartbeats of the C++ kernel and of `Kernel::add_decl`.
+    beats: Option<(u64, u64)>,
 }
 
 /// The tag of a `Kernel.Exception`. A constructor without fields is a boxed scalar.
@@ -152,6 +162,7 @@ impl Dual<'_> {
         }
         #[cfg(feature = "export")]
         self.same_as_export(d, o, r2, before);
+        let beats = (cpp && kernel).then(|| self.same_heartbeats(d, o));
         if cpp {
             // SAFETY: `new_cpp` is a field of `r`, which the test owns. The test takes a reference to it and gives back the old environment.
             unsafe {
@@ -171,7 +182,60 @@ impl Dual<'_> {
             ours,
             kernel,
             tags,
+            beats,
         }
+    }
+
+    /// Finds the heartbeats of the C++ kernel and of `Kernel::add_decl` for the accepted declaration `o`. The count is the smallest limit with which the kernel accepts, and the kernel must give `deterministicTimeout` with a smaller limit. The count of rulean must not be above the count of the C++ kernel (spec 09.6.4).
+    fn same_heartbeats(&mut self, d: &Decl, o: u64) -> (u64, u64) {
+        let cpp = self.heartbeats(o, true);
+        let ours = self.heartbeats(o, false);
+        assert!(
+            ours <= cpp,
+            "rulean counts {ours} heartbeats and the C++ kernel counts {cpp} for {d:?}"
+        );
+        (cpp, ours)
+    }
+
+    /// The smallest heartbeat limit with which the C++ kernel (`cpp`) or `Kernel::add_decl` accepts `o`. A limit of 0 is no limit, so the search starts at 1.
+    fn heartbeats(&mut self, o: u64, cpp: bool) -> u64 {
+        // The result of a limit: true if the kernel accepts. A rejection must be `deterministicTimeout`.
+        let accepts = |max: u64| -> bool {
+            // SAFETY: `env` and `o` are live objects. The functions consume the environment, so the test gives each call a new reference. `reset` has no arguments.
+            let r = unsafe {
+                self.rt.inc(self.env);
+                (self.reset)();
+                if cpp {
+                    (self.add_decl)(self.env, max as usize, 512, o, boxed(0))
+                } else {
+                    self.kernel
+                        .add_decl(self.env, max as usize, 512, o, boxed(0))
+                }
+            };
+            let ok = tag(&self.h, r) == 1;
+            if !ok {
+                assert_eq!(
+                    exc_tag(&self.h, word(&self.h, r + 8)),
+                    TIMEOUT,
+                    "a rejection with the limit {max} is not a timeout"
+                );
+            }
+            // SAFETY: the test owns `r`.
+            unsafe { self.rt.dec(r) };
+            ok
+        };
+        let mut hi = 1;
+        while !accepts(hi) {
+            hi *= 2;
+            assert!(hi < 1 << 40, "no heartbeat limit is sufficient");
+        }
+        let mut lo = hi / 2;
+        // The kernel rejects with `lo` (or `lo` is 0) and accepts with `hi`.
+        while hi - lo > 1 {
+            let mid = lo + (hi - lo) / 2;
+            if accepts(mid) { hi = mid } else { lo = mid }
+        }
+        hi
     }
 
     /// Gives the declaration object `o` to the exported `lean_add_decl` and requires the result of `Kernel::add_decl`, which is `r2`: the same verdict, the same new constants, or the same `Kernel.Exception` constructor.
@@ -435,7 +499,7 @@ fn the_two_kernels_give_the_same_verdicts() {
     // SAFETY: the library is the `libleanshared` of Lean v4.36.0, and this test is the only code of the process that uses Lean.
     let rt = unsafe { Runtime::open(&lib) }.expect("the Lean runtime");
     // SAFETY: these are the types of the Lean functions of v4.36.0.
-    let (mk_env, to_kernel, add_decl, unchecked, find, update_base) = unsafe {
+    let (mk_env, to_kernel, add_decl, unchecked, find, update_base, reset) = unsafe {
         (
             func::<unsafe extern "C" fn(u32, u64) -> u64>(&rt, c"l_Lean_mkEmptyEnvironment"),
             func::<unsafe extern "C" fn(u64) -> u64>(&rt, c"lean_elab_environment_to_kernel_env"),
@@ -446,6 +510,8 @@ fn the_two_kernels_give_the_same_verdicts() {
                 &rt,
                 c"lean_elab_environment_update_base_after_kernel_add",
             ),
+            // `lean::reset_heartbeat()`, a C++ function without arguments. The name is the mangled name of the Itanium ABI.
+            func::<Reset>(&rt, c"_ZN4lean15reset_heartbeatEv"),
         )
     };
     // SAFETY: the objects are made by the Lean runtime and stay alive while the test uses them.
@@ -471,6 +537,7 @@ fn the_two_kernels_give_the_same_verdicts() {
         add_decl,
         unchecked,
         find,
+        reset,
         kernel,
         env,
         chk,
@@ -644,8 +711,13 @@ fn the_two_kernels_give_the_same_verdicts() {
     cases.push(("loop", Decl::Mutual(vec![d]), true));
 
     let mut same_tags = 0;
+    let mut beats = Vec::new();
     for (what, d, want) in &cases {
         let v = dual.add(&st, d);
+        if let Some((cpp, ours)) = v.beats {
+            eprintln!("heartbeats of {what}: C++ {cpp}, rulean {ours}");
+            beats.push((cpp, ours));
+        }
         assert_eq!(v.cpp, *want, "the C++ kernel on {what}");
         assert_eq!(v.ours, v.cpp, "rulean and the C++ kernel differ on {what}");
         assert_eq!(
@@ -662,6 +734,10 @@ fn the_two_kernels_give_the_same_verdicts() {
     }
     // The duplicate `two`, the theorem `bad` and the axiom `ax` give `alreadyDeclared`, `thmTypeIsNotProp` and `unknownConstant`.
     assert_eq!(same_tags, 3);
+    // Each accepted declaration has a count, and most of them need more than one heartbeat, so the search finds a real limit.
+    assert_eq!(beats.len(), 8);
+    assert!(beats.iter().all(|&(cpp, ours)| ours <= cpp));
+    assert!(beats.iter().filter(|&&(_, ours)| ours > 1).count() >= 6);
 
     for s in [
         "N",

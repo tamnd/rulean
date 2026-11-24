@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.0.12] - 2026-11-24
+
 ### Added
 
 - The CI job `proof-kernels` exports the proof package `RuleanProof` and its imports with lean4export, and requires that rulean, nanoda and con-leche accept the export (spec 10.9 and rule 5 of the release gate in 11.7). nanoda is built from the commit that the Lean Kernel Arena pins. con-leche is the package that `proof/` requires, and it runs in verified mode. The new script `scripts/proof-kernels.sh` does the export and the three checks.
@@ -245,7 +247,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.11...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.12...HEAD
+[0.0.12]: https://github.com/tamnd/rulean/compare/v0.0.11...v0.0.12
 [0.0.11]: https://github.com/tamnd/rulean/compare/v0.0.10...v0.0.11
 [0.0.10]: https://github.com/tamnd/rulean/compare/v0.0.9...v0.0.10
 [0.0.9]: https://github.com/tamnd/rulean/compare/v0.0.8...v0.0.9

@@ -179,7 +179,7 @@ fn pi_arity(st: &Store, t0: ExprId) -> u32 {
 }
 
 impl Checker {
-    /// `environment::add_inductive`.
+    /// `environment::add_inductive`. With `kernel_api`, the block has no recursors and the fields that the checker computes are not compared.
     pub fn add_inductive(&mut self, d: &Induct) -> Option<Fault> {
         let saved = self.env.len();
         let mut s = self.new_ind(d);
@@ -200,7 +200,7 @@ impl Checker {
         if !self.bad() && s.aux_nested.len() > 0 {
             self.restore_block(&mut s, saved);
         }
-        if !self.bad() {
+        if !self.bad() && !self.kernel_api {
             self.compare_export(&mut s, d);
         }
         if self.bad() {

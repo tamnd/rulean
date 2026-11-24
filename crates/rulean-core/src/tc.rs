@@ -403,6 +403,8 @@ pub struct Checker {
     pub trust_primitives: bool,
     /// The flags of the semantics profile (spec 05.2).
     pub flags: Flags,
+    /// The input is a `Declaration` of the Lean API, as in the in-process mode (spec 09.6), and not a stream of constants. An inductive declaration then gives only the types and the constructors, so `add_inductive` does not compare the block with an export. A quotient declaration gives no constants, so `add_quot` adds the four reference constants once and does nothing after that, as `environment::add_quot` does.
+    pub kernel_api: bool,
     /// The value that a function returns after a fault.
     pub(crate) dummy: ExprId,
 }
@@ -461,6 +463,7 @@ impl Checker {
             pin_mismatch: Vec::new(),
             trust_primitives: false,
             flags: Profile::V4_35.flags(),
+            kernel_api: false,
             dummy,
         }
     }

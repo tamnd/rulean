@@ -504,8 +504,13 @@ impl Checker {
     }
 
     /// `add_quot`. The first quotient declaration adds all four constants with the reference types, as the official kernel does. Each exported quotient declaration must then be the reference constant of its kind (spec 06.5).
+    ///
+    /// With `kernel_api`, the declaration is `quotDecl`, which has no constants. The call adds the four reference constants if they are not in the environment, and does nothing if they are.
     pub fn add_quot(&mut self, d: &Quot) -> Option<Fault> {
         self.begin(Vec::new(), Safety::Safe);
+        if self.kernel_api && self.env.quot_initialized() {
+            return None;
+        }
         if !self.env.quot_initialized() {
             self.check_eq_type(d.ty);
             let names = [
@@ -535,6 +540,9 @@ impl Checker {
                 i += 1;
             }
             self.env.mark_quot_initialized();
+        }
+        if self.kernel_api {
+            return None;
         }
         let (n, lps, ty) = self.quot_reference(d.kind);
         if d.name != n || !names_eq(&d.lparams, &lps) || !self.eq(d.ty, ty) {

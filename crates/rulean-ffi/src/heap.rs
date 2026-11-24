@@ -25,6 +25,12 @@ pub trait Heap {
     fn read(&self, addr: u64, out: &mut [u8]) -> bool;
 }
 
+impl<T: Heap + ?Sized> Heap for &T {
+    fn read(&self, addr: u64, out: &mut [u8]) -> bool {
+        (**self).read(addr, out)
+    }
+}
+
 /// The boxed scalar of `n`, as `lean_box` makes it.
 pub const fn boxed(n: u64) -> u64 {
     (n << 1) | 1
@@ -72,10 +78,16 @@ impl OwnedHeap {
 
     /// Adds a string object with the text `s`, and gives its address.
     pub fn string(&mut self, s: &str) -> u64 {
-        let size = s.len() as u64 + 1;
-        let mut bytes = s.as_bytes().to_vec();
+        self.string_bytes(s.as_bytes())
+    }
+
+    /// Adds a string object with the UTF-8 bytes `b`, and gives its address. The length field counts the code points, so it counts the bytes that do not continue a code point.
+    pub fn string_bytes(&mut self, b: &[u8]) -> u64 {
+        let size = b.len() as u64 + 1;
+        let length = b.iter().filter(|&&x| x & 0xc0 != 0x80).count() as u64;
+        let mut bytes = b.to_vec();
         bytes.push(0);
-        let mut w = vec![header(tag::STRING, 0), size, size, s.chars().count() as u64];
+        let mut w = vec![header(tag::STRING, 0), size, size, length];
         w.extend(pack(&bytes));
         self.alloc(&w)
     }

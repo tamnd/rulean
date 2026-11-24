@@ -8,6 +8,7 @@ use rulean_ffi::FaultKind;
 use rulean_ffi::conv::Converter;
 use rulean_ffi::heap::{OwnedHeap, boxed};
 use rulean_ffi::live::LiveHeap;
+use rulean_ffi::make::Encoder;
 use rulean_ffi::mirror::add_constants;
 use rulean_store::Store;
 
@@ -37,11 +38,19 @@ fn nat_checker(b: &mut B) -> (Checker, Vec<ConstInfo>) {
     (c, ks)
 }
 
+/// The `ConstantInfo` objects of `ks`.
+fn encode(b: &mut B, st: &Store, ks: &[ConstInfo]) -> Vec<u64> {
+    let mut e = Encoder::new(&mut b.h, st);
+    ks.iter()
+        .map(|k| e.constant(k, &[k.name]).expect("a constant"))
+        .collect()
+}
+
 #[test]
 fn the_constants_of_an_inductive_type_round_trip() {
     let mut b = B::new();
     let (mut c, ks) = nat_checker(&mut b);
-    let objs: Vec<u64> = ks.iter().map(|k| b.enc_const(&c.st, k)).collect();
+    let objs = encode(&mut b, &c.st, &ks);
     let mut conv = Converter::new(&b.h, &mut c.st);
     for (k, &o) in ks.iter().zip(&objs) {
         let got = conv.constant(o).expect("a constant");
@@ -53,7 +62,7 @@ fn the_constants_of_an_inductive_type_round_trip() {
 fn the_constants_round_trip_live() {
     let mut b = B::new();
     let (mut c, ks) = nat_checker(&mut b);
-    let objs: Vec<u64> = ks.iter().map(|k| b.enc_const(&c.st, k)).collect();
+    let objs = encode(&mut b, &c.st, &ks);
     // SAFETY: the objects are in `b.h`, which lives until the end of the test.
     let live = unsafe { LiveHeap::new() };
     let mut conv = Converter::new(&live, &mut c.st);
@@ -108,7 +117,7 @@ fn pred_decls(b: &mut B, claim_succ: bool) -> Vec<u64> {
 fn run_on_mirror(claim_succ: bool) -> Option<rulean_core::tc::Fault> {
     let mut b = B::new();
     let (c0, ks) = nat_checker(&mut b);
-    let objs: Vec<u64> = ks.iter().map(|k| b.enc_const(&c0.st, k)).collect();
+    let objs = encode(&mut b, &c0.st, &ks);
     let mut c = checker();
     assert_eq!(add_constants(&mut c, &b.h, &objs, false), Ok(4));
     let ds = pred_decls(&mut b, claim_succ);

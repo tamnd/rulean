@@ -1,6 +1,6 @@
 //! The in-process kernel. It reads Lean objects through the Lean ABI and gives the declarations to the verified core. See spec section 09.6.
 //!
-//! This crate has the first part of the in-process mode: the object model of the Lean runtime (`heap`), the reader of the memory of the process (`live`), and the conversion of a `Declaration` object into the store (`conv`). The exported symbols, the mirror of the environment and the conversion of the results back to Lean objects are not done yet.
+//! This crate has the first part of the in-process mode: the object model of the Lean runtime (`heap`), the reader of the memory of the process (`live`), the conversion of `Declaration` and `ConstantInfo` objects into the store (`conv`), and the mirror of the environment (`mirror`). The exported symbols and the conversion of the results back to Lean objects are not done yet.
 //!
 //! The conversion makes a declaration of the form that the checker takes from the other readers, so the checker does not know which reader made it. The checker must have `kernel_api` set, because a `Declaration` gives an inductive block without the recursors.
 //!
@@ -19,6 +19,7 @@
 pub mod conv;
 pub mod heap;
 pub mod live;
+pub mod mirror;
 
 use std::fmt;
 

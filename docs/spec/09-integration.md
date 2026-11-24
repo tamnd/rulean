@@ -119,6 +119,8 @@ The four options are in D§4.1. rulean chooses:
    | `lean_kernel_check(env, lctx, e)` | `Lean.Kernel.check` |
 
    The Lean build replaces `src/kernel` with these symbols. The C++ files in `src/library` that include kernel headers still need declarations. A thin header-only shim provides them. That shim is part of Lean's build, not of rulean (02.5, no-C rule applies to rulean's tree).
+
+   The feature `export` of `rulean-ffi` gives these symbols. The command `cargo rustc -p rulean-ffi --release --features export --crate-type staticlib` makes the static library. Each thread that calls a symbol gets its own `Kernel` (09.6.3), and the `Kernel` finds the functions of the Lean runtime in the images of the process. At this time the library exports only `lean_add_decl`.
 2. **Then, an upstream hook.** rulean proposes a Lean option that selects the kernel implementation at run time (D§4.1 option D). This needs upstream agreement (15.4).
 
 Symbol interposition (option C) is not supported. It is fragile, and macOS blocks it for signed binaries.

@@ -48,6 +48,7 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo clippy -p rulean-ffi --all-targets --locked --features export -- -D warnings
 
   test:
     name: test (${{ matrix.os }})
@@ -300,7 +301,11 @@ jobs:
           echo "$LEAN_SHA256  _tmp/lean/$LEAN_ASSET" | sha256sum -c -
           tar --zstd -xf "_tmp/lean/$LEAN_ASSET" -C _tmp/lean
       - name: the runtime test of rulean-ffi
-        run: RULEAN_LEAN_LIB="$PWD/_tmp/lean/lean-4.36.0-linux/lib/lean/libleanshared.so" cargo test --locked -p rulean-ffi --test runtime --test dual -- --nocapture
+        run: RULEAN_LEAN_LIB="$PWD/_tmp/lean/lean-4.36.0-linux/lib/lean/libleanshared.so" cargo test --locked -p rulean-ffi --features export --test runtime --test dual -- --nocapture
+      - name: the static library of rulean-ffi exports lean_add_decl
+        run: |
+          cargo rustc --locked -p rulean-ffi --features export --crate-type staticlib
+          nm -g --defined-only target/debug/librulean_ffi.a | grep -w 'T lean_add_decl'
 
   # The cross-validation of the `.olean` reader with lean4export on Init and Std (spec 07.3.6), for each Lean release of a profile (spec 05.2). v4.35.0 and v4.36.0 have the profile v4.35 and write oleans of version 2. v4.37.0-rc1 has the profile v4.37 and writes oleans of version 4. For a future release that has no profile yet, set NO_PROFILE=1 for the script (`scripts/olean-xval.sh`), so rulean must decline the export and the oleans give only a parse. The job depends on the Lean releases, so it is not a required check.
   olean-xval:

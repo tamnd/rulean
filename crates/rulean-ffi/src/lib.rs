@@ -1,6 +1,6 @@
 //! The in-process kernel. It reads Lean objects through the Lean ABI and gives the declarations to the verified core. See spec section 09.6.
 //!
-//! This crate has the first part of the in-process mode: the object model of the Lean runtime (`heap`), the reader of the memory of the process (`live`), the conversion of `Declaration` and `ConstantInfo` objects into the store (`conv`), the mirror of the environment (`mirror`), the construction of Lean objects from the store (`make`), the functions of the Lean runtime in the process (`rt`, on Linux and macOS), and `addDecl` on the Lean runtime (`kernel`, on Linux and macOS). The exported symbols are not done yet.
+//! This crate has the first part of the in-process mode: the object model of the Lean runtime (`heap`), the reader of the memory of the process (`live`), the conversion of `Declaration` and `ConstantInfo` objects into the store (`conv`), the mirror of the environment (`mirror`), the construction of Lean objects from the store (`make`), the functions of the Lean runtime in the process (`rt`, on Linux and macOS), `addDecl` on the Lean runtime (`kernel`, on Linux and macOS), and the exported symbol `lean_add_decl` (`export`, with the feature `export`). The other exported symbols are not done yet.
 //!
 //! The conversion makes a declaration of the form that the checker takes from the other readers, so the checker does not know which reader made it. The checker must have `kernel_api` set, because a `Declaration` gives an inductive block without the recursors.
 //!
@@ -17,6 +17,12 @@
 #![deny(unsafe_code)]
 
 pub mod conv;
+#[cfg(all(
+    feature = "export",
+    any(target_os = "linux", target_os = "macos"),
+    target_pointer_width = "64"
+))]
+pub mod export;
 pub mod heap;
 #[cfg(all(
     any(target_os = "linux", target_os = "macos"),

@@ -13,13 +13,17 @@ publish = false
 # The layer of spec section 03.2. xtask checks the dependency rule of 03.3 from this value.
 layer = "hardened"
 
+[features]
+# The exported symbols of spec 09.6.2, for the static library that a build of Lean links.
+export = []
+
 [dependencies]
 rulean-core = { path = "../rulean-core" }
 rulean-format = { path = "../rulean-format" }
 rulean-nat = { path = "../rulean-nat" }
 rulean-store = { path = "../rulean-store" }
 
-# The lints of the workspace, except `unsafe_code`. Spec 12 allows `unsafe` in this crate for the Lean ABI, and only the modules `live`, `rt` and `kernel` have it, with `#![allow(unsafe_code)]` and a comment for each block. Cargo cannot change one lint of the workspace table, so the crate has the full table.
+# The lints of the workspace, except `unsafe_code`. Spec 12 allows `unsafe` in this crate for the Lean ABI, and only the modules `live`, `rt`, `kernel` and `export` have it, with `#![allow(unsafe_code)]` and a comment for each block. Cargo cannot change one lint of the workspace table, so the crate has the full table.
 [lints.rust]
 unsafe_code = "deny"
 missing_debug_implementations = "warn"

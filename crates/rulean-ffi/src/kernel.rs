@@ -6,7 +6,7 @@
 //!
 //! If rulean accepts the declaration, the call adds the new constants to the Lean environment with `lean_environment_add`. If rulean rejects it, the call gives a `Kernel.Exception`. The kinds `unknownConstant`, `alreadyDeclared`, `thmTypeIsNotProp`, `excessiveMemory` and `deepRecursion` have the constructors of the C++ kernel. The other kinds give `other` with a message. The heartbeat limit, the recursion limit and the cancel token have no effect yet.
 //!
-//! This module, `rt` and `live` are the only modules of the crate with `unsafe` code (spec 12).
+//! This module, `rt`, `live` and `export` are the only modules of the crate with `unsafe` code (spec 12).
 
 #![allow(unsafe_code)]
 

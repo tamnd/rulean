@@ -1,0 +1,807 @@
+//! The conversion of a Lean `Declaration` object into the store (spec 09.6.3).
+//!
+//! The conversion knows the Lean type at each address. It checks the tag and the number of object fields of each constructor object against the constructor of that type, and it reads the scalar fields at the offsets that the layout of the constructor gives. It does not read the cached data: `Name.hash`, `Level.Data` and `Expr.Data`. The store computes its own hashes.
+//!
+//! Names, levels and expressions are shared in the Lean heap, so the conversion keeps a table from address to handle for each type. It uses an explicit stack and no recursion, so a deep term cannot overflow the thread stack.
+//!
+//! The layouts are those of Lean v4.36.0 (appendix D, sections 1.3 and 3). A `Declaration` is one of these constructors:
+//!
+//! | Tag | Constructor | Object fields | Scalar fields |
+//! |---|---|---|---|
+//! | 0 | `axiomDecl` | `AxiomVal` | |
+//! | 1 | `defnDecl` | `DefinitionVal` | |
+//! | 2 | `thmDecl` | `TheoremVal` | |
+//! | 3 | `opaqueDecl` | `OpaqueVal` | |
+//! | 4 | `quotDecl` | none, so the value is the boxed scalar 4 | |
+//! | 5 | `mutualDefnDecl` | `List DefinitionVal` | |
+//! | 6 | `inductDecl` | `List Name`, `Nat`, `List InductiveType` | `isUnsafe` |
+
+use std::collections::HashMap;
+
+use rulean_format::ndjson::MAX_NAT_BITS;
+use rulean_format::{
+    Axiom, Ctor, Decl, Defn, Hints, Induct, InductType, Opaque, Quot, QuotKind, Safety, Thm,
+};
+use rulean_nat::Nat;
+use rulean_store::{BinderInfo, ExprId, LevelId, LevelListId, NameId, Store};
+
+use crate::heap::{Heap, WORD, tag};
+use crate::{Fault, FaultKind};
+
+/// A word of an object field: a boxed scalar or the address of an object.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Field {
+    Scalar(u64),
+    Object(u64),
+}
+
+/// The largest value of a boxed natural number (`LEAN_MAX_SMALL_NAT` on a 64-bit target).
+const MAX_SMALL_NAT: u64 = u64::MAX >> 1;
+
+/// Converts the `Declaration` object at `decl` into a declaration of the store.
+///
+/// An inductive declaration gives a block with the types and the constructors only. The counts that the checker computes are zero, and the block has no recursors, so the checker must have `kernel_api` set (see `rulean_core::tc::Checker`). A quotient declaration gives the constant `Quot` of the kind `Type`, and the checker adds the four reference constants.
+pub fn declaration<H: Heap>(h: &H, st: &mut Store, decl: u64) -> Result<Decl, Fault> {
+    let mut c = Conv::new(h, st);
+    let d = c.declaration(decl)?;
+    if c.st.is_full() {
+        return Err(Fault::new(
+            FaultKind::StoreFull,
+            decl,
+            "the term store is full",
+        ));
+    }
+    Ok(d)
+}
+
+/// The state of one conversion.
+struct Conv<'a, H: Heap> {
+    h: &'a H,
+    st: &'a mut Store,
+    names: HashMap<u64, NameId>,
+    levels: HashMap<u64, LevelId>,
+    exprs: HashMap<u64, ExprId>,
+}
+
+fn bad(at: u64, msg: impl Into<String>) -> Fault {
+    Fault::new(FaultKind::Malformed, at, msg)
+}
+
+fn decline(at: u64, msg: impl Into<String>) -> Fault {
+    Fault::new(FaultKind::Decline, at, msg)
+}
+
+impl<'a, H: Heap> Conv<'a, H> {
+    fn new(h: &'a H, st: &'a mut Store) -> Conv<'a, H> {
+        Conv {
+            h,
+            st,
+            names: HashMap::new(),
+            levels: HashMap::new(),
+            exprs: HashMap::new(),
+        }
+    }
+
+    // The words and the bytes of objects.
+
+    fn bytes<const N: usize>(&self, addr: u64) -> Result<[u8; N], Fault> {
+        let mut b = [0u8; N];
+        if self.h.read(addr, &mut b) {
+            Ok(b)
+        } else {
+            Err(bad(addr, "the address cannot be read"))
+        }
+    }
+
+    fn word(&self, addr: u64) -> Result<u64, Fault> {
+        Ok(u64::from_le_bytes(self.bytes::<8>(addr)?))
+    }
+
+    /// The tag and the value of `m_other` of the object at `p`.
+    fn head(&self, p: u64) -> Result<(u8, u8), Fault> {
+        let b = self.bytes::<8>(p)?;
+        Ok((b[7], b[6]))
+    }
+
+    /// The address of object field `i` of the object at `p`.
+    fn slot(p: u64, i: u64) -> u64 {
+        p.wrapping_add(WORD * (1 + i))
+    }
+
+    /// Object field `i` of the constructor object at `p`.
+    fn field(&self, p: u64, i: u64) -> Result<Field, Fault> {
+        let w = self.word(Self::slot(p, i))?;
+        if w & 1 == 1 {
+            Ok(Field::Scalar(w >> 1))
+        } else if w == 0 || !w.is_multiple_of(WORD) {
+            Err(bad(
+                p,
+                format!("field {i} is not a scalar and not an object address"),
+            ))
+        } else {
+            Ok(Field::Object(w))
+        }
+    }
+
+    /// Object field `i` of `p`, which must be an object.
+    fn object(&self, p: u64, i: u64) -> Result<u64, Fault> {
+        match self.field(p, i)? {
+            Field::Object(q) => Ok(q),
+            Field::Scalar(_) => Err(bad(
+                p,
+                format!("field {i} is a scalar where an object is expected"),
+            )),
+        }
+    }
+
+    /// Checks that the object at `p` is a constructor object with a tag in `tags` and `objs` object fields, and gives the tag.
+    fn ctor(
+        &self,
+        p: u64,
+        tags: core::ops::RangeInclusive<u8>,
+        objs: u8,
+        what: &str,
+    ) -> Result<u8, Fault> {
+        let (t, other) = self.head(p)?;
+        if !tags.contains(&t) || t > tag::MAX_CTOR {
+            return Err(bad(p, format!("the object is not a {what}: tag {t}")));
+        }
+        if other != objs {
+            return Err(bad(
+                p,
+                format!("a {what} has {other} object fields, not {objs}"),
+            ));
+        }
+        Ok(t)
+    }
+
+    /// Scalar byte `k` of the constructor object at `p` with `objs` object fields.
+    fn u8_at(&self, p: u64, objs: u64, k: u64) -> Result<u8, Fault> {
+        Ok(self.bytes::<1>(Self::slot(p, objs).wrapping_add(k))?[0])
+    }
+
+    fn u32_at(&self, p: u64, objs: u64, k: u64) -> Result<u32, Fault> {
+        Ok(u32::from_le_bytes(
+            self.bytes::<4>(Self::slot(p, objs).wrapping_add(k))?,
+        ))
+    }
+
+    fn bool_at(&self, p: u64, objs: u64, k: u64) -> Result<bool, Fault> {
+        match self.u8_at(p, objs, k)? {
+            0 => Ok(false),
+            1 => Ok(true),
+            v => Err(bad(p, format!("a boolean field has the value {v}"))),
+        }
+    }
+
+    fn unsafe_flag(&self, p: u64, objs: u64, k: u64) -> Result<Safety, Fault> {
+        Ok(if self.bool_at(p, objs, k)? {
+            Safety::Unsafe
+        } else {
+            Safety::Safe
+        })
+    }
+
+    // Strings and natural numbers.
+
+    /// The bytes of the string that field `i` of `p` points to.
+    fn string(&self, p: u64, i: u64) -> Result<Vec<u8>, Fault> {
+        let s = self.object(p, i)?;
+        let (t, _) = self.head(s)?;
+        if t != tag::STRING {
+            return Err(bad(s, "the object is not a string"));
+        }
+        let size = self.word(s.wrapping_add(WORD))?;
+        let chars = self.word(s.wrapping_add(3 * WORD))?;
+        if size == 0 {
+            return Err(bad(s, "a string has the size 0"));
+        }
+        if size > MAX_NAT_BITS / 8 {
+            return Err(decline(s, "a string is too large"));
+        }
+        let mut b = vec![0u8; size as usize];
+        if !self.h.read(s.wrapping_add(4 * WORD), &mut b) {
+            return Err(bad(s, "the bytes of a string cannot be read"));
+        }
+        if b.pop() != Some(0) {
+            return Err(bad(s, "a string has no zero byte at its end"));
+        }
+        match core::str::from_utf8(&b) {
+            Ok(t) if t.chars().count() as u64 == chars => Ok(b),
+            Ok(_) => Err(bad(s, "a string has a wrong character count")),
+            Err(_) => Err(bad(s, "a string is not UTF-8")),
+        }
+    }
+
+    /// The natural number of field `i` of `p`: a boxed scalar or a big number in the GMP encoding. In the runtime, the limbs of a big number are in a separate buffer.
+    fn nat(&self, p: u64, i: u64) -> Result<Nat, Fault> {
+        let m = match self.field(p, i)? {
+            Field::Scalar(n) => return Ok(Nat::from_u64(n)),
+            Field::Object(m) => m,
+        };
+        let (t, _) = self.head(m)?;
+        if t != tag::MPZ {
+            return Err(bad(m, "the object is not a natural number"));
+        }
+        let b = self.bytes::<8>(m.wrapping_add(WORD))?;
+        let alloc = i32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+        let size = i32::from_le_bytes([b[4], b[5], b[6], b[7]]);
+        let d = self.word(m.wrapping_add(2 * WORD))?;
+        if size <= 0 || alloc < size {
+            return Err(bad(m, "a big number has a bad GMP header"));
+        }
+        let n = size as u64;
+        if n > MAX_NAT_BITS / 64 {
+            return Err(decline(m, "a natural number is too large"));
+        }
+        let mut v = Vec::with_capacity(n as usize);
+        for k in 0..n {
+            v.push(self.word(d.wrapping_add(k * WORD))?);
+        }
+        let top = v[v.len() - 1];
+        if top == 0 {
+            return Err(bad(m, "a big number has a leading zero limb"));
+        }
+        if v.len() == 1 && top <= MAX_SMALL_NAT {
+            return Err(bad(m, "a big number is small enough to be a boxed scalar"));
+        }
+        Ok(Nat::from_limbs(v))
+    }
+
+    /// The natural number of field `i` of `p` as a `u32`. A larger value is a decline.
+    fn small(&self, p: u64, i: u64) -> Result<u32, Fault> {
+        let n = self.nat(p, i)?;
+        match n.to_u64().and_then(|x| u32::try_from(x).ok()) {
+            Some(x) => Ok(x),
+            None => Err(decline(p, "a count or an index does not fit in 32 bits")),
+        }
+    }
+
+    // Lists.
+
+    /// The heads of the list that field `i` of `p` points to.
+    fn list(&self, p: u64, i: u64) -> Result<Vec<Field>, Fault> {
+        let mut out = Vec::new();
+        let mut cur = self.field(p, i)?;
+        loop {
+            match cur {
+                Field::Scalar(0) => return Ok(out),
+                Field::Scalar(_) => {
+                    return Err(bad(
+                        p,
+                        "a list ends with a scalar that is not the empty list",
+                    ));
+                }
+                Field::Object(c) => {
+                    self.ctor(c, 1..=1, 2, "list cell")?;
+                    out.push(self.field(c, 0)?);
+                    cur = self.field(c, 1)?;
+                }
+            }
+        }
+    }
+
+    /// The objects of the list that field `i` of `p` points to.
+    fn list_objects(&self, p: u64, i: u64) -> Result<Vec<u64>, Fault> {
+        let mut out = Vec::new();
+        for f in self.list(p, i)? {
+            match f {
+                Field::Object(q) => out.push(q),
+                Field::Scalar(_) => {
+                    return Err(bad(p, "a list has a scalar where an object is expected"));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    // Names.
+
+    fn name(&mut self, p: u64, i: u64) -> Result<NameId, Fault> {
+        let f = self.field(p, i)?;
+        self.name_field(p, f)
+    }
+
+    fn name_field(&mut self, from: u64, f: Field) -> Result<NameId, Fault> {
+        let mut cur = match f {
+            Field::Scalar(0) => return Ok(self.st.anon()),
+            Field::Scalar(_) => {
+                return Err(bad(
+                    from,
+                    "a name is a scalar that is not the anonymous name",
+                ));
+            }
+            Field::Object(q) => q,
+        };
+        // Walk down the prefixes to a name that is known, then make the names from the bottom up.
+        let mut chain = Vec::new();
+        let mut id = self.st.anon();
+        loop {
+            if let Some(&k) = self.names.get(&cur) {
+                id = k;
+                break;
+            }
+            self.ctor(cur, 1..=2, 2, "name")?;
+            chain.push(cur);
+            match self.field(cur, 0)? {
+                Field::Scalar(0) => break,
+                Field::Scalar(_) => {
+                    return Err(bad(
+                        cur,
+                        "a name prefix is a scalar that is not the anonymous name",
+                    ));
+                }
+                Field::Object(q) => cur = q,
+            }
+        }
+        while let Some(q) = chain.pop() {
+            let (t, _) = self.head(q)?;
+            id = if t == 1 {
+                let s = self.string(q, 1)?;
+                self.st.name_str_bytes(id, &s)
+            } else {
+                let n = self.nat(q, 1)?;
+                match n.to_u64() {
+                    Some(x) => self.st.name_num(id, x),
+                    None => return Err(decline(q, "a number in a name does not fit in 64 bits")),
+                }
+            };
+            self.names.insert(q, id);
+        }
+        Ok(id)
+    }
+
+    fn names(&mut self, p: u64, i: u64) -> Result<Vec<NameId>, Fault> {
+        let fs = self.list(p, i)?;
+        let mut out = Vec::with_capacity(fs.len());
+        for f in fs {
+            out.push(self.name_field(p, f)?);
+        }
+        Ok(out)
+    }
+
+    // Levels.
+
+    /// The object of a level field, or `None` for `Level.zero` as the boxed scalar 0.
+    fn level_object(&self, from: u64, f: Field) -> Result<Option<u64>, Fault> {
+        match f {
+            Field::Scalar(0) => Ok(None),
+            Field::Scalar(_) => Err(bad(from, "a level is a scalar that is not `Level.zero`")),
+            Field::Object(q) => Ok(Some(q)),
+        }
+    }
+
+    /// The number of object fields of the level constructor with tag `t`.
+    fn level_objs(t: u8) -> u8 {
+        match t {
+            0 => 0,
+            1 | 4 | 5 => 1,
+            _ => 2,
+        }
+    }
+
+    fn level_field(&mut self, from: u64, f: Field) -> Result<LevelId, Fault> {
+        let Some(root) = self.level_object(from, f)? else {
+            return Ok(self.st.level_zero());
+        };
+        let mut stack = vec![(root, false)];
+        while let Some((q, ready)) = stack.pop() {
+            if self.levels.contains_key(&q) {
+                continue;
+            }
+            let (t, _) = self.head(q)?;
+            self.ctor(q, 0..=5, Self::level_objs(t), "level")?;
+            if t == 5 {
+                return Err(Fault::new(
+                    FaultKind::MetaVar,
+                    q,
+                    "a level metavariable cannot be in a kernel declaration",
+                ));
+            }
+            let kids: u64 = match t {
+                1 => 1,
+                2 | 3 => 2,
+                _ => 0,
+            };
+            if !ready {
+                stack.push((q, true));
+                for k in 0..kids {
+                    let fk = self.field(q, k)?;
+                    if let Some(c) = self.level_object(q, fk)?
+                        && !self.levels.contains_key(&c)
+                    {
+                        stack.push((c, false));
+                    }
+                }
+                continue;
+            }
+            let id = match t {
+                0 => self.st.level_zero(),
+                1 => {
+                    let a = self.done_level(q, 0)?;
+                    self.st.level_succ(a)
+                }
+                2 | 3 => {
+                    let a = self.done_level(q, 0)?;
+                    let b = self.done_level(q, 1)?;
+                    if t == 2 {
+                        self.st.level_max(a, b)
+                    } else {
+                        self.st.level_imax(a, b)
+                    }
+                }
+                _ => {
+                    let n = self.name(q, 0)?;
+                    self.st.level_param(n)
+                }
+            };
+            self.levels.insert(q, id);
+        }
+        match self.levels.get(&root) {
+            Some(&id) => Ok(id),
+            None => Err(bad(root, "a level is not converted")),
+        }
+    }
+
+    fn done_level(&self, q: u64, i: u64) -> Result<LevelId, Fault> {
+        let f = self.field(q, i)?;
+        match self.level_object(q, f)? {
+            None => Ok(self.st.level_zero()),
+            Some(c) => match self.levels.get(&c) {
+                Some(&id) => Ok(id),
+                None => Err(bad(c, "a level is not converted")),
+            },
+        }
+    }
+
+    fn level_list(&mut self, p: u64, i: u64) -> Result<LevelListId, Fault> {
+        let fs = self.list(p, i)?;
+        let mut ls = Vec::with_capacity(fs.len());
+        for f in fs {
+            ls.push(self.level_field(p, f)?);
+        }
+        Ok(self.st.level_list(&ls))
+    }
+
+    // Expressions.
+
+    /// The object fields of the expression constructor with tag `t`, and the fields that are expressions.
+    fn expr_shape(t: u8) -> (u8, &'static [u64]) {
+        match t {
+            0..=3 | 9 => (1, &[]),
+            4 => (2, &[]),
+            5 => (2, &[0, 1]),
+            6 | 7 => (3, &[1, 2]),
+            8 => (4, &[1, 2, 3]),
+            10 => (2, &[1]),
+            _ => (3, &[2]),
+        }
+    }
+
+    fn expr(&mut self, p: u64, i: u64) -> Result<ExprId, Fault> {
+        let root = self.object(p, i)?;
+        let mut stack = vec![(root, false)];
+        while let Some((q, ready)) = stack.pop() {
+            if self.exprs.contains_key(&q) {
+                continue;
+            }
+            let (t, _) = self.head(q)?;
+            if t > 11 {
+                return Err(bad(q, format!("the object is not an expression: tag {t}")));
+            }
+            let (objs, kids) = Self::expr_shape(t);
+            self.ctor(q, t..=t, objs, "expression")?;
+            if t == 1 {
+                return Err(Fault::new(
+                    FaultKind::FreeVar,
+                    q,
+                    "a free variable cannot be in a kernel declaration",
+                ));
+            }
+            if t == 2 {
+                return Err(Fault::new(
+                    FaultKind::MetaVar,
+                    q,
+                    "a metavariable cannot be in a kernel declaration",
+                ));
+            }
+            if !ready {
+                stack.push((q, true));
+                for &k in kids {
+                    let c = self.object(q, k)?;
+                    if !self.exprs.contains_key(&c) {
+                        stack.push((c, false));
+                    }
+                }
+                continue;
+            }
+            let id = self.expr_node(q, t)?;
+            self.exprs.insert(q, id);
+        }
+        match self.exprs.get(&root) {
+            Some(&id) => Ok(id),
+            None => Err(bad(root, "an expression is not converted")),
+        }
+    }
+
+    fn done_expr(&self, q: u64, i: u64) -> Result<ExprId, Fault> {
+        let c = self.object(q, i)?;
+        match self.exprs.get(&c) {
+            Some(&id) => Ok(id),
+            None => Err(bad(c, "an expression is not converted")),
+        }
+    }
+
+    /// Makes the node of the expression at `q` with tag `t`. The expressions of its fields are converted.
+    fn expr_node(&mut self, q: u64, t: u8) -> Result<ExprId, Fault> {
+        Ok(match t {
+            0 => {
+                let i = self.small(q, 0)?;
+                self.st.mk_bvar(i)
+            }
+            3 => {
+                let f = self.field(q, 0)?;
+                let l = self.level_field(q, f)?;
+                self.st.mk_sort(l)
+            }
+            4 => {
+                let n = self.name(q, 0)?;
+                let ls = self.level_list(q, 1)?;
+                self.st.mk_const(n, ls)
+            }
+            5 => {
+                let f = self.done_expr(q, 0)?;
+                let a = self.done_expr(q, 1)?;
+                self.st.mk_app(f, a)
+            }
+            6 | 7 => {
+                let n = self.name(q, 0)?;
+                let dom = self.done_expr(q, 1)?;
+                let body = self.done_expr(q, 2)?;
+                // The scalar area starts with `Expr.Data` (8 bytes), and `binderInfo` follows it.
+                let info = match self.u8_at(q, 3, 8)? {
+                    0 => BinderInfo::Default,
+                    1 => BinderInfo::Implicit,
+                    2 => BinderInfo::StrictImplicit,
+                    3 => BinderInfo::InstImplicit,
+                    v => return Err(bad(q, format!("a binder has the binder info {v}"))),
+                };
+                if t == 6 {
+                    self.st.mk_lam(n, info, dom, body)
+                } else {
+                    self.st.mk_pi(n, info, dom, body)
+                }
+            }
+            8 => {
+                let n = self.name(q, 0)?;
+                let ty = self.done_expr(q, 1)?;
+                let v = self.done_expr(q, 2)?;
+                let body = self.done_expr(q, 3)?;
+                // `nonDep` has no effect on checking (spec 07.1.2), but it must be a boolean.
+                self.bool_at(q, 4, 8)?;
+                self.st.mk_let(n, ty, v, body)
+            }
+            9 => {
+                let lit = self.object(q, 0)?;
+                if self.ctor(lit, 0..=1, 1, "literal")? == 0 {
+                    let n = self.nat(lit, 0)?;
+                    if n.bits() > MAX_NAT_BITS {
+                        return Err(decline(lit, "a natural number is too large"));
+                    }
+                    let id = self.st.intern_nat(n);
+                    self.st.mk_nat_lit(id)
+                } else {
+                    let s = self.string(lit, 0)?;
+                    let id = self.st.intern_str(&s);
+                    self.st.mk_str_lit(id)
+                }
+            }
+            10 => {
+                // `mdata`: the kernel ignores the data, so the conversion checks only that the field is a valid word, and takes the inner expression. `KVMap` is a structure with one field, so its value is the list of entries, and the empty list is the boxed scalar 0.
+                self.field(q, 0)?;
+                self.done_expr(q, 1)?
+            }
+            _ => {
+                let n = self.name(q, 0)?;
+                let i = self.small(q, 1)?;
+                let e = self.done_expr(q, 2)?;
+                self.st.mk_proj(n, i, e)
+            }
+        })
+    }
+
+    // Declarations.
+
+    /// The `ConstantVal` that field 0 of `v` points to: the name, the level parameters and the type.
+    fn cval(&mut self, v: u64) -> Result<(NameId, Vec<NameId>, ExprId), Fault> {
+        let c = self.object(v, 0)?;
+        self.ctor(c, 0..=0, 3, "ConstantVal")?;
+        let name = self.name(c, 0)?;
+        let lparams = self.names(c, 1)?;
+        let ty = self.expr(c, 2)?;
+        Ok((name, lparams, ty))
+    }
+
+    fn hints(&self, v: u64, i: u64) -> Result<Hints, Fault> {
+        match self.field(v, i)? {
+            Field::Scalar(0) => Ok(Hints::Opaque),
+            Field::Scalar(1) => Ok(Hints::Abbrev),
+            Field::Scalar(s) => Err(bad(v, format!("the reducibility hints have the value {s}"))),
+            Field::Object(q) => {
+                self.ctor(q, 2..=2, 0, "ReducibilityHints")?;
+                Ok(Hints::Regular(self.u32_at(q, 0, 0)?))
+            }
+        }
+    }
+
+    /// The `DefinitionVal` at `v`.
+    fn definition(&mut self, v: u64) -> Result<Defn, Fault> {
+        self.ctor(v, 0..=0, 4, "DefinitionVal")?;
+        let (name, lparams, ty) = self.cval(v)?;
+        let value = self.expr(v, 1)?;
+        let hints = self.hints(v, 2)?;
+        let safety = match self.u8_at(v, 4, 0)? {
+            0 => Safety::Unsafe,
+            1 => Safety::Safe,
+            2 => Safety::Partial,
+            s => return Err(bad(v, format!("a definition has the safety {s}"))),
+        };
+        let all = self.names(v, 3)?;
+        Ok(Defn {
+            name,
+            lparams,
+            ty,
+            value,
+            hints,
+            safety,
+            all,
+        })
+    }
+
+    fn declaration(&mut self, d: u64) -> Result<Decl, Fault> {
+        let p = match self.field_of_root(d)? {
+            Field::Scalar(4) => return Ok(self.quot()),
+            Field::Scalar(s) => return Err(bad(d, format!("a declaration is the scalar {s}"))),
+            Field::Object(p) => p,
+        };
+        let (t, _) = self.head(p)?;
+        if t == 6 {
+            return self.inductive(p);
+        }
+        self.ctor(p, 0..=5, 1, "declaration")?;
+        let v = self.object(p, 0)?;
+        Ok(match t {
+            0 => {
+                self.ctor(v, 0..=0, 1, "AxiomVal")?;
+                let (name, lparams, ty) = self.cval(v)?;
+                let safety = self.unsafe_flag(v, 1, 0)?;
+                Decl::Axiom(Axiom {
+                    name,
+                    lparams,
+                    ty,
+                    safety,
+                })
+            }
+            1 => Decl::Defn(self.definition(v)?),
+            2 => {
+                self.ctor(v, 0..=0, 3, "TheoremVal")?;
+                let (name, lparams, ty) = self.cval(v)?;
+                let value = self.expr(v, 1)?;
+                let all = self.names(v, 2)?;
+                Decl::Thm(Thm {
+                    name,
+                    lparams,
+                    ty,
+                    value,
+                    all,
+                })
+            }
+            3 => {
+                self.ctor(v, 0..=0, 3, "OpaqueVal")?;
+                let (name, lparams, ty) = self.cval(v)?;
+                let value = self.expr(v, 1)?;
+                let safety = self.unsafe_flag(v, 3, 0)?;
+                let all = self.names(v, 2)?;
+                Decl::Opaque(Opaque {
+                    name,
+                    lparams,
+                    ty,
+                    value,
+                    safety,
+                    all,
+                })
+            }
+            4 => return Err(bad(p, "`quotDecl` is an object and not the boxed scalar 4")),
+            _ => {
+                // `mutualDefnDecl`: field 0 is the list of definitions, not one value.
+                let mut ds = Vec::new();
+                for q in self.list_objects(p, 0)? {
+                    ds.push(self.definition(q)?);
+                }
+                Decl::Mutual(ds)
+            }
+        })
+    }
+
+    /// The root word as a field. The root is a value, not a field of an object, so it is checked here.
+    fn field_of_root(&self, d: u64) -> Result<Field, Fault> {
+        if d & 1 == 1 {
+            Ok(Field::Scalar(d >> 1))
+        } else if d == 0 || !d.is_multiple_of(WORD) {
+            Err(bad(
+                d,
+                "the declaration is not a scalar and not an object address",
+            ))
+        } else {
+            Ok(Field::Object(d))
+        }
+    }
+
+    /// `quotDecl`. The checker adds the four reference constants, so the type is only the position of a fault.
+    fn quot(&mut self) -> Decl {
+        let anon = self.st.anon();
+        let name = self.st.name_str_bytes(anon, b"Quot");
+        let z = self.st.level_zero();
+        let ty = self.st.mk_sort(z);
+        Decl::Quot(Quot {
+            name,
+            lparams: Vec::new(),
+            ty,
+            kind: QuotKind::Type,
+        })
+    }
+
+    /// `inductDecl lparams nparams types isUnsafe`.
+    fn inductive(&mut self, p: u64) -> Result<Decl, Fault> {
+        self.ctor(p, 6..=6, 3, "inductive declaration")?;
+        let lparams = self.names(p, 0)?;
+        let nparams = self.small(p, 1)?;
+        let safety = self.unsafe_flag(p, 3, 0)?;
+        let mut types = Vec::new();
+        let mut ctors = Vec::new();
+        let tys = self.list_objects(p, 2)?;
+        let mut all = Vec::with_capacity(tys.len());
+        for &q in &tys {
+            self.ctor(q, 0..=0, 3, "InductiveType")?;
+            all.push(self.name(q, 0)?);
+        }
+        for (k, &q) in tys.iter().enumerate() {
+            let ty = self.expr(q, 1)?;
+            let mut names = Vec::new();
+            for (j, c) in self.list_objects(q, 2)?.into_iter().enumerate() {
+                self.ctor(c, 0..=0, 2, "Constructor")?;
+                let name = self.name(c, 0)?;
+                let cty = self.expr(c, 1)?;
+                names.push(name);
+                ctors.push(Ctor {
+                    name,
+                    lparams: lparams.clone(),
+                    ty: cty,
+                    induct: all[k],
+                    cidx: u32::try_from(j).map_err(|_| decline(c, "too many constructors"))?,
+                    num_params: nparams,
+                    num_fields: 0,
+                    safety,
+                });
+            }
+            types.push(InductType {
+                name: all[k],
+                lparams: lparams.clone(),
+                ty,
+                num_params: nparams,
+                num_indices: 0,
+                all: all.clone(),
+                ctors: names,
+                num_nested: 0,
+                is_rec: false,
+                is_reflexive: false,
+                safety,
+            });
+        }
+        Ok(Decl::Induct(Induct {
+            types,
+            ctors,
+            recs: Vec::new(),
+        }))
+    }
+}

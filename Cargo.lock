@@ -102,6 +102,12 @@ version = "0.0.11"
 [[package]]
 name = "rulean-ffi"
 version = "0.0.11"
+dependencies = [
+ "rulean-core",
+ "rulean-format",
+ "rulean-nat",
+ "rulean-store",
+]
 
 [[package]]
 name = "rulean-format"

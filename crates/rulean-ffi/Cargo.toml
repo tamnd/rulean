@@ -13,5 +13,23 @@ publish = false
 # The layer of spec section 03.2. xtask checks the dependency rule of 03.3 from this value.
 layer = "hardened"
 
-[lints]
-workspace = true
+[dependencies]
+rulean-format = { path = "../rulean-format" }
+rulean-nat = { path = "../rulean-nat" }
+rulean-store = { path = "../rulean-store" }
+
+[dev-dependencies]
+rulean-core = { path = "../rulean-core" }
+
+# The lints of the workspace, except `unsafe_code`. Spec 12 allows `unsafe` in this crate for the Lean ABI, and only the module `live` has it, with `#![allow(unsafe_code)]` and a comment for each block. Cargo cannot change one lint of the workspace table, so the crate has the full table.
+[lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(rulean_extract)"] }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "deny"
+todo = "deny"
+unwrap_used = "warn"
+undocumented_unsafe_blocks = "deny"

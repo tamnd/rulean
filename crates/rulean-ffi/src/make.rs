@@ -27,6 +27,7 @@ pub trait Make {
     fn level_imax(&mut self, a: u64, b: u64) -> u64;
     fn level_param(&mut self, n: u64) -> u64;
     fn expr_bvar(&mut self, idx: u64) -> u64;
+    fn expr_fvar(&mut self, id: u64) -> u64;
     fn expr_sort(&mut self, l: u64) -> u64;
     fn expr_const(&mut self, n: u64, ls: u64) -> u64;
     fn expr_app(&mut self, f: u64, a: u64) -> u64;
@@ -88,6 +89,9 @@ impl Make for OwnedHeap {
     fn expr_bvar(&mut self, idx: u64) -> u64 {
         self.ctor(0, &[idx], &NO_DATA)
     }
+    fn expr_fvar(&mut self, id: u64) -> u64 {
+        self.ctor(1, &[id], &NO_DATA)
+    }
     fn expr_sort(&mut self, l: u64) -> u64 {
         self.ctor(3, &[l], &NO_DATA)
     }
@@ -139,6 +143,8 @@ pub struct Encoder<'a, M: Make> {
     names: HashMap<u32, u64>,
     levels: HashMap<u32, u64>,
     exprs: HashMap<u64, u64>,
+    /// The `FVarId` name of each free variable of the store, by its level. See `with_fvars`.
+    fvars: Vec<NameId>,
 }
 
 impl<M: Make> core::fmt::Debug for Encoder<'_, M> {
@@ -174,7 +180,14 @@ impl<'a, M: Make> Encoder<'a, M> {
             names: HashMap::new(),
             levels: HashMap::new(),
             exprs: HashMap::new(),
+            fvars: Vec::new(),
         }
+    }
+
+    /// Gives the `FVarId` name of each free variable of the store, by its level. The encoder writes the free variable of level `i` as `Expr.fvar` with the name `fvars[i]`. Without this call, a free variable is a fault.
+    pub fn with_fvars(mut self, fvars: Vec<NameId>) -> Encoder<'a, M> {
+        self.fvars = fvars;
+        self
     }
 
     /// A new reference to the object `o` of a table.
@@ -321,12 +334,14 @@ impl<'a, M: Make> Encoder<'a, M> {
                         stack.push((l.ty, false));
                     }
                     Expr::Proj(p) => stack.push((p.expr, false)),
-                    Expr::FVar(..) => {
-                        return Err(Fault::new(
-                            FaultKind::FreeVar,
-                            key(x),
-                            "a free variable of the store has no Lean object",
-                        ));
+                    Expr::FVar(l, _) => {
+                        if l as usize >= self.fvars.len() {
+                            return Err(Fault::new(
+                                FaultKind::FreeVar,
+                                key(x),
+                                "a free variable of the store has no Lean object",
+                            ));
+                        }
                     }
                     Expr::BVar(_) | Expr::Sort(_) | Expr::Const(..) | Expr::Lit(_) => {}
                 }
@@ -392,7 +407,10 @@ impl<'a, M: Make> Encoder<'a, M> {
                     let s = self.expr_done(p.expr);
                     self.m.expr_proj(n, i, s)
                 }
-                Expr::FVar(..) => unreachable!("the first visit gives the fault"),
+                Expr::FVar(l, _) => {
+                    let n = self.name(self.fvars[l as usize]);
+                    self.m.expr_fvar(n)
+                }
             };
             self.exprs.insert(key(x), o);
         }

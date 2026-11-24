@@ -121,6 +121,7 @@ exports! {
     level_mk_imax: "lean_level_mk_imax" => fn(Obj, Obj) -> Obj;
     level_mk_param: "lean_level_mk_param" => fn(Obj) -> Obj;
     expr_mk_bvar: "lean_expr_mk_bvar" => fn(Obj) -> Obj;
+    expr_mk_fvar: "lean_expr_mk_fvar" => fn(Obj) -> Obj;
     expr_mk_sort: "lean_expr_mk_sort" => fn(Obj) -> Obj;
     expr_mk_const: "lean_expr_mk_const" => fn(Obj, Obj) -> Obj;
     expr_mk_app: "lean_expr_mk_app" => fn(Obj, Obj) -> Obj;
@@ -299,6 +300,9 @@ impl Make for LeanMake<'_> {
     }
     fn expr_bvar(&mut self, idx: u64) -> u64 {
         call!(self.expr_mk_bvar(obj(idx)))
+    }
+    fn expr_fvar(&mut self, id: u64) -> u64 {
+        call!(self.expr_mk_fvar(obj(id)))
     }
     fn expr_sort(&mut self, l: u64) -> u64 {
         call!(self.expr_mk_sort(obj(l)))

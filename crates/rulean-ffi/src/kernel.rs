@@ -1,10 +1,12 @@
-//! The `addDecl` of the in-process kernel (spec 09.6.2 and 09.6.4).
+//! The `addDecl` and the term functions of the in-process kernel (spec 09.6.2 and 09.6.4).
 //!
 //! `Kernel::add_decl` has the contract of `lean_add_decl` of the C++ kernel. It takes a Lean `Kernel.Environment` and a `Declaration` object, checks the declaration with rulean, and gives an `Except Kernel.Exception Kernel.Environment` object. It uses only the functions that Lean exports, so it works with the Lean runtime of `rt`.
 //!
 //! The call makes a new checker. It mirrors the constants that the check can use from the Lean environment (`lean_environment_find`): the constants that the declaration refers to, the constants that their types and values refer to, the families of the inductive types, and the constants that the checker knows by name. A partial mirror is not sound, because a check can accept a declaration when a constant that it needs is not there. For example, a positivity check cannot see an occurrence behind a definition that it cannot unfold. The mirror is not kept between calls yet (spec 09.6.3 asks for a cache).
 //!
 //! If rulean accepts the declaration, the call adds the new constants to the Lean environment with `lean_environment_add`. If rulean rejects it, the call gives a `Kernel.Exception`. The kinds `unknownConstant`, `alreadyDeclared`, `thmTypeIsNotProp`, `excessiveMemory` and `deepRecursion` have the constructors of the C++ kernel. The other kinds give `other` with a message. The heartbeat limit, the recursion limit and the cancel token have no effect yet.
+//!
+//! `Kernel::is_def_eq`, `Kernel::whnf` and `Kernel::check` have the contracts of `lean_kernel_is_def_eq`, `lean_kernel_whnf` and `lean_kernel_check`. They take a `Lean.Environment`, a `LocalContext` and terms. The call converts the local context and the terms, mirrors the constants that they refer to, and runs the checker in the local context. A result term goes back to Lean with the `FVarId` of each free variable.
 //!
 //! This module, `rt`, `live` and `export` are the only modules of the crate with `unsafe` code (spec 12).
 
@@ -28,6 +30,21 @@ type Find = unsafe extern "C" fn(u64, u64) -> u64;
 type Add = unsafe extern "C" fn(u64, u64) -> u64;
 type QuotInit = unsafe extern "C" fn(u64) -> u8;
 type MarkQuot = unsafe extern "C" fn(u64) -> u64;
+type ToKernel = unsafe extern "C" fn(u64) -> u64;
+
+/// The operation of a term function.
+#[derive(Clone, Copy)]
+enum TermOp {
+    IsDefEq,
+    Whnf,
+    Check,
+}
+
+/// The result of a term function, before it is an object.
+enum Out {
+    Bool(bool),
+    Expr(ExprId),
+}
 
 /// The tags of `Kernel.Exception` of Lean v4.36.0.
 const UNKNOWN_CONSTANT: u8 = 0;
@@ -56,6 +73,7 @@ pub struct Kernel<'a> {
     add: Add,
     quot_init: QuotInit,
     mark_quot: MarkQuot,
+    to_kernel: ToKernel,
 }
 
 /// The function `name` of the runtime with the type `F`.
@@ -88,6 +106,7 @@ impl<'a> Kernel<'a> {
                 add: func(rt, c"lean_environment_add")?,
                 quot_init: func(rt, c"lean_environment_quot_init")?,
                 mark_quot: func(rt, c"lean_environment_mark_quot_init")?,
+                to_kernel: func(rt, c"lean_elab_environment_to_kernel_env")?,
             })
         }
     }
@@ -224,6 +243,133 @@ impl<'a> Kernel<'a> {
         unsafe { LeanMake::new(self.rt) }.ctor(1, &[e], &[])
     }
 
+    /// `Lean.Kernel.isDefEq`. The call consumes `env`, `lctx`, `a` and `b`, as `lean_kernel_is_def_eq` does. The result is a new `Except Kernel.Exception Bool` object.
+    ///
+    /// # Safety
+    ///
+    /// `env` is a `Lean.Environment` object, `lctx` is a `LocalContext` object, and `a` and `b` are `Expr` objects of the runtime.
+    pub unsafe fn is_def_eq(&self, env: u64, lctx: u64, a: u64, b: u64) -> u64 {
+        // SAFETY: the contract of the function.
+        unsafe { self.term(env, lctx, &[a, b], TermOp::IsDefEq) }
+    }
+
+    /// `Lean.Kernel.whnf`. The call consumes `env`, `lctx` and `e`, as `lean_kernel_whnf` does. The result is a new `Except Kernel.Exception Expr` object.
+    ///
+    /// # Safety
+    ///
+    /// `env` is a `Lean.Environment` object, `lctx` is a `LocalContext` object, and `e` is an `Expr` object of the runtime.
+    pub unsafe fn whnf(&self, env: u64, lctx: u64, e: u64) -> u64 {
+        // SAFETY: the contract of the function.
+        unsafe { self.term(env, lctx, &[e], TermOp::Whnf) }
+    }
+
+    /// `Lean.Kernel.check`. The call consumes `env`, `lctx` and `e`, as `lean_kernel_check` does. The result is a new `Except Kernel.Exception Expr` object with the type of `e`.
+    ///
+    /// The check does not look at the universe level parameters of `e`, as `type_checker::check` without parameters does.
+    ///
+    /// # Safety
+    ///
+    /// `env` is a `Lean.Environment` object, `lctx` is a `LocalContext` object, and `e` is an `Expr` object of the runtime.
+    pub unsafe fn check(&self, env: u64, lctx: u64, e: u64) -> u64 {
+        // SAFETY: the contract of the function.
+        unsafe { self.term(env, lctx, &[e], TermOp::Check) }
+    }
+
+    /// The common part of the term functions. The C++ kernel makes `type_checker(env.to_kernel_env(), local_ctx(lctx))`, which is safe and has no level parameters, and the call does the same.
+    ///
+    /// # Safety
+    ///
+    /// The contract of the term functions. The call consumes `env`, `lctx` and each object of `terms`.
+    unsafe fn term(&self, env: u64, lctx: u64, terms: &[u64], op: TermOp) -> u64 {
+        // SAFETY: `toKernelEnv` consumes the `Lean.Environment` and gives a new `Kernel.Environment`.
+        let kenv = unsafe { (self.to_kernel)(env) };
+        // SAFETY: `kenv` is a live environment, and the caller gives `lctx` and `terms`.
+        let r = unsafe { self.term_core(kenv, lctx, terms, op) };
+        // SAFETY: the call owns `lctx` and `terms`, and the result does not keep them.
+        unsafe {
+            self.rt.dec(lctx);
+            for &t in terms {
+                self.rt.dec(t);
+            }
+        }
+        r
+    }
+
+    /// The term function `op` on `terms` in the kernel environment `kenv`. The call consumes `kenv` and borrows `lctx` and `terms`.
+    ///
+    /// # Safety
+    ///
+    /// `kenv` is a live `Kernel.Environment` object, `lctx` is a `LocalContext` object, and `terms` are `Expr` objects.
+    unsafe fn term_core(&self, kenv: u64, lctx: u64, terms: &[u64], op: TermOp) -> u64 {
+        let mut chk = Checker::new(Store::new());
+        chk.kernel_api = true;
+        let conv = {
+            let mut c = Converter::new(&self.h, &mut chk.st);
+            c.local_context(lctx).and_then(|locals| {
+                let ids = terms
+                    .iter()
+                    .map(|&t| c.expr(t))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok((locals, ids))
+            })
+        };
+        let (locals, ids) = match conv {
+            Ok(x) => x,
+            // SAFETY: the caller gives `kenv`.
+            Err(f) => return unsafe { self.error(kenv, &chk.st, Exc::Other(f.to_string())) },
+        };
+        let mut start: Vec<ExprId> = Vec::new();
+        for l in &locals {
+            start.push(l.ty);
+            start.extend(l.value);
+        }
+        start.extend_from_slice(&ids);
+        // SAFETY: the caller gives `kenv`.
+        if let Err(msg) = unsafe { self.mirror_from(kenv, &mut chk, Vec::new(), &start) } {
+            // SAFETY: the caller gives `kenv`.
+            return unsafe { self.error(kenv, &chk.st, Exc::Other(msg)) };
+        }
+        chk.begin(Vec::new(), Safety::Safe);
+        for l in &locals {
+            let e = chk.mk_local(l.user_name, l.info, l.ty, l.value);
+            if e != l.e {
+                // The conversion and the checker must give the same free variable to a declaration, because the terms refer to the free variables of the conversion.
+                let msg = "rulean: the local context of the checker is not the local context of the conversion";
+                // SAFETY: the caller gives `kenv`.
+                return unsafe { self.error(kenv, &chk.st, Exc::Other(msg.into())) };
+            }
+        }
+        let out = match op {
+            TermOp::IsDefEq => Out::Bool(chk.is_def_eq(ids[0], ids[1])),
+            TermOp::Whnf => Out::Expr(chk.whnf(ids[0])),
+            TermOp::Check => Out::Expr(chk.check_ignore_undefined_universes(ids[0])),
+        };
+        if let Some(f) = chk.fault() {
+            let exc = term_exception(&chk, &start, f.kind);
+            // SAFETY: the caller gives `kenv`.
+            return unsafe { self.error(kenv, &chk.st, exc) };
+        }
+        let v = match out {
+            Out::Bool(b) => Ok(boxed(u64::from(b))),
+            Out::Expr(e) => {
+                let fvars = locals.iter().map(|l| l.fvar).collect();
+                // SAFETY: the encoder gives the maker only objects that it made.
+                let mut m = unsafe { LeanMake::new(self.rt) };
+                Encoder::new(&mut m, &chk.st).with_fvars(fvars).expr(e)
+            }
+        };
+        match v {
+            Ok(v) => {
+                // SAFETY: the call owns `kenv`, and a result without an exception does not keep it.
+                unsafe { self.rt.dec(kenv) };
+                // SAFETY: the maker makes `Except.ok v`, and the result owns `v`.
+                unsafe { LeanMake::new(self.rt) }.ctor(1, &[v], &[])
+            }
+            // SAFETY: the caller gives `kenv`.
+            Err(f) => unsafe { self.error(kenv, &chk.st, Exc::Other(f.to_string())) },
+        }
+    }
+
     /// The `ConstantInfo` objects that the C++ kernel adds for an axiom, a definition, a theorem, an opaque constant or a mutual block, as new references, or `None` for the other kinds.
     ///
     /// The C++ kernel puts the `*Val` object of the declaration into the `ConstantInfo` (`constant_info(d)` in `environment.cpp`), so the call does the same. The terms keep their `mdata`, which the conversion into the store removes. The constructors `axiomDecl`, `defnDecl`, `thmDecl` and `opaqueDecl` have the tags 0 to 3, and so do `axiomInfo`, `defnInfo`, `thmInfo` and `opaqueInfo`. `mutualDefnDecl` has the tag 5 and a list of `DefinitionVal`.
@@ -306,9 +452,26 @@ impl<'a> Kernel<'a> {
     ///
     /// `env` is a live `Kernel.Environment` object. The call does not consume it.
     unsafe fn mirror(&self, env: u64, chk: &mut Checker, d: &Decl) -> Result<(), String> {
-        let mut queue = declared_names(chk, d);
+        let names = declared_names(chk, d);
+        // SAFETY: the caller gives `env`.
+        unsafe { self.mirror_from(env, chk, names, &decl_terms(d)) }
+    }
+
+    /// Adds to the checker each constant of `env` that a check can use when it starts with the constants `names` and the terms `terms`, without a check.
+    ///
+    /// # Safety
+    ///
+    /// `env` is a live `Kernel.Environment` object. The call does not consume it.
+    unsafe fn mirror_from(
+        &self,
+        env: u64,
+        chk: &mut Checker,
+        names: Vec<NameId>,
+        terms: &[ExprId],
+    ) -> Result<(), String> {
+        let mut queue = names;
         let mut seen_e = BTreeSet::new();
-        const_refs(&chk.st, &decl_terms(d), &mut seen_e, &mut queue);
+        const_refs(&chk.st, terms, &mut seen_e, &mut queue);
         let b = &chk.b;
         queue.extend([
             b.nat,
@@ -440,6 +603,23 @@ fn exception(chk: &Checker, d: &Decl, kind: ErrorKind) -> Exc {
             Decl::Thm(t) => Exc::ThmNotProp(t.name, t.ty),
             _ => Exc::Other(message(kind)),
         },
+        ErrorKind::MemoryLimit => Exc::Memory,
+        ErrorKind::DeepRecursion => Exc::DeepRecursion,
+        _ => Exc::Other(message(kind)),
+    }
+}
+
+/// The exception of a term function that fails with the kind `kind`. `terms` are the types and the values of the local context and the terms of the call.
+fn term_exception(chk: &Checker, terms: &[ExprId], kind: ErrorKind) -> Exc {
+    match kind {
+        ErrorKind::UnknownConst => {
+            let mut names = Vec::new();
+            const_refs(&chk.st, terms, &mut BTreeSet::new(), &mut names);
+            match names.into_iter().find(|&n| !chk.env.contains(n)) {
+                Some(n) => Exc::Unknown(n),
+                None => Exc::Other(message(kind)),
+            }
+        }
         ErrorKind::MemoryLimit => Exc::Memory,
         ErrorKind::DeepRecursion => Exc::DeepRecursion,
         _ => Exc::Other(message(kind)),

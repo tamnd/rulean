@@ -84,6 +84,22 @@ impl<'a, H: Heap> Converter<'a, H> {
         Ok(k)
     }
 
+    /// Converts the `LocalContext` object at `lctx`. The result has the local declarations in the order of their index. The free variable of the declaration `i` is the free variable of the store with the level `i` and the type of the declaration. After this call, `expr` converts each `Expr.fvar` of the context to its free variable.
+    ///
+    /// The conversion reads the field `decls`, a `PersistentArray (Option LocalDecl)`, and skips the entries `none`. The C++ kernel finds a declaration in the field `fvarIdToDecl`, a map with the same declarations, so the conversion does not read the map.
+    pub fn local_context(&mut self, lctx: u64) -> Result<Vec<Local>, Fault> {
+        let locals = self.c.local_context(lctx)?;
+        self.full(lctx)?;
+        Ok(locals)
+    }
+
+    /// Converts the `Expr` object at `e`. A free variable must be in the local context of `local_context`.
+    pub fn expr(&mut self, e: u64) -> Result<ExprId, Fault> {
+        let id = self.c.expr_at(e)?;
+        self.full(e)?;
+        Ok(id)
+    }
+
     fn full(&self, at: u64) -> Result<(), Fault> {
         if self.c.st.is_full() {
             return Err(Fault::new(
@@ -96,6 +112,22 @@ impl<'a, H: Heap> Converter<'a, H> {
     }
 }
 
+/// A local declaration of a `LocalContext` in the store.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Local {
+    /// The name of the `FVarId`.
+    pub fvar: NameId,
+    /// The name that the user sees.
+    pub user_name: NameId,
+    /// The binder info. A `let` declaration has the default binder info, as in Lean.
+    pub info: BinderInfo,
+    pub ty: ExprId,
+    /// The value of a `let` declaration.
+    pub value: Option<ExprId>,
+    /// The free variable of the store for this declaration.
+    pub e: ExprId,
+}
+
 /// The state of one conversion.
 struct Conv<'a, H: Heap> {
     h: &'a H,
@@ -103,6 +135,8 @@ struct Conv<'a, H: Heap> {
     names: HashMap<u64, NameId>,
     levels: HashMap<u64, LevelId>,
     exprs: HashMap<u64, ExprId>,
+    /// The free variables of a local context, by the name of their `FVarId`. `None` for a kernel declaration, which cannot have free variables.
+    fvars: Option<HashMap<u32, ExprId>>,
 }
 
 fn bad(at: u64, msg: impl Into<String>) -> Fault {
@@ -113,6 +147,20 @@ fn decline(at: u64, msg: impl Into<String>) -> Fault {
     Fault::new(FaultKind::Decline, at, msg)
 }
 
+/// The `BinderInfo` with the value `v`, in the object at `at`.
+fn binder_info(at: u64, v: u8) -> Result<BinderInfo, Fault> {
+    Ok(match v {
+        0 => BinderInfo::Default,
+        1 => BinderInfo::Implicit,
+        2 => BinderInfo::StrictImplicit,
+        3 => BinderInfo::InstImplicit,
+        v => return Err(bad(at, format!("a binder has the binder info {v}"))),
+    })
+}
+
+/// The largest depth of the tree of a `PersistentArray`. The tree has 32 children for each node, so this depth is more than the depth of any array that fits in memory.
+const MAX_PARRAY_DEPTH: u32 = 16;
+
 impl<'a, H: Heap> Conv<'a, H> {
     fn new(h: &'a H, st: &'a mut Store) -> Conv<'a, H> {
         Conv {
@@ -121,6 +169,7 @@ impl<'a, H: Heap> Conv<'a, H> {
             names: HashMap::new(),
             levels: HashMap::new(),
             exprs: HashMap::new(),
+            fvars: None,
         }
     }
 
@@ -505,6 +554,108 @@ impl<'a, H: Heap> Conv<'a, H> {
         Ok(self.st.level_list(&ls))
     }
 
+    // Local contexts.
+
+    /// The elements of the `Array` object at `a`.
+    fn array(&self, a: u64) -> Result<Vec<Field>, Fault> {
+        let (t, _) = self.head(a)?;
+        if t != tag::ARRAY {
+            return Err(bad(a, "the object is not an array"));
+        }
+        let size = self.word(a.wrapping_add(WORD))?;
+        let cap = self.word(a.wrapping_add(2 * WORD))?;
+        if size > cap || size > u64::from(u32::MAX) {
+            return Err(bad(a, "an array has a bad size"));
+        }
+        let mut out = Vec::with_capacity(size as usize);
+        for k in 0..size {
+            // The elements start after the header, the size and the capacity.
+            out.push(self.field(a, 2 + k)?);
+        }
+        Ok(out)
+    }
+
+    /// The elements of the `PersistentArray` object at `pa`, in order: the elements of the tree, then the elements of the tail.
+    fn parray(&self, pa: u64) -> Result<Vec<Field>, Fault> {
+        // The object fields are `root`, `tail`, `size` and `tailOff`. `shift` is a `USize` scalar.
+        self.ctor(pa, 0..=0, 4, "PersistentArray")?;
+        let mut out = Vec::new();
+        let mut stack = vec![(self.object(pa, 0)?, 0u32)];
+        while let Some((node, depth)) = stack.pop() {
+            if depth > MAX_PARRAY_DEPTH {
+                return Err(bad(node, "a persistent array is too deep"));
+            }
+            // `node` has the tag 0 and an array of nodes. `leaf` has the tag 1 and an array of elements.
+            let t = self.ctor(node, 0..=1, 1, "PersistentArrayNode")?;
+            let items = self.array(self.object(node, 0)?)?;
+            if t == 1 {
+                out.extend(items);
+                continue;
+            }
+            for f in items.into_iter().rev() {
+                match f {
+                    Field::Object(c) => stack.push((c, depth + 1)),
+                    Field::Scalar(_) => {
+                        return Err(bad(node, "a persistent array node has a scalar child"));
+                    }
+                }
+            }
+        }
+        out.extend(self.array(self.object(pa, 1)?)?);
+        let size = self.nat(pa, 2)?;
+        if size.to_u64() != Some(out.len() as u64) {
+            return Err(bad(pa, "a persistent array has a wrong size"));
+        }
+        Ok(out)
+    }
+
+    fn local_context(&mut self, lctx: u64) -> Result<Vec<Local>, Fault> {
+        // The object fields are `fvarIdToDecl`, `decls` and `auxDeclToFullName`.
+        self.ctor(lctx, 0..=0, 3, "LocalContext")?;
+        let decls = self.parray(self.object(lctx, 1)?)?;
+        self.fvars = Some(HashMap::new());
+        let mut out: Vec<Local> = Vec::new();
+        for f in decls {
+            // `Option.none` is the boxed scalar 0, and `Option.some` has the tag 1.
+            let o = match f {
+                Field::Scalar(0) => continue,
+                Field::Scalar(_) => return Err(bad(lctx, "a local declaration is a scalar")),
+                Field::Object(o) => o,
+            };
+            self.ctor(o, 1..=1, 1, "Option")?;
+            let d = self.object(o, 0)?;
+            // `cdecl` has the tag 0 and the object fields `index`, `fvarId`, `userName` and `type`, then the scalars `bi` and `kind`. `ldecl` has the tag 1 and the object field `value` after `type`, then the scalars `nonDep` and `kind`.
+            let (t, _) = self.head(d)?;
+            let objs = if t == 1 { 5 } else { 4 };
+            self.ctor(d, 0..=1, objs, "LocalDecl")?;
+            let fvar = self.name(d, 1)?;
+            let user_name = self.name(d, 2)?;
+            let ty = self.expr(d, 3)?;
+            let (info, value) = if t == 0 {
+                (binder_info(d, self.u8_at(d, 4, 0)?)?, None)
+            } else {
+                self.bool_at(d, 5, 0)?;
+                (BinderInfo::Default, Some(self.expr(d, 4)?))
+            };
+            let level = u32::try_from(out.len())
+                .map_err(|_| decline(lctx, "a local context is too large"))?;
+            let e = self.st.mk_fvar(level, ty);
+            let map = self.fvars.get_or_insert_default();
+            if map.insert(fvar.0, e).is_some() {
+                return Err(bad(d, "two local declarations have the same free variable"));
+            }
+            out.push(Local {
+                fvar,
+                user_name,
+                info,
+                ty,
+                value,
+                e,
+            });
+        }
+        Ok(out)
+    }
+
     // Expressions.
 
     /// The object fields of the expression constructor with tag `t`, and the fields that are expressions.
@@ -522,6 +673,11 @@ impl<'a, H: Heap> Conv<'a, H> {
 
     fn expr(&mut self, p: u64, i: u64) -> Result<ExprId, Fault> {
         let root = self.object(p, i)?;
+        self.expr_at(root)
+    }
+
+    /// The expression at the address `root`.
+    fn expr_at(&mut self, root: u64) -> Result<ExprId, Fault> {
         let mut stack = vec![(root, false)];
         while let Some((q, ready)) = stack.pop() {
             if self.exprs.contains_key(&q) {
@@ -534,11 +690,25 @@ impl<'a, H: Heap> Conv<'a, H> {
             let (objs, kids) = Self::expr_shape(t);
             self.ctor(q, t..=t, objs, "expression")?;
             if t == 1 {
-                return Err(Fault::new(
-                    FaultKind::FreeVar,
-                    q,
-                    "a free variable cannot be in a kernel declaration",
-                ));
+                // `Expr.fvar` has the `FVarId` in field 0, and an `FVarId` is its name.
+                let n = self.name(q, 0)?;
+                let found = self.fvars.as_ref().map(|m| m.get(&n.0).copied());
+                match found {
+                    Some(Some(id)) => {
+                        self.exprs.insert(q, id);
+                        continue;
+                    }
+                    Some(None) => {
+                        return Err(Fault::new(FaultKind::FreeVar, q, "unknown free variable"));
+                    }
+                    None => {
+                        return Err(Fault::new(
+                            FaultKind::FreeVar,
+                            q,
+                            "a free variable cannot be in a kernel declaration",
+                        ));
+                    }
+                }
             }
             if t == 2 {
                 return Err(Fault::new(
@@ -601,13 +771,7 @@ impl<'a, H: Heap> Conv<'a, H> {
                 let dom = self.done_expr(q, 1)?;
                 let body = self.done_expr(q, 2)?;
                 // The scalar area starts with `Expr.Data` (8 bytes), and `binderInfo` follows it.
-                let info = match self.u8_at(q, 3, 8)? {
-                    0 => BinderInfo::Default,
-                    1 => BinderInfo::Implicit,
-                    2 => BinderInfo::StrictImplicit,
-                    3 => BinderInfo::InstImplicit,
-                    v => return Err(bad(q, format!("a binder has the binder info {v}"))),
-                };
+                let info = binder_info(q, self.u8_at(q, 3, 8)?)?;
                 if t == 6 {
                     self.st.mk_lam(n, info, dom, body)
                 } else {

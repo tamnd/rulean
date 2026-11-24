@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.0.13] - 2026-11-24
+
 ### Added
 
 - The new module `rt` of `rulean-ffi` finds the functions of the Lean runtime when the program runs (spec 09.6.3). `Runtime::open` loads `libleanshared` of Lean v4.36.0 with `dlopen` and initializes the Lean modules one time in the process, and `Runtime::process` finds the functions in a Lean process. `dlopen` and `dlsym` are in the platform library, so the crate has no link-time dependency on Lean. `LeanMake` implements `Make` with the constructors that Lean exports, so Lean computes the cached data of each name, level and term. For other constructors it does what `lean_alloc_ctor` does, and the reference counts follow `lean_inc_ref` and `lean_dec_ref` of `lean.h`. The module is on Linux and macOS with 64-bit pointers.
@@ -261,7 +263,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.12...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.13...HEAD
+[0.0.13]: https://github.com/tamnd/rulean/compare/v0.0.12...v0.0.13
 [0.0.12]: https://github.com/tamnd/rulean/compare/v0.0.11...v0.0.12
 [0.0.11]: https://github.com/tamnd/rulean/compare/v0.0.10...v0.0.11
 [0.0.10]: https://github.com/tamnd/rulean/compare/v0.0.9...v0.0.10

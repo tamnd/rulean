@@ -277,6 +277,31 @@ jobs:
       - name: the work gate on Init and Std of the release
         run: scripts/work-gate.sh docs/bench/work.json
 
+  # The Lean objects of rulean-ffi with the runtime of the Lean v4.36.0 release (spec 09.6.3). The test loads libleanshared with dlopen, makes terms with the constructors of Lean, and gives them to functions of Lean. RULEAN_LEAN_LIB is set, so a library that does not load is a failure. The job depends on the Lean release, so it is not a required check.
+  ffi-runtime:
+    name: ffi runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      LEAN_ASSET: lean-4.36.0-linux.tar.zst
+      LEAN_SHA256: 2b7ab1ed8b92d2e6abfaf41344823b510064dbc9c0260cac73eb496ab2dea6eb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: false
+      - name: the Lean v4.36.0 release
+        run: |
+          mkdir -p _tmp/lean
+          curl -sSfL --retry 3 -o "_tmp/lean/$LEAN_ASSET" "https://github.com/leanprover/lean4/releases/download/v4.36.0/$LEAN_ASSET"
+          echo "$LEAN_SHA256  _tmp/lean/$LEAN_ASSET" | sha256sum -c -
+          tar --zstd -xf "_tmp/lean/$LEAN_ASSET" -C _tmp/lean
+      - name: the runtime test of rulean-ffi
+        run: RULEAN_LEAN_LIB="$PWD/_tmp/lean/lean-4.36.0-linux/lib/lean/libleanshared.so" cargo test --locked -p rulean-ffi --test runtime -- --nocapture
+
   # The cross-validation of the `.olean` reader with lean4export on Init and Std (spec 07.3.6), for each Lean release of a profile (spec 05.2). v4.35.0 and v4.36.0 have the profile v4.35 and write oleans of version 2. v4.37.0-rc1 has the profile v4.37 and writes oleans of version 4. For a future release that has no profile yet, set NO_PROFILE=1 for the script (`scripts/olean-xval.sh`), so rulean must decline the export and the oleans give only a parse. The job depends on the Lean releases, so it is not a required check.
   olean-xval:
     name: olean cross-validation (v${{ matrix.lean }})

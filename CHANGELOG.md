@@ -4,6 +4,11 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- The new module `rt` of `rulean-ffi` finds the functions of the Lean runtime when the program runs (spec 09.6.3). `Runtime::open` loads `libleanshared` of Lean v4.36.0 with `dlopen` and initializes the Lean modules one time in the process, and `Runtime::process` finds the functions in a Lean process. `dlopen` and `dlsym` are in the platform library, so the crate has no link-time dependency on Lean. `LeanMake` implements `Make` with the constructors that Lean exports, so Lean computes the cached data of each name, level and term. For other constructors it does what `lean_alloc_ctor` does, and the reference counts follow `lean_inc_ref` and `lean_dec_ref` of `lean.h`. The module is on Linux and macOS with 64-bit pointers.
+- The CI job `ffi-runtime` runs the test `runtime` of `rulean-ffi` with the library of the Lean v4.36.0 release. The test writes each kind of term and constant with `LeanMake`, reads the objects back, gives terms to `Expr.dbgToString` and `Expr.equal` of Lean, checks the reference counts of shared terms, and frees a term of depth 100000. Without `RULEAN_LEAN_LIB`, the test uses the elan toolchain of v4.36.0 if it is there, and else it does nothing.
+
 ## [0.0.12] - 2026-11-24
 
 ### Added

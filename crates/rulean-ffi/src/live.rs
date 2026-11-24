@@ -1,4 +1,4 @@
-//! The memory of the process as a heap of Lean objects. This is the only module of the crate with `unsafe` code (spec 12).
+//! The memory of the process as a heap of Lean objects. This module and `rt` are the only modules of the crate with `unsafe` code (spec 12).
 
 #![allow(unsafe_code)]
 

@@ -4,6 +4,10 @@
 
 #![allow(unsafe_code)]
 
+mod common;
+
+use common::qname as name;
+use common::{sample, thm};
 use rulean_core::env::{ConstInfo, ConstKind};
 use rulean_ffi::FaultKind;
 use rulean_ffi::conv::Converter;
@@ -11,30 +15,7 @@ use rulean_ffi::heap::{Heap, OwnedHeap, boxed};
 use rulean_ffi::live::LiveHeap;
 use rulean_ffi::make::Encoder;
 use rulean_format::{Hints, Safety};
-use rulean_nat::Nat;
-use rulean_store::{BinderInfo, ExprId, NameId, Store};
-
-fn name(st: &mut Store, s: &str) -> NameId {
-    let mut n = st.anon();
-    for part in s.split('.') {
-        n = match part.parse::<u64>() {
-            Ok(k) => st.name_num(n, k),
-            Err(_) => st.name_str_bytes(n, part.as_bytes()),
-        };
-    }
-    n
-}
-
-/// A theorem with the type `ty` and the value `value`, so that one constant has two terms.
-fn thm(st: &mut Store, s: &str, lparams: &[&str], ty: ExprId, value: ExprId) -> ConstInfo {
-    ConstInfo {
-        name: name(st, s),
-        lparams: lparams.iter().map(|p| name(st, p)).collect(),
-        ty,
-        safety: Safety::Safe,
-        kind: ConstKind::Thm { value },
-    }
-}
+use rulean_store::Store;
 
 /// Writes `k` as an object and reads it back, through `LiveHeap` if `live` is true.
 fn round_trip(live: bool, st: &mut Store, k: &ConstInfo) {
@@ -50,50 +31,6 @@ fn round_trip(live: bool, st: &mut Store, k: &ConstInfo) {
         Converter::new(&h, st).constant(o)
     };
     assert_eq!(&got.expect("a constant"), k);
-}
-
-/// Terms with each kind of node, level and name.
-fn sample(st: &mut Store) -> ConstInfo {
-    let u = name(st, "u");
-    let v = name(st, "v");
-    let lu = st.level_param(u);
-    let lv = st.level_param(v);
-    let z = st.level_zero();
-    let one = st.level_succ(z);
-    let mx = st.level_max(lu, one);
-    let im = st.level_imax(mx, lv);
-    let s_im = st.mk_sort(im);
-    let ls = st.level_list(&[lu, z, im]);
-    let cn = name(st, "a.1.b");
-    let c = st.mk_const(cn, ls);
-    let big = st.intern_nat(Nat::from_limbs(vec![0, 0, 7]));
-    let small = st.intern_nat(Nat::from_u64(u64::MAX >> 1));
-    let b_lit = st.mk_nat_lit(big);
-    let s_lit_id = st.intern_str("héllo, 世界".as_bytes());
-    let s_lit = st.mk_str_lit(s_lit_id);
-    let n_lit = st.mk_nat_lit(small);
-    let pn = name(st, "Prod");
-    let pj = st.mk_proj(pn, 1, c);
-    let x = name(st, "x");
-    let b0 = st.mk_bvar(0);
-    let b1 = st.mk_bvar(1);
-    let app = st.mk_apps(c, &[b_lit, s_lit, n_lit, pj, b0, b1]);
-    let lt = st.mk_let(x, s_im, c, app);
-    let mut ty = s_im;
-    for (i, info) in [
-        BinderInfo::Default,
-        BinderInfo::Implicit,
-        BinderInfo::StrictImplicit,
-        BinderInfo::InstImplicit,
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let bn = name(st, &format!("x.{i}"));
-        ty = st.mk_pi(bn, info, c, ty);
-    }
-    let value = st.mk_lam(x, BinderInfo::Implicit, ty, lt);
-    thm(st, "sample", &["u", "v"], ty, value)
 }
 
 #[test]

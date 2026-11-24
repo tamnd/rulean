@@ -8,6 +8,8 @@
 //!
 //! With the feature `export`, each declaration also goes to the exported symbols `lean_add_decl` and `lean_add_decl_without_checking` of rulean, and the results must be the results of `Kernel::add_decl` and `Kernel::add_decl_without_checking`.
 //!
+//! After the declarations, the test gives terms in a local context to `lean_kernel_is_def_eq`, `lean_kernel_whnf` and `lean_kernel_check` of the C++ kernel and to `Kernel::is_def_eq`, `Kernel::whnf` and `Kernel::check`, with the final environment. The results must be the same. With the feature `export`, the exported symbols of rulean must give the same results.
+//!
 //! The library comes from `RULEAN_LEAN_LIB` or the elan toolchain, as in `tests/runtime.rs`.
 
 #![cfg(all(
@@ -433,26 +435,31 @@ fn the_two_kernels_give_the_same_verdicts() {
     // SAFETY: the library is the `libleanshared` of Lean v4.36.0, and this test is the only code of the process that uses Lean.
     let rt = unsafe { Runtime::open(&lib) }.expect("the Lean runtime");
     // SAFETY: these are the types of the Lean functions of v4.36.0.
-    let (mk_env, to_kernel, add_decl, unchecked, find) = unsafe {
+    let (mk_env, to_kernel, add_decl, unchecked, find, update_base) = unsafe {
         (
             func::<unsafe extern "C" fn(u32, u64) -> u64>(&rt, c"l_Lean_mkEmptyEnvironment"),
             func::<unsafe extern "C" fn(u64) -> u64>(&rt, c"lean_elab_environment_to_kernel_env"),
             func::<AddDecl>(&rt, c"lean_add_decl"),
             func::<AddUnchecked>(&rt, c"lean_add_decl_without_checking"),
             func::<Find>(&rt, c"lean_environment_find"),
+            func::<unsafe extern "C" fn(u64, u64) -> u64>(
+                &rt,
+                c"lean_elab_environment_update_base_after_kernel_add",
+            ),
         )
     };
     // SAFETY: the objects are made by the Lean runtime and stay alive while the test uses them.
     let h = unsafe { LiveHeap::new() };
     // `mkEmptyEnvironment 0` in `IO`. The world is the boxed scalar 0, and `EStateM.Result.ok` has the tag 0.
     // SAFETY: the functions have these types, and the test owns each result.
-    let env = unsafe {
+    let (elab, env) = unsafe {
         let r = mk_env(0, boxed(0));
         assert_eq!(tag(&h, r), 0, "mkEmptyEnvironment failed");
         let e = word(&h, r + 8);
         rt.inc(e);
+        rt.inc(e);
         rt.dec(r);
-        to_kernel(e)
+        (e, to_kernel(e))
     };
     let mut chk = Checker::new(Store::new());
     chk.kernel_api = true;
@@ -678,6 +685,262 @@ fn the_two_kernels_give_the_same_verdicts() {
     ] {
         dual.same_constant(s);
     }
-    // SAFETY: the test owns the environment.
-    unsafe { rt.dec(dual.env) };
+
+    // The term functions. The elaborator environment has the final kernel environment of the C++ kernel.
+    // SAFETY: `updateBaseAfterKernelAdd` consumes its arguments, so the test gives it a new reference to the kernel environment.
+    let elab = unsafe {
+        rt.inc(dual.env);
+        update_base(elab, dual.env)
+    };
+    // The local context `(x : N) (y : N := N.s x)`.
+    let mut t = T { st: &mut st };
+    let n = t.c("N");
+    let s = t.c("N.s");
+    let z = t.c("N.z");
+    let x = t.st.mk_fvar(0, n);
+    let y = t.st.mk_fvar(1, n);
+    let sx = t.app(s, &[x]);
+    let fvars = vec![t.n("_fx"), t.n("_fy")];
+    let locals = [
+        (fvars[0], t.n("x"), n, None),
+        (fvars[1], t.n("y"), n, Some(sx)),
+    ];
+    let pred = t.c("pred");
+    let two = t.c("two");
+    let pred_two = t.app(pred, &[two]);
+    let pred_x = t.app(pred, &[x]);
+    let pred_y = t.app(pred, &[y]);
+    let sz = t.app(s, &[z]);
+    let z_z = t.app(z, &[z]);
+    let szz = t.app(s, &[z, z]);
+    let missing = t.c("Missing");
+    let b0 = t.st.mk_bvar(0);
+    let id_n = t.lam("n", n, b0);
+    let u_n = t.n("u");
+    let u = t.st.level_param(u_n);
+    let sort_u = t.st.mk_sort(u);
+    let qs: Vec<(&str, Q, Want)> = vec![
+        ("y = N.s x", Q::DefEq(y, sx), Want::Bool(true)),
+        ("x = N.z", Q::DefEq(x, z), Want::Bool(false)),
+        ("pred y = x", Q::DefEq(pred_y, x), Want::Bool(true)),
+        (
+            "pred two = N.s N.z",
+            Q::DefEq(pred_two, sz),
+            Want::Bool(true),
+        ),
+        ("whnf (pred two)", Q::Whnf(pred_two), Want::Ok),
+        ("whnf y", Q::Whnf(y), Want::Ok),
+        ("whnf x", Q::Whnf(x), Want::Ok),
+        ("whnf (pred y)", Q::Whnf(pred_y), Want::Ok),
+        ("check (pred x)", Q::Check(pred_x), Want::Ok),
+        ("check y", Q::Check(y), Want::Ok),
+        ("check (fun n => n)", Q::Check(id_n), Want::Ok),
+        ("check (Sort u)", Q::Check(sort_u), Want::Ok),
+        ("check (N.z N.z)", Q::Check(z_z), Want::Err),
+        ("check (N.s N.z N.z)", Q::Check(szz), Want::Err),
+        ("check Missing", Q::Check(missing), Want::Err),
+    ];
+    // SAFETY: the runtime is Lean v4.36.0.
+    let terms = unsafe { Terms::new(&rt, &st, fvars, &locals) };
+    let mut same_tags = 0;
+    for (what, q, want) in &qs {
+        same_tags += terms.same(&dual, &st, elab, what, q, *want);
+    }
+    // `check Missing` gives `unknownConstant`. The other two rejections give `other` in rulean.
+    assert_eq!(same_tags, 1);
+    // SAFETY: the test owns the environments and the local context.
+    unsafe {
+        rt.dec(terms.lctx);
+        rt.dec(elab);
+        rt.dec(dual.env);
+    }
+}
+
+/// A query of a term function.
+#[derive(Clone, Copy)]
+enum Q {
+    DefEq(ExprId, ExprId),
+    Whnf(ExprId),
+    Check(ExprId),
+}
+
+/// The result that the C++ kernel must give.
+#[derive(Clone, Copy, Debug)]
+enum Want {
+    Bool(bool),
+    Ok,
+    Err,
+}
+
+type MkLocal = unsafe extern "C" fn(u64, u64, u64, u64, u8) -> u64;
+type MkLet = unsafe extern "C" fn(u64, u64, u64, u64, u64, u8) -> u64;
+type DefEqFn = unsafe extern "C" fn(u64, u64, u64, u64) -> u64;
+type TermFn = unsafe extern "C" fn(u64, u64, u64) -> u64;
+type Equal = unsafe extern "C" fn(u64, u64) -> u8;
+
+/// The terms of the term functions and their local context.
+struct Terms<'a> {
+    rt: &'a Runtime,
+    /// The names of the `FVarId` of the local declarations, by level.
+    fvars: Vec<NameId>,
+    /// The `LocalContext` object. The test owns one reference.
+    lctx: u64,
+    is_def_eq: DefEqFn,
+    whnf: TermFn,
+    check: TermFn,
+    equal: Equal,
+}
+
+impl<'a> Terms<'a> {
+    /// Makes the `LocalContext` object with the declarations `locals`: the `FVarId`, the user name, the type and the value of a `let`.
+    ///
+    /// # Safety
+    ///
+    /// `rt` is the runtime of Lean v4.36.0.
+    unsafe fn new(
+        rt: &'a Runtime,
+        st: &Store,
+        fvars: Vec<NameId>,
+        locals: &[(NameId, NameId, ExprId, Option<ExprId>)],
+    ) -> Terms<'a> {
+        // SAFETY: these are the types of the Lean functions of v4.36.0. The functions consume their object arguments.
+        unsafe {
+            let empty = func::<unsafe extern "C" fn(u64) -> u64>(rt, c"lean_mk_empty_local_ctx");
+            let mk_local = func::<MkLocal>(rt, c"lean_local_ctx_mk_local_decl");
+            let mk_let = func::<MkLet>(rt, c"lean_local_ctx_mk_let_decl");
+            let mut lctx = empty(boxed(0));
+            for &(id, user, ty, val) in locals {
+                let mut m = LeanMake::new(rt);
+                let mut enc = Encoder::new(&mut m, st).with_fvars(fvars.clone());
+                let (id, user) = (enc.name(id), enc.name(user));
+                let ty = enc.expr(ty).expect("a type");
+                lctx = match val {
+                    // `BinderInfo.default` is 0.
+                    None => mk_local(lctx, id, user, ty, 0),
+                    Some(v) => {
+                        let v = enc.expr(v).expect("a value");
+                        mk_let(lctx, id, user, ty, v, 0)
+                    }
+                };
+            }
+            Terms {
+                rt,
+                fvars,
+                lctx,
+                is_def_eq: func::<DefEqFn>(rt, c"lean_kernel_is_def_eq"),
+                whnf: func::<TermFn>(rt, c"lean_kernel_whnf"),
+                check: func::<TermFn>(rt, c"lean_kernel_check"),
+                equal: func::<Equal>(rt, c"lean_expr_equal"),
+            }
+        }
+    }
+
+    /// Gives the query `q` to the C++ kernel, to `Kernel` and, with the feature `export`, to the exported symbol of rulean. The C++ kernel must give `want`, and the results must be the same. The result is 1 if the two kernels reject with the same exception, and 0 if not.
+    fn same(&self, dual: &Dual, st: &Store, elab: u64, what: &str, q: &Q, want: Want) -> usize {
+        let es: Vec<ExprId> = match *q {
+            Q::DefEq(a, b) => vec![a, b],
+            Q::Whnf(e) | Q::Check(e) => vec![e],
+        };
+        let objs: Vec<u64> = es
+            .iter()
+            .map(|&e| {
+                // SAFETY: the encoder gives the maker only objects that it made.
+                let mut m = unsafe { LeanMake::new(self.rt) };
+                Encoder::new(&mut m, st)
+                    .with_fvars(self.fvars.clone())
+                    .expr(e)
+                    .expect("a term")
+            })
+            .collect();
+        // `who` is 0 for the C++ kernel, 1 for `Kernel` and 2 for the exported symbol. Each function consumes its arguments, so the test gives each call new references.
+        let call = |who: u8| -> u64 {
+            // SAFETY: the objects are live, and the functions have these types.
+            unsafe {
+                self.rt.inc(elab);
+                self.rt.inc(self.lctx);
+                for &o in &objs {
+                    self.rt.inc(o);
+                }
+                let k = &dual.kernel;
+                match (*q, who) {
+                    (Q::DefEq(..), 0) => (self.is_def_eq)(elab, self.lctx, objs[0], objs[1]),
+                    (Q::DefEq(..), 1) => k.is_def_eq(elab, self.lctx, objs[0], objs[1]),
+                    (Q::Whnf(_), 0) => (self.whnf)(elab, self.lctx, objs[0]),
+                    (Q::Whnf(_), 1) => k.whnf(elab, self.lctx, objs[0]),
+                    (Q::Check(_), 0) => (self.check)(elab, self.lctx, objs[0]),
+                    (Q::Check(_), 1) => k.check(elab, self.lctx, objs[0]),
+                    #[cfg(feature = "export")]
+                    (Q::DefEq(..), _) => {
+                        rulean_ffi::export::lean_kernel_is_def_eq(elab, self.lctx, objs[0], objs[1])
+                    }
+                    #[cfg(feature = "export")]
+                    (Q::Whnf(_), _) => {
+                        rulean_ffi::export::lean_kernel_whnf(elab, self.lctx, objs[0])
+                    }
+                    #[cfg(feature = "export")]
+                    (Q::Check(_), _) => {
+                        rulean_ffi::export::lean_kernel_check(elab, self.lctx, objs[0])
+                    }
+                    #[cfg(not(feature = "export"))]
+                    _ => unreachable!("the exported symbols need the feature export"),
+                }
+            }
+        };
+        let h = &dual.h;
+        let cpp = call(0);
+        let cpp_ok = tag(h, cpp) == 1;
+        let cv = word(h, cpp + 8);
+        match want {
+            Want::Bool(b) => {
+                assert!(cpp_ok, "the C++ kernel rejects {what}");
+                assert_eq!(cv, boxed(u64::from(b)), "the C++ kernel on {what}");
+            }
+            Want::Ok => assert!(cpp_ok, "the C++ kernel rejects {what}"),
+            Want::Err => assert!(!cpp_ok, "the C++ kernel accepts {what}"),
+        }
+        let mut whos = vec![1u8];
+        if cfg!(feature = "export") {
+            whos.push(2);
+        }
+        let mut same_tag = 0;
+        for who in whos {
+            let r = call(who);
+            assert_eq!(
+                tag(h, r) == 1,
+                cpp_ok,
+                "rulean ({who}) and the C++ kernel differ on {what}"
+            );
+            let v = word(h, r + 8);
+            if cpp_ok {
+                let same = match q {
+                    Q::DefEq(..) => v == cv,
+                    // SAFETY: `equal` borrows its arguments, and the two results are live.
+                    _ => (unsafe { (self.equal)(cv, v) }) != 0,
+                };
+                assert!(
+                    same,
+                    "rulean ({who}) and the C++ kernel give different results on {what}"
+                );
+            } else if exc_tag(h, v) != 12 {
+                assert_eq!(
+                    exc_tag(h, cv),
+                    exc_tag(h, v),
+                    "the exceptions differ on {what}"
+                );
+                if who == 1 {
+                    same_tag = 1;
+                }
+            }
+            // SAFETY: the test owns `r`.
+            unsafe { self.rt.dec(r) };
+        }
+        // SAFETY: the test owns `cpp` and the term objects.
+        unsafe {
+            self.rt.dec(cpp);
+            for o in objs {
+                self.rt.dec(o);
+            }
+        }
+        same_tag
+    }
 }

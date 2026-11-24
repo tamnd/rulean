@@ -593,8 +593,8 @@ impl Checker {
 
     // The local context.
 
-    /// Adds a local declaration and returns its free variable (`mk_local_decl`).
-    pub(crate) fn mk_local(
+    /// Adds a local declaration and returns its free variable (`mk_local_decl`). The free variable has the level of the declaration in the local context, so the declaration `i` after `begin` has the level `i`.
+    pub fn mk_local(
         &mut self,
         name: NameId,
         info: BinderInfo,

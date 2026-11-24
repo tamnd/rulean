@@ -308,6 +308,9 @@ jobs:
           nm -g --defined-only target/debug/librulean_ffi.a > _tmp/symbols.txt
           grep -w 'T lean_add_decl' _tmp/symbols.txt
           grep -w 'T lean_add_decl_without_checking' _tmp/symbols.txt
+          grep -w 'T lean_kernel_is_def_eq' _tmp/symbols.txt
+          grep -w 'T lean_kernel_whnf' _tmp/symbols.txt
+          grep -w 'T lean_kernel_check' _tmp/symbols.txt
 
   # The cross-validation of the `.olean` reader with lean4export on Init and Std (spec 07.3.6), for each Lean release of a profile (spec 05.2). v4.35.0 and v4.36.0 have the profile v4.35 and write oleans of version 2. v4.37.0-rc1 has the profile v4.37 and writes oleans of version 4. For a future release that has no profile yet, set NO_PROFILE=1 for the script (`scripts/olean-xval.sh`), so rulean must decline the export and the oleans give only a parse. The job depends on the Lean releases, so it is not a required check.
   olean-xval:

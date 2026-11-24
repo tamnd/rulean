@@ -15,9 +15,12 @@
 //! | 4 | `quotDecl` | none, so the value is the boxed scalar 4 | |
 //! | 5 | `mutualDefnDecl` | `List DefinitionVal` | |
 //! | 6 | `inductDecl` | `List Name`, `Nat`, `List InductiveType` | `isUnsafe` |
+//!
+//! A `ConstantInfo` is a constructor with one object field, the value of the constant. The tags are `axiomInfo` 0, `defnInfo` 1, `thmInfo` 2, `opaqueInfo` 3, `quotInfo` 4, `inductInfo` 5, `ctorInfo` 6 and `recInfo` 7. The layouts of the values are the same as in a `.olean` file (spec 07.3).
 
 use std::collections::HashMap;
 
+use rulean_core::env::{ConstInfo, ConstKind, CtorInfo, InductInfo, RecInfo, RuleInfo};
 use rulean_format::ndjson::MAX_NAT_BITS;
 use rulean_format::{
     Axiom, Ctor, Decl, Defn, Hints, Induct, InductType, Opaque, Quot, QuotKind, Safety, Thm,
@@ -42,16 +45,55 @@ const MAX_SMALL_NAT: u64 = u64::MAX >> 1;
 ///
 /// An inductive declaration gives a block with the types and the constructors only. The counts that the checker computes are zero, and the block has no recursors, so the checker must have `kernel_api` set (see `rulean_core::tc::Checker`). A quotient declaration gives the constant `Quot` of the kind `Type`, and the checker adds the four reference constants.
 pub fn declaration<H: Heap>(h: &H, st: &mut Store, decl: u64) -> Result<Decl, Fault> {
-    let mut c = Conv::new(h, st);
-    let d = c.declaration(decl)?;
-    if c.st.is_full() {
-        return Err(Fault::new(
-            FaultKind::StoreFull,
-            decl,
-            "the term store is full",
-        ));
+    Converter::new(h, st).declaration(decl)
+}
+
+/// A conversion of several objects. The objects share names, levels and expressions, so the converter keeps its tables from address to handle between the calls. The objects must stay alive while the converter exists, because the runtime can give the address of a freed object to a new object.
+pub struct Converter<'a, H: Heap> {
+    c: Conv<'a, H>,
+}
+
+impl<H: Heap> core::fmt::Debug for Converter<'_, H> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Converter")
+            .field("names", &self.c.names.len())
+            .field("levels", &self.c.levels.len())
+            .field("exprs", &self.c.exprs.len())
+            .finish()
     }
-    Ok(d)
+}
+
+impl<'a, H: Heap> Converter<'a, H> {
+    pub fn new(h: &'a H, st: &'a mut Store) -> Converter<'a, H> {
+        Converter {
+            c: Conv::new(h, st),
+        }
+    }
+
+    /// Converts the `Declaration` object at `decl`. See `declaration`.
+    pub fn declaration(&mut self, decl: u64) -> Result<Decl, Fault> {
+        let d = self.c.declaration(decl)?;
+        self.full(decl)?;
+        Ok(d)
+    }
+
+    /// Converts the `ConstantInfo` object at `ci` into a constant of the environment of the checker. The constant is not checked. The mirror of the environment uses this for the constants that Lean has already added.
+    pub fn constant(&mut self, ci: u64) -> Result<ConstInfo, Fault> {
+        let k = self.c.constant(ci)?;
+        self.full(ci)?;
+        Ok(k)
+    }
+
+    fn full(&self, at: u64) -> Result<(), Fault> {
+        if self.c.st.is_full() {
+            return Err(Fault::new(
+                FaultKind::StoreFull,
+                at,
+                "the term store is full",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// The state of one conversion.
@@ -720,6 +762,116 @@ impl<'a, H: Heap> Conv<'a, H> {
                 }
                 Decl::Mutual(ds)
             }
+        })
+    }
+
+    /// The `ConstantInfo` at `ci`.
+    fn constant(&mut self, ci: u64) -> Result<ConstInfo, Fault> {
+        let p = match self.field_of_root(ci)? {
+            Field::Object(p) => p,
+            Field::Scalar(s) => return Err(bad(ci, format!("a constant is the scalar {s}"))),
+        };
+        let t = self.ctor(p, 0..=7, 1, "ConstantInfo")?;
+        let v = self.object(p, 0)?;
+        // The number of object fields of the value of each constructor.
+        let (objs, what) = match t {
+            0 => (1, "AxiomVal"),
+            1 => (4, "DefinitionVal"),
+            2 => (3, "TheoremVal"),
+            3 => (3, "OpaqueVal"),
+            4 => (1, "QuotVal"),
+            5 => (6, "InductiveVal"),
+            6 => (5, "ConstructorVal"),
+            _ => (7, "RecursorVal"),
+        };
+        self.ctor(v, 0..=0, objs, what)?;
+        let (name, lparams, ty) = self.cval(v)?;
+        let o = u64::from(objs);
+        let (safety, kind) = match t {
+            0 => (self.unsafe_flag(v, o, 0)?, ConstKind::Axiom),
+            1 => {
+                let d = self.definition(v)?;
+                (
+                    d.safety,
+                    ConstKind::Defn {
+                        value: d.value,
+                        hints: d.hints,
+                    },
+                )
+            }
+            2 => (
+                Safety::Safe,
+                ConstKind::Thm {
+                    value: self.expr(v, 1)?,
+                },
+            ),
+            3 => (
+                self.unsafe_flag(v, o, 0)?,
+                ConstKind::Opaque {
+                    value: self.expr(v, 1)?,
+                },
+            ),
+            4 => {
+                let kind = match self.u8_at(v, o, 0)? {
+                    0 => QuotKind::Type,
+                    1 => QuotKind::Ctor,
+                    2 => QuotKind::Lift,
+                    3 => QuotKind::Ind,
+                    k => return Err(bad(v, format!("a quotient has the kind {k}"))),
+                };
+                (Safety::Safe, ConstKind::Quot { kind })
+            }
+            5 => (
+                self.unsafe_flag(v, o, 1)?,
+                ConstKind::Induct(InductInfo {
+                    nparams: self.small(v, 1)?,
+                    nindices: self.small(v, 2)?,
+                    all: self.names(v, 3)?,
+                    ctors: self.names(v, 4)?,
+                    nnested: self.small(v, 5)?,
+                    is_rec: self.bool_at(v, o, 0)?,
+                    is_reflexive: self.bool_at(v, o, 2)?,
+                }),
+            ),
+            6 => (
+                self.unsafe_flag(v, o, 0)?,
+                ConstKind::Ctor(CtorInfo {
+                    induct: self.name(v, 1)?,
+                    cidx: self.small(v, 2)?,
+                    nparams: self.small(v, 3)?,
+                    nfields: self.small(v, 4)?,
+                }),
+            ),
+            _ => {
+                let mut rules = Vec::new();
+                for r in self.list_objects(v, 6)? {
+                    self.ctor(r, 0..=0, 3, "RecursorRule")?;
+                    rules.push(RuleInfo {
+                        ctor: self.name(r, 0)?,
+                        nfields: self.small(r, 1)?,
+                        rhs: self.expr(r, 2)?,
+                    });
+                }
+                (
+                    self.unsafe_flag(v, o, 1)?,
+                    ConstKind::Rec(RecInfo {
+                        all: self.names(v, 1)?,
+                        nparams: self.small(v, 2)?,
+                        nindices: self.small(v, 3)?,
+                        nmotives: self.small(v, 4)?,
+                        nminors: self.small(v, 5)?,
+                        rules,
+                        k: self.bool_at(v, o, 0)?,
+                    }),
+                )
+            }
+        };
+        Ok(ConstInfo {
+            name,
+            lparams,
+            ty,
+            safety,
+            kind,
         })
     }
 

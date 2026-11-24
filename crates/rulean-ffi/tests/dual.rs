@@ -4,6 +4,8 @@
 //!
 //! Each declaration also goes to `Kernel::add_decl`, the `addDecl` of rulean on the Lean runtime, with the same environment as the C++ kernel. The verdict must be the same. For an accepted declaration, the new constants of the two result environments must be the same. For a rejection, the two `Kernel.Exception` objects must have the same constructor, if `Kernel::add_decl` maps the kind.
 //!
+//! With the feature `export`, each declaration also goes to the exported symbol `lean_add_decl` of rulean, and the result must be the result of `Kernel::add_decl`.
+//!
 //! The library comes from `RULEAN_LEAN_LIB` or the elan toolchain, as in `tests/runtime.rs`.
 
 #![cfg(all(
@@ -140,6 +142,8 @@ impl Dual<'_> {
         } else if !cpp && !kernel {
             tags = Some((exc_tag(&self.h, new_cpp), exc_tag(&self.h, new_ours)));
         }
+        #[cfg(feature = "export")]
+        self.same_as_export(d, o, r2, before);
         if cpp {
             // SAFETY: `new_cpp` is a field of `r`, which the test owns. The test takes a reference to it and gives back the old environment.
             unsafe {
@@ -160,6 +164,44 @@ impl Dual<'_> {
             kernel,
             tags,
         }
+    }
+
+    /// Gives the declaration object `o` to the exported `lean_add_decl` and requires the result of `Kernel::add_decl`, which is `r2`: the same verdict, the same new constants, or the same `Kernel.Exception` constructor.
+    #[cfg(feature = "export")]
+    fn same_as_export(&mut self, d: &Decl, o: u64, r2: u64, before: usize) {
+        // SAFETY: `env` and `o` are live objects, and the process has the Lean runtime. The symbol consumes the environment, so the test gives it a new reference.
+        let r3 = unsafe {
+            self.rt.inc(self.env);
+            rulean_ffi::export::lean_add_decl(self.env, 0, 512, o, boxed(0))
+        };
+        let ok = tag(&self.h, r2) == 1;
+        assert_eq!(
+            tag(&self.h, r3) == 1,
+            ok,
+            "the exported symbol gives a different verdict for {d:?}"
+        );
+        let a = word(&self.h, r2 + 8);
+        let b = word(&self.h, r3 + 8);
+        if ok {
+            let names: Vec<NameId> = (before + 1..=self.chk.env.len())
+                .map(|slot| self.chk.env.at(slot as u32).name)
+                .collect();
+            for n in names {
+                assert_eq!(
+                    self.constant(a, n),
+                    self.constant(b, n),
+                    "the exported symbol adds a different {n:?}"
+                );
+            }
+        } else {
+            assert_eq!(
+                exc_tag(&self.h, a),
+                exc_tag(&self.h, b),
+                "the exported symbol gives a different exception for {d:?}"
+            );
+        }
+        // SAFETY: the test owns `r3`.
+        unsafe { self.rt.dec(r3) };
     }
 
     /// The constant `n` of the Lean environment `env`, converted into the store of the checker.

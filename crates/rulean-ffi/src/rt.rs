@@ -7,7 +7,7 @@
 //!
 //! `LeanMake` calls `lean_expr_mk_app`, `lean_level_mk_succ`, `lean_name_mk_string` and the other exports of Lean, so Lean computes the cached data of each object. For the other constructors, `LeanMake` does what `lean_alloc_ctor` of `lean.h` does. The reference counts follow the rules of `lean_inc_ref` and `lean_dec_ref` in `lean.h` of v4.36.0, with the sticky range of thread-shared counts.
 //!
-//! This module and `live` are the only modules of the crate with `unsafe` code (spec 12). The module is only on Linux and macOS with 64-bit pointers.
+//! This module, `live` and `kernel` are the only modules of the crate with `unsafe` code (spec 12). The module is only on Linux and macOS with 64-bit pointers.
 
 #![allow(unsafe_code)]
 

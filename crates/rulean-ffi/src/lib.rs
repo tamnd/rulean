@@ -19,6 +19,7 @@
 pub mod conv;
 pub mod heap;
 pub mod live;
+pub mod make;
 pub mod mirror;
 
 use std::fmt;

@@ -4,6 +4,14 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- `Kernel::add_decl_without_checking` of `rulean-ffi` and the exported symbol `lean_add_decl_without_checking` (spec 09.6.2). They do what the C++ kernel of Lean v4.36.0 does when `check` is false. An axiom, a definition, a theorem and an opaque constant get no check. A mutual block must not be empty and must be unsafe or partial. An inductive block and the quotient get the full check, as in the C++ kernel. The test `dual` gives each declaration to the C++ function and to rulean and requires the same verdicts and the same declared constants. The CI job `ffi-runtime` checks that the static library exports the symbol.
+
+### Fixed
+
+- For an axiom, a definition, a theorem, an opaque constant and a mutual block, `Kernel::add_decl` now adds the `*Val` object of the declaration, as the C++ kernel does. Before, it wrote the constant again from the store, and the conversion into the store removes `mdata`, so the terms in the Lean environment had no `mdata`. The elaborator reads `mdata`, for example in the values of definitions.
+
 ## [0.0.13] - 2026-11-24
 
 ### Added

@@ -2,6 +2,8 @@
 //!
 //! The test writes each declaration as a Lean `Declaration` object with `LeanMake`. The C++ kernel gets the object through `lean_add_decl`. rulean gets the same object through `conv::declaration`, as in the in-process mode. After the declarations, the test reads the constants of the C++ environment with `lean_environment_find` and compares them with the constants of rulean, so the recursors that the two kernels make must also be the same.
 //!
+//! Each declaration also goes to `Kernel::add_decl`, the `addDecl` of rulean on the Lean runtime, with the same environment as the C++ kernel. The verdict must be the same. For an accepted declaration, the new constants of the two result environments must be the same. For a rejection, the two `Kernel.Exception` objects must have the same constructor, if `Kernel::add_decl` maps the kind.
+//!
 //! The library comes from `RULEAN_LEAN_LIB` or the elan toolchain, as in `tests/runtime.rs`.
 
 #![cfg(all(
@@ -16,9 +18,11 @@ use std::ffi::{CStr, c_void};
 use std::path::PathBuf;
 
 use common::qname;
+use rulean_core::env::ConstInfo;
 use rulean_core::tc::Checker;
 use rulean_ffi::conv::{self, Converter};
 use rulean_ffi::heap::{Heap, boxed};
+use rulean_ffi::kernel::Kernel;
 use rulean_ffi::live::LiveHeap;
 use rulean_ffi::make::Encoder;
 use rulean_ffi::rt::{LeanMake, Runtime};
@@ -75,45 +79,112 @@ struct Dual<'a> {
     h: LiveHeap,
     add_decl: AddDecl,
     find: Find,
+    /// The in-process kernel of rulean on the Lean runtime.
+    kernel: Kernel<'a>,
     /// The C++ kernel environment. The test owns one reference.
     env: u64,
     chk: Checker,
 }
 
+/// The verdicts of one declaration.
+struct Verdicts {
+    /// The C++ kernel accepts.
+    cpp: bool,
+    /// The checker of rulean, with the environment of the earlier declarations, accepts.
+    ours: bool,
+    /// `Kernel::add_decl` on the Lean environment accepts.
+    kernel: bool,
+    /// For a rejection, the tags of the `Kernel.Exception` of the C++ kernel and of `Kernel::add_decl`.
+    tags: Option<(u64, u64)>,
+}
+
+/// The tag of a `Kernel.Exception`. A constructor without fields is a boxed scalar.
+fn exc_tag(h: &LiveHeap, x: u64) -> u64 {
+    if x & 1 == 1 { x >> 1 } else { tag(h, x) as u64 }
+}
+
 impl Dual<'_> {
-    /// Gives `d` of the store `st` to the two kernels, and gives the verdict of the C++ kernel and of rulean.
-    fn add(&mut self, st: &Store, d: &Decl) -> (bool, bool) {
+    /// Gives `d` of the store `st` to the C++ kernel, to the checker of rulean, and to `Kernel::add_decl`. For an accepted declaration, it requires that the C++ kernel and `Kernel::add_decl` add the same constants. The C++ environment is the environment of the next declaration.
+    fn add(&mut self, st: &Store, d: &Decl) -> Verdicts {
         let o = {
             // SAFETY: the encoder gives the maker only objects that it made.
             let mut m = unsafe { LeanMake::new(self.rt) };
             Encoder::new(&mut m, st).declaration(d).expect("an object")
         };
-        // `lean_add_decl` consumes the environment, so the test gives it a new reference and keeps its own for a rejection. It borrows the declaration and the cancel token.
-        // SAFETY: `env` and `o` are live objects, and the function has the type of `addDeclCore`.
-        let r = unsafe {
+        // The two `addDecl` functions consume the environment, so the test gives each a new reference and keeps its own. They borrow the declaration and the cancel token.
+        // SAFETY: `env` and `o` are live objects, and the functions have the type of `addDeclCore`.
+        let (r, r2) = unsafe {
             self.rt.inc(self.env);
-            (self.add_decl)(self.env, 0, 512, o, boxed(0))
+            let r = (self.add_decl)(self.env, 0, 512, o, boxed(0));
+            self.rt.inc(self.env);
+            let r2 = self.kernel.add_decl(self.env, 0, 512, o, boxed(0));
+            (r, r2)
         };
-        // `Except.error` has the tag 0 and `Except.ok` has the tag 1.
-        let cpp = tag(&self.h, r) == 1;
-        if cpp {
-            let new = word(&self.h, r + 8);
-            // SAFETY: `new` is a field of `r`, which the test owns. The test takes a reference to it and gives back `r` and the old environment.
-            unsafe {
-                self.rt.inc(new);
-                self.rt.dec(r);
-                self.rt.dec(self.env);
-            }
-            self.env = new;
-        } else {
-            // SAFETY: the test owns `r`.
-            unsafe { self.rt.dec(r) };
-        }
+        let before = self.chk.env.len();
         let got = conv::declaration(&self.h, &mut self.chk.st, o).expect("a declaration");
         let ours = self.chk.add_decl(&got).is_none();
-        // SAFETY: the test owns `o`.
-        unsafe { self.rt.dec(o) };
-        (cpp, ours)
+        // `Except.error` has the tag 0 and `Except.ok` has the tag 1.
+        let cpp = tag(&self.h, r) == 1;
+        let kernel = tag(&self.h, r2) == 1;
+        let new_cpp = word(&self.h, r + 8);
+        let new_ours = word(&self.h, r2 + 8);
+        let mut tags = None;
+        if cpp && kernel {
+            for slot in before + 1..=self.chk.env.len() {
+                let n = self.chk.env.at(slot as u32).name;
+                let a = self.constant(new_cpp, n);
+                let b = self.constant(new_ours, n);
+                assert!(a.is_some(), "the C++ kernel has no {n:?}");
+                assert_eq!(a, b, "the two environments differ at {n:?}");
+            }
+        } else if !cpp && !kernel {
+            tags = Some((exc_tag(&self.h, new_cpp), exc_tag(&self.h, new_ours)));
+        }
+        if cpp {
+            // SAFETY: `new_cpp` is a field of `r`, which the test owns. The test takes a reference to it and gives back the old environment.
+            unsafe {
+                self.rt.inc(new_cpp);
+                self.rt.dec(self.env);
+            }
+            self.env = new_cpp;
+        }
+        // SAFETY: the test owns `r`, `r2` and `o`.
+        unsafe {
+            self.rt.dec(r);
+            self.rt.dec(r2);
+            self.rt.dec(o);
+        }
+        Verdicts {
+            cpp,
+            ours,
+            kernel,
+            tags,
+        }
+    }
+
+    /// The constant `n` of the Lean environment `env`, converted into the store of the checker.
+    fn constant(&mut self, env: u64, n: NameId) -> Option<ConstInfo> {
+        let name = {
+            // SAFETY: the encoder gives the maker only objects that it made.
+            let mut m = unsafe { LeanMake::new(self.rt) };
+            Encoder::new(&mut m, &self.chk.st).name(n)
+        };
+        // SAFETY: `find?` consumes the environment and the name, so the test gives it a new reference to the environment.
+        let r = unsafe {
+            self.rt.inc(env);
+            (self.find)(env, name)
+        };
+        // `Option.some` has the tag 1, and `Option.none` is the boxed scalar 0.
+        if r == boxed(0) {
+            return None;
+        }
+        let ci = word(&self.h, r + 8);
+        let k = Converter::new(&self.h, &mut self.chk.st)
+            .constant(ci)
+            .expect("a constant");
+        // SAFETY: the test owns `r`.
+        unsafe { self.rt.dec(r) };
+        Some(k)
     }
 
     /// Reads the constant `s` of the C++ environment and compares it with the constant of rulean.
@@ -122,25 +193,8 @@ impl Dual<'_> {
         let slot = self.chk.env.find(n);
         assert_ne!(slot, 0, "rulean has no {s}");
         let ours = self.chk.env.at(slot).clone();
-        let name = {
-            // SAFETY: the encoder gives the maker only objects that it made.
-            let mut m = unsafe { LeanMake::new(self.rt) };
-            Encoder::new(&mut m, &self.chk.st).name(n)
-        };
-        // SAFETY: `find?` consumes the environment and the name, so the test gives it a new reference to the environment.
-        let r = unsafe {
-            self.rt.inc(self.env);
-            (self.find)(self.env, name)
-        };
-        // `Option.some` has the tag 1, and `Option.none` is the boxed scalar 0.
-        assert_ne!(r, boxed(0), "the C++ kernel has no {s}");
-        let ci = word(&self.h, r + 8);
-        let theirs = Converter::new(&self.h, &mut self.chk.st)
-            .constant(ci)
-            .expect("a constant");
-        assert_eq!(theirs, ours, "{s} is not the same in the two kernels");
-        // SAFETY: the test owns `r`.
-        unsafe { self.rt.dec(r) };
+        let theirs = self.constant(self.env, n);
+        assert_eq!(theirs, Some(ours), "{s} is not the same in the two kernels");
     }
 }
 
@@ -259,11 +313,14 @@ fn the_two_kernels_give_the_same_verdicts() {
     };
     let mut chk = Checker::new(Store::new());
     chk.kernel_api = true;
+    // SAFETY: the runtime is Lean v4.36.0, and the test gives `add_decl` live objects.
+    let kernel = unsafe { Kernel::new(&rt) }.expect("the kernel functions");
     let mut dual = Dual {
         rt: &rt,
         h,
         add_decl,
         find,
+        kernel,
         env,
         chk,
     };
@@ -435,11 +492,25 @@ fn the_two_kernels_give_the_same_verdicts() {
     };
     cases.push(("loop", Decl::Mutual(vec![d]), true));
 
+    let mut same_tags = 0;
     for (what, d, want) in &cases {
-        let (cpp, ours) = dual.add(&st, d);
-        assert_eq!(cpp, *want, "the C++ kernel on {what}");
-        assert_eq!(ours, cpp, "rulean and the C++ kernel differ on {what}");
+        let v = dual.add(&st, d);
+        assert_eq!(v.cpp, *want, "the C++ kernel on {what}");
+        assert_eq!(v.ours, v.cpp, "rulean and the C++ kernel differ on {what}");
+        assert_eq!(
+            v.kernel, v.cpp,
+            "add_decl of rulean and the C++ kernel differ on {what}"
+        );
+        // `other` (12) is the exception for the kinds that `Kernel::add_decl` does not map yet.
+        if let Some((a, b)) = v.tags
+            && b != 12
+        {
+            assert_eq!(a, b, "the exceptions differ on {what}");
+            same_tags += 1;
+        }
     }
+    // The duplicate `two`, the theorem `bad` and the axiom `ax` give `alreadyDeclared`, `thmTypeIsNotProp` and `unknownConstant`.
+    assert_eq!(same_tags, 3);
 
     for s in [
         "N",

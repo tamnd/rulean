@@ -6,6 +6,8 @@
 //!
 //! The process must not have two definitions of a symbol that Lean can call. A test binary with this feature can load `libleanshared` with `dlopen`, because the test finds the symbols of the C++ kernel through the handle of the library.
 //!
+//! With the feature `dual`, each symbol also calls the C++ function with the suffix `_cpp` and compares the two results (spec 11.3). If they differ, the call writes the difference to the standard error and stops the process. Otherwise the result is the result of rulean. `Kernel::compare_add` and `Kernel::compare_term` tell which results agree.
+//!
 //! This module, `rt`, `live` and `kernel` are the only modules of the crate with `unsafe` code (spec 12).
 
 #![allow(unsafe_code)]
@@ -14,6 +16,36 @@ use std::cell::OnceCell;
 
 use crate::kernel::Kernel;
 use crate::rt::Runtime;
+
+/// The types of the C++ functions of the dual-kernel build (spec 11.3).
+#[cfg(feature = "dual")]
+type AddFn = unsafe extern "C" fn(u64, usize, usize, u64, u64) -> u64;
+#[cfg(feature = "dual")]
+type AddUncheckedFn = unsafe extern "C" fn(u64, u64) -> u64;
+#[cfg(feature = "dual")]
+type DefEqFn = unsafe extern "C" fn(u64, u64, u64, u64) -> u64;
+#[cfg(feature = "dual")]
+type TermFn = unsafe extern "C" fn(u64, u64, u64) -> u64;
+
+/// The C++ function `name` of the dual-kernel build, with the type `F`. `scripts/lean-build.sh --dual` renames the functions of the C++ kernel with the suffix `_cpp`, and the binary exports them. The call finds the function when the program runs, so a test binary with the feature `dual` links without these symbols. If the process has no such function, the call stops the process.
+///
+/// # Safety
+///
+/// `F` is the type of the C++ function `name` of Lean v4.36.0.
+#[cfg(feature = "dual")]
+unsafe fn cpp<F: Copy>(k: &Kernel<'static>, name: &std::ffi::CStr) -> F {
+    match k.runtime().symbol(name) {
+        // SAFETY: the address is the function `name`, and the caller gives its type. A function pointer has the size of a data pointer on the supported targets.
+        Some(p) => unsafe { core::mem::transmute_copy::<*mut core::ffi::c_void, F>(&p.as_ptr()) },
+        None => {
+            eprintln!(
+                "rulean dual: the process has no function {}, build it with scripts/lean-build.sh --dual",
+                name.to_string_lossy()
+            );
+            std::process::abort()
+        }
+    }
+}
 
 thread_local! {
     /// The kernel of this thread, or the reason that the process has no Lean runtime.
@@ -61,7 +93,30 @@ pub unsafe extern "C" fn lean_add_decl(
     cancel: u64,
 ) -> u64 {
     // SAFETY: the contract of the function is the contract of `with_kernel` and of `Kernel::add_decl`.
-    unsafe { with_kernel(|k| k.add_decl(env, max_heartbeat, max_rec_depth, decl, cancel)) }
+    unsafe {
+        with_kernel(|k| {
+            #[cfg(feature = "dual")]
+            let r = k.dual_add(
+                env,
+                decl,
+                false,
+                "lean_add_decl",
+                |e| {
+                    cpp::<AddFn>(k, c"lean_add_decl_cpp")(
+                        e,
+                        max_heartbeat,
+                        max_rec_depth,
+                        decl,
+                        cancel,
+                    )
+                },
+                |e| k.add_decl(e, max_heartbeat, max_rec_depth, decl, cancel),
+            );
+            #[cfg(not(feature = "dual"))]
+            let r = k.add_decl(env, max_heartbeat, max_rec_depth, decl, cancel);
+            r
+        })
+    }
 }
 
 /// `Lean.Kernel.Environment.addDeclWithoutChecking` of Lean v4.36.0, with rulean as the kernel. It has the contract of `Kernel::add_decl_without_checking`: the call consumes `env` and borrows `decl`, and it gives a new `Except Kernel.Exception Kernel.Environment` object.
@@ -72,7 +127,22 @@ pub unsafe extern "C" fn lean_add_decl(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lean_add_decl_without_checking(env: u64, decl: u64) -> u64 {
     // SAFETY: the contract of the function is the contract of `with_kernel` and of `Kernel::add_decl_without_checking`.
-    unsafe { with_kernel(|k| k.add_decl_without_checking(env, decl)) }
+    unsafe {
+        with_kernel(|k| {
+            #[cfg(feature = "dual")]
+            let r = k.dual_add(
+                env,
+                decl,
+                false,
+                "lean_add_decl_without_checking",
+                |e| cpp::<AddUncheckedFn>(k, c"lean_add_decl_without_checking_cpp")(e, decl),
+                |e| k.add_decl_without_checking(e, decl),
+            );
+            #[cfg(not(feature = "dual"))]
+            let r = k.add_decl_without_checking(env, decl);
+            r
+        })
+    }
 }
 
 /// `Lean.Environment.addDeclCore` of Lean v4.36.0 with `doCheck`, with rulean as the kernel. The elaborator calls this function for each declaration. It has the contract of `Kernel::elab_add_decl`: the call consumes `env` and borrows `decl` and `cancel`, and it gives a new `Except Kernel.Exception Lean.Environment` object.
@@ -89,7 +159,30 @@ pub unsafe extern "C" fn lean_elab_add_decl(
     cancel: u64,
 ) -> u64 {
     // SAFETY: the contract of the function is the contract of `with_kernel` and of `Kernel::elab_add_decl`.
-    unsafe { with_kernel(|k| k.elab_add_decl(env, max_heartbeat, max_rec_depth, decl, cancel)) }
+    unsafe {
+        with_kernel(|k| {
+            #[cfg(feature = "dual")]
+            let r = k.dual_add(
+                env,
+                decl,
+                true,
+                "lean_elab_add_decl",
+                |e| {
+                    cpp::<AddFn>(k, c"lean_elab_add_decl_cpp")(
+                        e,
+                        max_heartbeat,
+                        max_rec_depth,
+                        decl,
+                        cancel,
+                    )
+                },
+                |e| k.elab_add_decl(e, max_heartbeat, max_rec_depth, decl, cancel),
+            );
+            #[cfg(not(feature = "dual"))]
+            let r = k.elab_add_decl(env, max_heartbeat, max_rec_depth, decl, cancel);
+            r
+        })
+    }
 }
 
 /// `Lean.Environment.addDeclCore` of Lean v4.36.0 without `doCheck`, with rulean as the kernel. It has the contract of `Kernel::elab_add_decl_without_checking`: the call consumes `env` and borrows `decl`, and it gives a new `Except Kernel.Exception Lean.Environment` object.
@@ -100,7 +193,22 @@ pub unsafe extern "C" fn lean_elab_add_decl(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lean_elab_add_decl_without_checking(env: u64, decl: u64) -> u64 {
     // SAFETY: the contract of the function is the contract of `with_kernel` and of `Kernel::elab_add_decl_without_checking`.
-    unsafe { with_kernel(|k| k.elab_add_decl_without_checking(env, decl)) }
+    unsafe {
+        with_kernel(|k| {
+            #[cfg(feature = "dual")]
+            let r = k.dual_add(
+                env,
+                decl,
+                true,
+                "lean_elab_add_decl_without_checking",
+                |e| cpp::<AddUncheckedFn>(k, c"lean_elab_add_decl_without_checking_cpp")(e, decl),
+                |e| k.elab_add_decl_without_checking(e, decl),
+            );
+            #[cfg(not(feature = "dual"))]
+            let r = k.elab_add_decl_without_checking(env, decl);
+            r
+        })
+    }
 }
 
 /// `Lean.Kernel.isDefEq` of Lean v4.36.0, with rulean as the kernel. It has the contract of `Kernel::is_def_eq`: the call consumes all its arguments, and it gives a new `Except Kernel.Exception Bool` object.
@@ -111,7 +219,21 @@ pub unsafe extern "C" fn lean_elab_add_decl_without_checking(env: u64, decl: u64
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lean_kernel_is_def_eq(env: u64, lctx: u64, a: u64, b: u64) -> u64 {
     // SAFETY: the contract of the function is the contract of `with_kernel` and of `Kernel::is_def_eq`.
-    unsafe { with_kernel(|k| k.is_def_eq(env, lctx, a, b)) }
+    unsafe {
+        with_kernel(|k| {
+            #[cfg(feature = "dual")]
+            let r = k.dual_term(
+                &[env, lctx, a, b],
+                true,
+                "lean_kernel_is_def_eq",
+                || cpp::<DefEqFn>(k, c"lean_kernel_is_def_eq_cpp")(env, lctx, a, b),
+                || k.is_def_eq(env, lctx, a, b),
+            );
+            #[cfg(not(feature = "dual"))]
+            let r = k.is_def_eq(env, lctx, a, b);
+            r
+        })
+    }
 }
 
 /// `Lean.Kernel.whnf` of Lean v4.36.0, with rulean as the kernel. It has the contract of `Kernel::whnf`: the call consumes all its arguments, and it gives a new `Except Kernel.Exception Expr` object.
@@ -122,7 +244,21 @@ pub unsafe extern "C" fn lean_kernel_is_def_eq(env: u64, lctx: u64, a: u64, b: u
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lean_kernel_whnf(env: u64, lctx: u64, e: u64) -> u64 {
     // SAFETY: the contract of the function is the contract of `with_kernel` and of `Kernel::whnf`.
-    unsafe { with_kernel(|k| k.whnf(env, lctx, e)) }
+    unsafe {
+        with_kernel(|k| {
+            #[cfg(feature = "dual")]
+            let r = k.dual_term(
+                &[env, lctx, e],
+                false,
+                "lean_kernel_whnf",
+                || cpp::<TermFn>(k, c"lean_kernel_whnf_cpp")(env, lctx, e),
+                || k.whnf(env, lctx, e),
+            );
+            #[cfg(not(feature = "dual"))]
+            let r = k.whnf(env, lctx, e);
+            r
+        })
+    }
 }
 
 /// `Lean.Kernel.check` of Lean v4.36.0, with rulean as the kernel. It has the contract of `Kernel::check`: the call consumes all its arguments, and it gives a new `Except Kernel.Exception Expr` object with the type of `e`.
@@ -133,5 +269,19 @@ pub unsafe extern "C" fn lean_kernel_whnf(env: u64, lctx: u64, e: u64) -> u64 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lean_kernel_check(env: u64, lctx: u64, e: u64) -> u64 {
     // SAFETY: the contract of the function is the contract of `with_kernel` and of `Kernel::check`.
-    unsafe { with_kernel(|k| k.check(env, lctx, e)) }
+    unsafe {
+        with_kernel(|k| {
+            #[cfg(feature = "dual")]
+            let r = k.dual_term(
+                &[env, lctx, e],
+                false,
+                "lean_kernel_check",
+                || cpp::<TermFn>(k, c"lean_kernel_check_cpp")(env, lctx, e),
+                || k.check(env, lctx, e),
+            );
+            #[cfg(not(feature = "dual"))]
+            let r = k.check(env, lctx, e);
+            r
+        })
+    }
 }

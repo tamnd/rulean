@@ -49,6 +49,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo clippy -p rulean-ffi --all-targets --locked --features export -- -D warnings
+      - run: cargo clippy -p rulean-ffi --all-targets --locked --features dual -- -D warnings
 
   test:
     name: test (${{ matrix.os }})
@@ -315,7 +316,7 @@ jobs:
           grep -w 'T lean_kernel_whnf' _tmp/symbols.txt
           grep -w 'T lean_kernel_check' _tmp/symbols.txt
 
-  # The lean binary of Lean v4.36.0 with rulean as its kernel (spec 09.6.2). scripts/lean-build.sh links the static libraries of the release with the static library of rulean-ffi. The job runs tests/lean-build/smoke.lean with the lean of the release and with the new lean, and the two outputs must be the same. The job depends on the Lean release, so it is not a required check.
+  # The lean binary of Lean v4.36.0 with rulean as its kernel (spec 09.6.2). scripts/lean-build.sh links the static libraries of the release with the static library of rulean-ffi. The job runs tests/lean-build/smoke.lean with the lean of the release, with the new lean and with the dual-kernel build of scripts/lean-build.sh --dual, and the outputs must be the same. The job depends on the Lean release, so it is not a required check.
   lean-build:
     name: lean build
     runs-on: macos-15
@@ -351,6 +352,15 @@ jobs:
           echo "exit $status" >> _tmp/smoke-rulean.txt
           cat _tmp/smoke-rulean.txt
           diff _tmp/smoke-cpp.txt _tmp/smoke-rulean.txt
+      # The dual-kernel build of spec 11.3.1 calls the C++ kernel and rulean on each declaration and term, and it stops if the results differ.
+      - name: the dual-kernel build
+        run: scripts/lean-build.sh --dual _tmp/lean-dual "$PWD/_tmp/lean/lean-4.36.0-darwin_aarch64"
+      - name: the same output with the dual-kernel build
+        run: |
+          status=0
+          _tmp/lean-dual/bin/lean tests/lean-build/smoke.lean > _tmp/smoke-dual.txt 2>&1 || status=$?
+          echo "exit $status" >> _tmp/smoke-dual.txt
+          diff _tmp/smoke-cpp.txt _tmp/smoke-dual.txt
 
   # The cross-validation of the `.olean` reader with lean4export on Init and Std (spec 07.3.6), for each Lean release of a profile (spec 05.2). v4.35.0 and v4.36.0 have the profile v4.35 and write oleans of version 2. v4.37.0-rc1 has the profile v4.37 and writes oleans of version 4. For a future release that has no profile yet, set NO_PROFILE=1 for the script (`scripts/olean-xval.sh`), so rulean must decline the export and the oleans give only a parse. The job depends on the Lean releases, so it is not a required check.
   olean-xval:

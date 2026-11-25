@@ -1,18 +1,25 @@
 #!/usr/bin/env bash
 # Builds the lean binary of Lean v4.36.0 with rulean as its kernel (spec 09.6.2).
 #
-# Usage: scripts/lean-build.sh OUT [TOOLCHAIN]
+# Usage: scripts/lean-build.sh [--dual] OUT [TOOLCHAIN]
 #
 # TOOLCHAIN is the directory of the Lean v4.36.0 release. The default is the prefix of the lean on PATH. The script makes OUT/bin/lean. OUT/lib and OUT/include are links to the directories of TOOLCHAIN, so the new lean finds the oleans of the release. OUT/bin/cadical is a link to the cadical of TOOLCHAIN.
 #
 # The release has the static libraries of Lean, and the C++ kernel is in libleancpp.a. The script makes a copy of libleancpp.a in which each kernel symbol has the suffix _cpp. Then it links the libraries of the release with the static library of rulean-ffi, which defines the kernel symbols. The functions of the C++ kernel stay in the binary with the new names, and no object refers to them. The release does not have the object of lean_main, so the script compiles src/util/shell.cpp and src/shell/lean.cpp of the Lean source at the commit of the release.
 #
+# With --dual, the script makes the dual-kernel build of spec 11.3. The static library of rulean-ffi then has the feature dual: each kernel symbol also calls the C++ function with the suffix _cpp and compares the two results. If they differ, the process writes the difference to the standard error and stops. The binary exports the _cpp functions, and rulean finds them when the program runs.
+#
 # The script works on macOS only. It needs git, a C++ compiler, cargo, llvm-objcopy and llvm-nm. Set CXX, OBJCOPY or NM to use a different tool.
 
 set -euo pipefail
 
+features="export"
+if [ "${1:-}" = --dual ]; then
+  features="dual"
+  shift
+fi
 if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
-  echo "usage: $0 OUT [TOOLCHAIN]" >&2
+  echo "usage: $0 [--dual] OUT [TOOLCHAIN]" >&2
   exit 2
 fi
 if [ "$(uname -s)" != Darwin ]; then
@@ -76,7 +83,7 @@ flags=(-std=c++20 -O2 -DLEAN_MULTI_THREAD -DNDEBUG -I"$build/gen" -I"$src/src" -
 "$cxx" "${flags[@]}" -c -o "$build/main.o" "$src/src/shell/lean.cpp"
 
 # The static library of rulean-ffi with the kernel symbols.
-(cd "$root" && cargo rustc --locked -q -p rulean-ffi --release --features export --crate-type staticlib)
+(cd "$root" && cargo rustc --locked -q -p rulean-ffi --release --features "$features" --crate-type staticlib)
 rulean="${CARGO_TARGET_DIR:-$root/target}/release/librulean_ffi.a"
 
 lib="$toolchain/lib/lean"
@@ -114,10 +121,23 @@ done
   "$lib/libLean.a" "$lib/libStd.a" "$lib/libInit.a" "$build/libleancpp-rulean.a" "$lib/libleanrt.a" "$lib/libcadical.a" \
   "$toolchain/lib/libgmp.a" "$toolchain/lib/libuv.a" "$toolchain/lib/libssl.a" "$toolchain/lib/libcrypto.a" \
   "$rulean" -Wl,-export_dynamic -lc++
+if [ "$features" = dual ]; then
+  "$llvm_nm" -g --defined-only "$out/bin/lean" | awk '{print $3}' | sort -u > "$build/lean-defined.txt"
+  for s in "${syms[@]}"; do
+    if ! grep -qxF "_${s}_cpp" "$build/lean-defined.txt"; then
+      echo "lean-build: the binary does not export ${s}_cpp" >&2
+      exit 1
+    fi
+  done
+fi
 ln -sfn "$toolchain/lib" "$out/lib"
 # Lean runs the SAT solver cadical from the directory of the lean binary.
 if [ -x "$toolchain/bin/cadical" ]; then
   ln -sfn "$toolchain/bin/cadical" "$out/bin/cadical"
 fi
 ln -sfn "$toolchain/include" "$out/include"
-echo "lean-build: $out/bin/lean has rulean as its kernel"
+if [ "$features" = dual ]; then
+  echo "lean-build: $out/bin/lean has rulean and the C++ kernel, and it compares their results"
+else
+  echo "lean-build: $out/bin/lean has rulean as its kernel"
+fi

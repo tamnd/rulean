@@ -2,7 +2,9 @@
 //!
 //! `Kernel::add_decl` has the contract of `lean_add_decl` of the C++ kernel. It takes a Lean `Kernel.Environment` and a `Declaration` object, checks the declaration with rulean, and gives an `Except Kernel.Exception Kernel.Environment` object. It uses only the functions that Lean exports, so it works with the Lean runtime of `rt`.
 //!
-//! The call makes a new checker. It mirrors the constants that the check can use from the Lean environment (`lean_environment_find`): the constants that the declaration refers to, the constants that their types and values refer to, the families of the inductive types, and the constants that the checker knows by name. A partial mirror is not sound, because a check can accept a declaration when a constant that it needs is not there. For example, a positivity check cannot see an occurrence behind a definition that it cannot unfold. The mirror is not kept between calls yet (spec 09.6.3 asks for a cache).
+//! The call makes a new checker. It mirrors the constants that the check can use from the Lean environment (`lean_environment_find`): the constants that the declaration refers to, the constants that their types and values refer to, the families of the inductive types, and the constants that the checker knows by name. A partial mirror is not sound, because a check can accept a declaration when a constant that it needs is not there. For example, a positivity check cannot see an occurrence behind a definition that it cannot unfold.
+//!
+//! The kernel keeps the mirror between the calls of a thread (spec 09.6.3). Each constant of the mirror keeps a reference to its `ConstantInfo` object, so the runtime cannot free the object or change it in place, and an object at the same address is the same constant. Each call walks the constants that the check can use and finds each one in the Lean environment. A constant with the same object is not converted again. If a constant that the walk finds is in the mirror and is not the same constant in the Lean environment, or if only the mirror has the quotient, the call makes a new mirror. The checker of the mirror has no session, so the heartbeats of a declaration do not depend on the earlier calls.
 //!
 //! If rulean accepts the declaration, the call adds the new constants to the Lean environment with `lean_environment_add`. If rulean rejects it, the call gives a `Kernel.Exception`. The kinds `unknownConstant`, `alreadyDeclared`, `thmTypeIsNotProp`, `deterministicTimeout`, `excessiveMemory`, `deepRecursion` and `interrupted` have the constructors of the C++ kernel. The other kinds give `other` with a message.
 //!
@@ -16,7 +18,8 @@
 
 #![allow(unsafe_code)]
 
-use std::collections::BTreeSet;
+use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -81,6 +84,54 @@ enum Exc {
     Other(String),
 }
 
+/// The largest memory of a mirror in bytes. Above it, the next call makes a new mirror, because the store keeps the terms of each declaration.
+const MAX_MIRROR_BYTES: usize = 2 << 30;
+
+/// A constant of the mirror: the `ConstantInfo` object of the Lean environment and the constants that it refers to. The entry owns one reference to the object, so the runtime cannot free the object or change it in place. Thus an object at the same address is the same constant.
+#[derive(Debug)]
+struct Entry {
+    ci: u64,
+    refs: Vec<NameId>,
+}
+
+/// The mirror of the kernel environment (spec 09.6.3): a checker and the origin of each constant of its environment, by the index of its name. The checker has no session, so a check does not depend on the earlier checks, and the heartbeats of a declaration are always the same.
+#[derive(Debug)]
+struct Mirror {
+    chk: Checker,
+    origin: BTreeMap<u32, Entry>,
+}
+
+impl Mirror {
+    fn new() -> Mirror {
+        let mut chk = Checker::new(Store::new());
+        chk.kernel_api = true;
+        chk.sess.on = false;
+        Mirror {
+            chk,
+            origin: BTreeMap::new(),
+        }
+    }
+}
+
+/// The reason that the mirror cannot be used.
+enum Miss {
+    /// A constant of the mirror is not the constant of the Lean environment.
+    Stale,
+    /// A constant of the Lean environment cannot be converted.
+    Fault(String),
+}
+
+/// The counts of the mirror of a kernel.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MirrorStats {
+    /// The constants that the mirror converted from Lean objects.
+    pub converted: u64,
+    /// The constants that the mirror had already, with the same object.
+    pub reused: u64,
+    /// The times that the kernel made a new mirror, because a constant of the mirror was not the constant of the Lean environment.
+    pub rebuilds: u64,
+}
+
 /// The in-process kernel on a Lean runtime.
 #[derive(Debug)]
 pub struct Kernel<'a> {
@@ -91,6 +142,9 @@ pub struct Kernel<'a> {
     quot_init: QuotInit,
     mark_quot: MarkQuot,
     to_kernel: ToKernel,
+    /// The mirror of `add_decl`. A call takes it and puts it back.
+    cache: RefCell<Option<Mirror>>,
+    stats: Cell<MirrorStats>,
 }
 
 /// The function `name` of the runtime with the type `F`.
@@ -124,11 +178,15 @@ impl<'a> Kernel<'a> {
                 quot_init: func(rt, c"lean_environment_quot_init")?,
                 mark_quot: func(rt, c"lean_environment_mark_quot_init")?,
                 to_kernel: func(rt, c"lean_elab_environment_to_kernel_env")?,
+                cache: RefCell::new(None),
+                stats: Cell::new(MirrorStats::default()),
             })
         }
     }
 
     /// `Lean.Kernel.Environment.addDeclCore`. The call consumes `env` and borrows `decl` and `cancel`, as `lean_add_decl` does. The result is a new `Except Kernel.Exception Kernel.Environment` object.
+    ///
+    /// The call uses the mirror of the kernel (spec 09.6.3). It converts only the constants that the mirror does not have. If a constant of the mirror is not the constant of `env`, the call makes a new mirror.
     ///
     /// # Safety
     ///
@@ -141,42 +199,130 @@ impl<'a> Kernel<'a> {
         decl: u64,
         cancel: u64,
     ) -> u64 {
-        let mut chk = Checker::new(Store::new());
-        chk.kernel_api = true;
-        chk.max_heartbeat = max_heartbeat as u64;
-        let d = match conv::declaration(&self.h, &mut chk.st, decl) {
-            Ok(d) => d,
-            // SAFETY: the caller gives `env`.
-            Err(f) => return unsafe { self.error(env, &chk.st, Exc::Other(f.to_string())) },
-        };
-        // SAFETY: the caller gives `env`.
-        if let Err(msg) = unsafe { self.mirror(env, &mut chk, &d) } {
-            // SAFETY: the caller gives `env`.
-            return unsafe { self.error(env, &chk.st, Exc::Other(msg)) };
+        let mut m = self.cache.borrow_mut().take().unwrap_or_else(Mirror::new);
+        if m.chk.memory() > MAX_MIRROR_BYTES {
+            // SAFETY: the mirror owns its references.
+            unsafe { self.release(m) };
+            m = Mirror::new();
         }
+        // SAFETY: the caller gives `env` and `decl`.
+        let d = match unsafe { self.convert_and_mirror(env, &mut m, decl) } {
+            Ok(d) => d,
+            Err(msg) => {
+                // SAFETY: the caller gives `env`.
+                let r = unsafe { self.error(env, &m.chk.st, Exc::Other(msg)) };
+                self.put(m);
+                return r;
+            }
+        };
+        // `convert_and_mirror` can make a new mirror with the default limit, so the call sets the limit after it.
+        m.chk.max_heartbeat = max_heartbeat as u64;
+        let Mirror { chk, mut origin } = m;
         let before = chk.env.len();
         // SAFETY: the caller gives `cancel`, and the call borrows it.
-        let (chk, d, fault) = match unsafe { token(cancel) } {
+        let (mut chk, d, fault) = match unsafe { token(cancel) } {
             None => {
+                let mut chk = chk;
                 let f = chk.add_decl(&d);
                 (chk, d, f)
             }
             // SAFETY: the caller gives `env` and `cancel`.
             Some(tk) => match unsafe { check_with_token(chk, d, tk) } {
                 Ok(r) => r,
-                // SAFETY: the caller gives `env`. The exception has no `Store` objects, so an empty `Store` is sufficient.
-                Err(x) => return unsafe { self.error(env, &Store::new(), x) },
+                Err(x) => {
+                    // The checker of the mirror is on the thread of the check, so the call drops the mirror.
+                    // SAFETY: the mirror owns the references of `origin`.
+                    unsafe { self.release_origin(&mut origin) };
+                    // SAFETY: the caller gives `env`. The exception has no `Store` objects, so an empty `Store` is sufficient.
+                    return unsafe { self.error(env, &Store::new(), x) };
+                }
             },
         };
         if let Some(f) = fault {
             let exc = exception(&chk, &d, f.kind);
             // SAFETY: the caller gives `env`.
-            return unsafe { self.error(env, &chk.st, exc) };
+            let r = unsafe { self.error(env, &chk.st, exc) };
+            // A failed check adds no constant to the Lean environment, so the mirror must not keep one.
+            chk.env.truncate(before);
+            self.put(Mirror { chk, origin });
+            return r;
         }
+        // SAFETY: the caller gives `env` and `decl`.
+        let r = unsafe { self.add_new(env, &chk, &d, before, decl) };
+        let m = Mirror { chk, origin };
+        match r {
+            Ok(e) => {
+                let mut m = m;
+                // SAFETY: `e` is the new environment, and the call owns it. The mirror then has the origin of each new constant.
+                let ok = unsafe { self.record_new(e, &mut m, before) };
+                if ok {
+                    self.put(m);
+                } else {
+                    // SAFETY: the mirror owns its references.
+                    unsafe { self.release(m) };
+                }
+                // SAFETY: the maker makes `Except.ok e`, and the result owns `e`.
+                unsafe { LeanMake::new(self.rt) }.ctor(1, &[e], &[])
+            }
+            Err(r) => {
+                // The Lean environment does not have the new constants, so the call drops the mirror.
+                // SAFETY: the mirror owns its references.
+                unsafe { self.release(m) };
+                r
+            }
+        }
+    }
+
+    /// Converts `decl` into the store of the mirror `m`, and mirrors the constants of `env` that its check can use. If a constant of the mirror is not the constant of `env`, the call puts a new mirror into `m` and converts again.
+    ///
+    /// # Safety
+    ///
+    /// `env` is a live `Kernel.Environment` object and `decl` is a live `Declaration` object. The call does not consume them.
+    unsafe fn convert_and_mirror(
+        &self,
+        env: u64,
+        m: &mut Mirror,
+        decl: u64,
+    ) -> Result<Decl, String> {
+        for _ in 0..2 {
+            let d = conv::declaration(&self.h, &mut m.chk.st, decl).map_err(|f| f.to_string())?;
+            let names = declared_names(&m.chk, &d);
+            // SAFETY: the caller gives `env`.
+            match unsafe { self.mirror_from(env, m, names, &decl_terms(&d)) } {
+                Ok(()) => return Ok(d),
+                Err(Miss::Fault(msg)) => return Err(msg),
+                Err(Miss::Stale) => {
+                    self.stats.set(MirrorStats {
+                        rebuilds: self.stats.get().rebuilds + 1,
+                        ..self.stats.get()
+                    });
+                    let old = std::mem::replace(m, Mirror::new());
+                    // SAFETY: the mirror owns its references.
+                    unsafe { self.release(old) };
+                }
+            }
+        }
+        // A new mirror has no constant, so its mirror cannot be stale.
+        Err("rulean: the new mirror is stale".to_string())
+    }
+
+    /// Adds the new constants of the checker, the slots after `before`, to `env`. The result is the new environment, or the `Except.error` object of the call.
+    ///
+    /// # Safety
+    ///
+    /// `env` is a live `Kernel.Environment` object, and the call consumes it. `decl` is a live `Declaration` object.
+    unsafe fn add_new(
+        &self,
+        env: u64,
+        chk: &Checker,
+        d: &Decl,
+        before: usize,
+        decl: u64,
+    ) -> Result<u64, u64> {
         let mut e = env;
         // SAFETY: the caller gives `decl`.
         if let Some(infos) = unsafe { self.shared_infos(decl) } {
-            for n in declared_names(&chk, &d) {
+            for n in declared_names(chk, d) {
                 // SAFETY: `e` is a live environment.
                 if let Some(ci) = unsafe { self.lookup(e, &chk.st, n) } {
                     // SAFETY: the call owns `ci` and each object of `infos`.
@@ -185,7 +331,7 @@ impl<'a> Kernel<'a> {
                         for i in infos {
                             self.rt.dec(i);
                         }
-                        return self.error(e, &chk.st, Exc::Already(n));
+                        return Err(self.error(e, &chk.st, Exc::Already(n)));
                     }
                 }
             }
@@ -193,8 +339,7 @@ impl<'a> Kernel<'a> {
                 // SAFETY: `add` consumes the environment and the constant, and gives a new environment.
                 e = unsafe { (self.add)(e, ci) };
             }
-            // SAFETY: the maker makes `Except.ok e`, and the result owns `e`.
-            return unsafe { LeanMake::new(self.rt) }.ctor(1, &[e], &[]);
+            return Ok(e);
         }
         for s in before + 1..=chk.env.len() {
             let k = chk.env.at(s as u32).clone();
@@ -203,10 +348,10 @@ impl<'a> Kernel<'a> {
                 // SAFETY: the test owns `ci`. A name that the mirror does not have, such as a name that the check of a nested inductive makes, can be in the Lean environment.
                 unsafe {
                     self.rt.dec(ci);
-                    return self.error(e, &chk.st, Exc::Already(k.name));
+                    return Err(self.error(e, &chk.st, Exc::Already(k.name)));
                 }
             }
-            let all = all_of(&d, k.name);
+            let all = all_of(d, k.name);
             let ci = {
                 // SAFETY: the encoder gives the maker only objects that it made.
                 let mut m = unsafe { LeanMake::new(self.rt) };
@@ -216,7 +361,7 @@ impl<'a> Kernel<'a> {
                 // SAFETY: `add` consumes the environment and the constant, and gives a new environment.
                 Ok(ci) => e = unsafe { (self.add)(e, ci) },
                 // SAFETY: `e` is a live environment.
-                Err(f) => return unsafe { self.error(e, &chk.st, Exc::Other(f.to_string())) },
+                Err(f) => return Err(unsafe { self.error(e, &chk.st, Exc::Other(f.to_string())) }),
             }
         }
         if matches!(d, Decl::Quot(_)) {
@@ -230,8 +375,65 @@ impl<'a> Kernel<'a> {
                 e = unsafe { (self.mark_quot)(e) };
             }
         }
-        // SAFETY: the maker makes `Except.ok e`, and the result owns `e`.
-        unsafe { LeanMake::new(self.rt) }.ctor(1, &[e], &[])
+        Ok(e)
+    }
+
+    /// Records the origin of each new constant of the mirror, the slots after `before`: the `ConstantInfo` object of `e` and the constants that it refers to. The result is false if `e` does not have a new constant, and the mirror is then not correct.
+    ///
+    /// # Safety
+    ///
+    /// `e` is a live `Kernel.Environment` object. The call does not consume it.
+    unsafe fn record_new(&self, e: u64, m: &mut Mirror, before: usize) -> bool {
+        for s in before + 1..=m.chk.env.len() {
+            let k = m.chk.env.at(s as u32);
+            // SAFETY: the caller gives `e`.
+            let Some(ci) = (unsafe { self.lookup(e, &m.chk.st, k.name) }) else {
+                return false;
+            };
+            let refs = direct_refs(&m.chk.st, k);
+            if let Some(old) = m.origin.insert(k.name.0, Entry { ci, refs }) {
+                // SAFETY: the mirror owned the reference of the old entry.
+                unsafe { self.rt.dec(old.ci) };
+            }
+        }
+        true
+    }
+
+    /// Drops the mirror `m` and its references to the `ConstantInfo` objects.
+    ///
+    /// # Safety
+    ///
+    /// The mirror owns one reference to the object of each entry.
+    unsafe fn release(&self, m: Mirror) {
+        let mut origin = m.origin;
+        // SAFETY: the contract of the function.
+        unsafe { self.release_origin(&mut origin) };
+    }
+
+    /// Gives back the references of the entries of `origin` and removes the entries.
+    ///
+    /// # Safety
+    ///
+    /// The map owns one reference to the object of each entry.
+    unsafe fn release_origin(&self, origin: &mut BTreeMap<u32, Entry>) {
+        for (_, e) in std::mem::take(origin) {
+            // SAFETY: the contract of the function.
+            unsafe { self.rt.dec(e.ci) };
+        }
+    }
+
+    /// Keeps the mirror `m` for the next call.
+    fn put(&self, m: Mirror) {
+        if let Some(old) = self.cache.replace(Some(m)) {
+            // A call takes the mirror first, so no other mirror is there.
+            // SAFETY: the mirror owns its references.
+            unsafe { self.release(old) };
+        }
+    }
+
+    /// The counts of the mirror of this kernel since it was made.
+    pub fn mirror_stats(&self) -> MirrorStats {
+        self.stats.get()
     }
 
     /// `Lean.Kernel.Environment.addDeclWithoutChecking`. The call consumes `env` and borrows `decl`, as `lean_add_decl_without_checking` does. The result is a new `Except Kernel.Exception Kernel.Environment` object.
@@ -332,10 +534,9 @@ impl<'a> Kernel<'a> {
     ///
     /// `kenv` is a live `Kernel.Environment` object, `lctx` is a `LocalContext` object, and `terms` are `Expr` objects.
     unsafe fn term_core(&self, kenv: u64, lctx: u64, terms: &[u64], op: TermOp) -> u64 {
-        let mut chk = Checker::new(Store::new());
-        chk.kernel_api = true;
+        let mut m = Mirror::new();
         let conv = {
-            let mut c = Converter::new(&self.h, &mut chk.st);
+            let mut c = Converter::new(&self.h, &mut m.chk.st);
             c.local_context(lctx).and_then(|locals| {
                 let ids = terms
                     .iter()
@@ -347,7 +548,7 @@ impl<'a> Kernel<'a> {
         let (locals, ids) = match conv {
             Ok(x) => x,
             // SAFETY: the caller gives `kenv`.
-            Err(f) => return unsafe { self.error(kenv, &chk.st, Exc::Other(f.to_string())) },
+            Err(f) => return unsafe { self.error(kenv, &m.chk.st, Exc::Other(f.to_string())) },
         };
         let mut start: Vec<ExprId> = Vec::new();
         for l in &locals {
@@ -356,7 +557,19 @@ impl<'a> Kernel<'a> {
         }
         start.extend_from_slice(&ids);
         // SAFETY: the caller gives `kenv`.
-        if let Err(msg) = unsafe { self.mirror_from(kenv, &mut chk, Vec::new(), &start) } {
+        let mirrored = unsafe { self.mirror_from(kenv, &mut m, Vec::new(), &start) };
+        // The term functions do not keep the mirror.
+        let Mirror {
+            mut chk,
+            mut origin,
+        } = m;
+        // SAFETY: the map owns its references.
+        unsafe { self.release_origin(&mut origin) };
+        if let Err(x) = mirrored {
+            let msg = match x {
+                Miss::Fault(msg) => msg,
+                Miss::Stale => "rulean: a new mirror is stale".to_string(),
+            };
             // SAFETY: the caller gives `kenv`.
             return unsafe { self.error(kenv, &chk.st, Exc::Other(msg)) };
         }
@@ -477,18 +690,9 @@ impl<'a> Kernel<'a> {
         u64::from_le_bytes(b)
     }
 
-    /// Adds to the checker each constant of `env` that the check of `d` can use, without a check.
+    /// Adds to the mirror each constant of `env` that a check can use when it starts with the constants `names` and the terms `terms`, without a check. A constant that the mirror has with the same object is not converted again. The result is `Miss::Stale` if a constant that the check can use is in the mirror and is not the same constant in `env`, or if only the mirror has the quotient.
     ///
-    /// # Safety
-    ///
-    /// `env` is a live `Kernel.Environment` object. The call does not consume it.
-    unsafe fn mirror(&self, env: u64, chk: &mut Checker, d: &Decl) -> Result<(), String> {
-        let names = declared_names(chk, d);
-        // SAFETY: the caller gives `env`.
-        unsafe { self.mirror_from(env, chk, names, &decl_terms(d)) }
-    }
-
-    /// Adds to the checker each constant of `env` that a check can use when it starts with the constants `names` and the terms `terms`, without a check.
+    /// The walk finds each constant that the check can use, so a constant of the mirror that the walk does not find has no effect on the check.
     ///
     /// # Safety
     ///
@@ -496,13 +700,13 @@ impl<'a> Kernel<'a> {
     unsafe fn mirror_from(
         &self,
         env: u64,
-        chk: &mut Checker,
+        m: &mut Mirror,
         names: Vec<NameId>,
         terms: &[ExprId],
-    ) -> Result<(), String> {
+    ) -> Result<(), Miss> {
+        let Mirror { chk, origin } = m;
         let mut queue = names;
-        let mut seen_e = BTreeSet::new();
-        const_refs(&chk.st, terms, &mut seen_e, &mut queue);
+        const_refs(&chk.st, terms, &mut BTreeSet::new(), &mut queue);
         let b = &chk.b;
         queue.extend([
             b.nat,
@@ -529,23 +733,56 @@ impl<'a> Kernel<'a> {
         ]);
         queue.extend(b.pin_names.iter().copied());
         let ops = b.nat_ops.clone();
-        const_refs(&chk.st, &ops, &mut seen_e, &mut queue);
+        const_refs(&chk.st, &ops, &mut BTreeSet::new(), &mut queue);
+        let mut stats = self.stats.get();
         let mut seen = BTreeSet::new();
         while let Some(n) = queue.pop() {
-            if !seen.insert(n) || chk.env.contains(n) {
+            if !seen.insert(n) {
                 continue;
             }
             // SAFETY: the caller gives `env`.
-            let Some(ci) = (unsafe { self.lookup(env, &chk.st, n) }) else {
-                continue;
-            };
-            let k = Converter::new(&self.h, &mut chk.st).constant(ci);
-            // SAFETY: the call owns `ci`, and the conversion does not keep it.
-            unsafe { self.rt.dec(ci) };
-            let k = k.map_err(|f| f.to_string())?;
-            const_info_refs(&chk.st, &k, &mut seen_e, &mut queue);
-            chk.env.add(k);
+            let ci = unsafe { self.lookup(env, &chk.st, n) };
+            match (ci, origin.get(&n.0)) {
+                (None, None) => {
+                    if chk.env.contains(n) {
+                        return Err(Miss::Stale);
+                    }
+                }
+                (None, Some(_)) => return Err(Miss::Stale),
+                (Some(ci), Some(e)) => {
+                    let same = e.ci == ci;
+                    // SAFETY: the call owns `ci`.
+                    unsafe { self.rt.dec(ci) };
+                    if !same {
+                        return Err(Miss::Stale);
+                    }
+                    queue.extend_from_slice(&e.refs);
+                    stats.reused += 1;
+                }
+                (Some(ci), None) => {
+                    if chk.env.contains(n) {
+                        // SAFETY: the call owns `ci`.
+                        unsafe { self.rt.dec(ci) };
+                        return Err(Miss::Stale);
+                    }
+                    let k = match Converter::new(&self.h, &mut chk.st).constant(ci) {
+                        Ok(k) => k,
+                        Err(f) => {
+                            // SAFETY: the call owns `ci`.
+                            unsafe { self.rt.dec(ci) };
+                            return Err(Miss::Fault(f.to_string()));
+                        }
+                    };
+                    let refs = direct_refs(&chk.st, &k);
+                    queue.extend_from_slice(&refs);
+                    chk.env.add(k);
+                    // The entry keeps the reference of `ci`.
+                    origin.insert(n.0, Entry { ci, refs });
+                    stats.converted += 1;
+                }
+            }
         }
+        self.stats.set(stats);
         // SAFETY: `quot_init` consumes the environment, so the call gives it a new reference.
         let init = unsafe {
             self.rt.inc(env);
@@ -553,6 +790,8 @@ impl<'a> Kernel<'a> {
         };
         if init != 0 {
             chk.env.mark_quot_initialized();
+        } else if chk.env.quot_initialized() {
+            return Err(Miss::Stale);
         }
         chk.check_pins();
         Ok(())
@@ -817,6 +1056,15 @@ fn all_of(d: &Decl, n: NameId) -> Vec<NameId> {
             .unwrap_or_default(),
         _ => Vec::new(),
     }
+}
+
+/// The constants that the constant `k` refers to, each one time.
+fn direct_refs(st: &Store, k: &ConstInfo) -> Vec<NameId> {
+    let mut out = Vec::new();
+    const_info_refs(st, k, &mut BTreeSet::new(), &mut out);
+    out.sort_by_key(|n| n.0);
+    out.dedup();
+    out
 }
 
 /// Pushes the names of the constants that `k` refers to.

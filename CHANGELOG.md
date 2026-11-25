@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- The mirror of `Kernel::add_decl` of `rulean-ffi` stays between the calls of a thread (spec 09.6.3). Each constant of the mirror keeps a reference to its `ConstantInfo` object, and a call converts only the constants whose object is not in the mirror. If a constant that the check can use is not the same object in the Lean environment, the call makes a new mirror. The checker of the mirror has no session, so the heartbeats of a declaration do not depend on the earlier calls. `Kernel::mirror_stats` gives the counts of converted constants, reused constants and new mirrors. The test `dual` checks that a chain of declarations converts no constant again, that two environments with different constants of the same name get the verdicts of the C++ kernel, and that the heartbeats are the same with a new kernel and with the full mirror.
+
 ## [0.0.14] - 2026-11-25
 
 ### Added

@@ -145,6 +145,31 @@ fn is_prop_gives_the_type_in_the_fault() {
 }
 
 #[test]
+fn a_fault_has_the_scope_of_the_binders() {
+    // `(fun (x : A) => x) (fun (y : A) => C.0 y)`. The check of the function makes `x`, then the check of the argument makes `y` and stops at the invalid projection. `x` is not in scope at the fault, as in the C++ kernel, which removes the local declarations when `infer_lambda` returns.
+    let mut t = T::new();
+    let s1 = t.sort(1);
+    let a = t.axiom("A", s1);
+    let b0 = t.bv(0);
+    let f = t.lam("x", a, b0);
+    let c = t.c.st.anon();
+    let c = t.c.st.name_str_bytes(c, b"C");
+    let p = t.c.st.mk_proj(c, 0, b0);
+    let g = t.lam("y", a, p);
+    let e = t.app(f, &[g]);
+    t.c.check(e);
+    assert_eq!(t.c.fault().map(|f| f.kind), Some(ErrorKind::InvalidProj));
+    assert_eq!(t.c.local_count(), 2);
+    let y = t.c.local(1).0;
+    let names: Vec<_> =
+        t.c.scope()
+            .iter()
+            .map(|&l| t.c.local(l as usize).0)
+            .collect();
+    assert_eq!(names, vec![y]);
+}
+
+#[test]
 fn application_type_mismatch() {
     let mut t = T::new();
     let s1 = t.sort(1);

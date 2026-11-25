@@ -609,3 +609,32 @@ fn a_slot_hit_is_a_delta_step() {
     let k2 = f_rec(&mut t, 2);
     assert_eq!(add_d(&mut t, h, k1, k2), 1);
 }
+
+#[test]
+fn a_fault_has_only_the_free_variables_in_scope() {
+    // inductive E (w : Type) : Type | mk : (w : Type) -> (l : C.0 w) -> E w. The projection is invalid. In the C++ kernel, the local context of the error has the parameter `w` of `add_inductive_fn` and the `w` of `infer_pi`, and no free variable of the earlier steps.
+    let mut t = T::new();
+    let ty = t.sort(1);
+    let ity_ty = t.pi("w", ty, ty);
+    let ity = t.ind_type("E", ity_ty, 1, &["E.mk"]);
+    let e = t.k("E");
+    let c_name = t.name("C");
+    let w0 = t.bv(0);
+    let proj = t.c.st.mk_proj(c_name, 0, w0);
+    let w1 = t.bv(1);
+    let res = t.app(e, &[w1]);
+    let body = t.pi("l", proj, res);
+    let cty = t.pi("w", ty, body);
+    let c = t.ctor("E.mk", cty, "E", 0, 1, 1);
+    assert_eq!(
+        t.add(vec![ity], vec![c], Vec::new()),
+        Some(ErrorKind::InvalidProj)
+    );
+    let w = t.name("w");
+    let names: Vec<NameId> =
+        t.c.scope()
+            .iter()
+            .map(|&l| t.c.local(l as usize).0)
+            .collect();
+    assert_eq!(names, vec![w, w]);
+}

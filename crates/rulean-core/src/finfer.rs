@@ -82,6 +82,14 @@ impl FInfer {
 impl Checker {
     /// The value check of a definition, a theorem or an opaque constant with engine F. True if engine F accepts `value` with the type `ty`. False if engine F did not decide, and then the caller checks the declaration with engine R. False is never a reject.
     pub(crate) fn f_check_value(&mut self, value: ExprId, ty: ExprId) -> bool {
+        let mark = self.scope.len();
+        let ok = self.f_check_value_in(value, ty);
+        self.scope.truncate(mark);
+        ok
+    }
+
+    /// The body of `f_check_value`. Engine F gives no fault, so the caller removes the free variables of engine F from the scope list.
+    fn f_check_value_in(&mut self, value: ExprId, ty: ExprId) -> bool {
         if self.engine == Engine::R || self.bad() || self.va.full() {
             return false;
         }
@@ -108,6 +116,14 @@ impl Checker {
 
     /// The type check of a declaration with engine F: the type of `ty` must be a sort. It gives true if engine F accepts. It gives false if engine F stops or cannot run, and then engine R must do the check. A fault of engine F is removed, as in `f_check_value`.
     pub(crate) fn f_check_type(&mut self, ty: ExprId) -> bool {
+        let mark = self.scope.len();
+        let ok = self.f_check_type_in(ty);
+        self.scope.truncate(mark);
+        ok
+    }
+
+    /// The body of `f_check_type`. Engine F gives no fault, so the caller removes the free variables of engine F from the scope list.
+    fn f_check_type_in(&mut self, ty: ExprId) -> bool {
         if self.engine == Engine::R || self.bad() || self.va.full() {
             return false;
         }

@@ -135,6 +135,8 @@ struct Local {
     info: BinderInfo,
     ty: ExprId,
     value: Option<ExprId>,
+    /// True if the free variable is in scope. The local context of the exception has only the free variables in scope, as in the C++ kernel. The other free variables keep their `FVarId`, because the terms can refer to them.
+    live: bool,
 }
 
 /// A part of an exception that the encoder makes.
@@ -1482,10 +1484,17 @@ fn lctx_exception(
     })
 }
 
-/// The local context of the checker. The free variables of the levels below `known.len()` have the `FVarId` of `known`. The checker made the other free variables, and they get the names `_kernel_fresh.N`, as the C++ kernel gives them.
+/// The local context of the checker. The free variables of the levels below `known.len()` have the `FVarId` of `known`. The checker made the other free variables, and they get the names `_kernel_fresh.N`, as the C++ kernel gives them. The free variables of `known` are always in scope.
 fn local_context(chk: &mut Checker, known: &[NameId]) -> Vec<Local> {
     let anon = chk.st.anon();
     let fresh = chk.st.name_str_bytes(anon, b"_kernel_fresh");
+    let mut live = vec![false; chk.local_count()];
+    for &lvl in chk.scope() {
+        live[lvl as usize] = true;
+    }
+    for v in live.iter_mut().take(known.len()) {
+        *v = true;
+    }
     (0..chk.local_count())
         .map(|i| {
             let (user, info, ty, value) = chk.local(i);
@@ -1499,6 +1508,7 @@ fn local_context(chk: &mut Checker, known: &[NameId]) -> Vec<Local> {
                 info,
                 ty,
                 value,
+                live: live[i],
             }
         })
         .collect()
@@ -1516,7 +1526,7 @@ fn lctx_fields(
 ) -> Result<Vec<u64>, String> {
     let skip = base.map_or(0, |(_, n)| n);
     let mut parts = Vec::new();
-    for l in &locals[skip..] {
+    for l in locals[skip..].iter().filter(|l| l.live) {
         parts.extend([Part::Name(l.id), Part::Name(l.user), Part::Term(l.ty)]);
         parts.extend(l.value.map(Part::Term));
     }
@@ -1558,7 +1568,7 @@ fn lctx_fields(
         }
         None => m.local_ctx_empty(),
     };
-    for l in &locals[skip..] {
+    for l in locals[skip..].iter().filter(|l| l.live) {
         let (id, user, ty) = (next(), next(), next());
         lctx = match l.value {
             Some(_) => {

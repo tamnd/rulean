@@ -340,6 +340,8 @@ impl Checker {
         if !self.bad() {
             self.elim_nested(s);
         }
+        // `check_uniform_ind_occs` and `elim_nested_inductive_fn` have their own local contexts in the C++ kernel, so their free variables are not in the scope of `add_inductive_fn`.
+        self.leave_scope(0);
         if !self.bad() {
             let ls = s.lparams.clone();
             let at = s.types[0];

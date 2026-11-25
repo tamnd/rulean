@@ -633,6 +633,13 @@ impl Checker {
 
     /// The check of each nested occurrence `I Ds` in the context of the parameters of `elim_nested_inductive_fn`. The parameters `Ds` are not in the auxiliary block, so the other checks do not see them.
     fn check_nested_apps(&mut self, s: &Ind) {
+        // The C++ kernel checks them with the local context of the parameters (`m_params_lctx`).
+        self.leave_scope(0);
+        for &p in &s.eparams {
+            if let Expr::FVar(l, _) = self.st.node(p) {
+                self.scope.push(l);
+            }
+        }
         let mut j = 0;
         while j < s.aux_nested.len() && !self.bad() {
             let e = s.aux_nested[j];
@@ -643,6 +650,8 @@ impl Checker {
 
     /// The checks of the restored constructor types and of the types and the rules of the restored recursors.
     fn recheck_block(&mut self, s: &Ind, recs: &[NameId]) {
+        // The C++ kernel does these checks with an empty local context.
+        self.leave_scope(0);
         let mut c = 0;
         while c < s.nctors && !self.bad() {
             let slot = self.env.find(s.cnames[c]);

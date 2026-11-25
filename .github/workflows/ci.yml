@@ -308,9 +308,48 @@ jobs:
           nm -g --defined-only target/debug/librulean_ffi.a > _tmp/symbols.txt
           grep -w 'T lean_add_decl' _tmp/symbols.txt
           grep -w 'T lean_add_decl_without_checking' _tmp/symbols.txt
+          grep -w 'T lean_elab_add_decl' _tmp/symbols.txt
+          grep -w 'T lean_elab_add_decl_without_checking' _tmp/symbols.txt
           grep -w 'T lean_kernel_is_def_eq' _tmp/symbols.txt
           grep -w 'T lean_kernel_whnf' _tmp/symbols.txt
           grep -w 'T lean_kernel_check' _tmp/symbols.txt
+
+  # The lean binary of Lean v4.36.0 with rulean as its kernel (spec 09.6.2). scripts/lean-build.sh links the static libraries of the release with the static library of rulean-ffi. The job runs tests/lean-build/smoke.lean with the lean of the release and with the new lean, and the two outputs must be the same. The job depends on the Lean release, so it is not a required check.
+  lean-build:
+    name: lean build
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      LEAN_ASSET: lean-4.36.0-darwin_aarch64.tar.zst
+      LEAN_SHA256: 49acada8749ad1343eff1224a3d2510ac61ed53363d37b5e738e8c587e7deabd
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain || rustup toolchain install
+      # llvm-objcopy and llvm-nm with the LLVM of rustc, which can read the bitcode objects of the Rust library.
+      - run: rustup component add llvm-tools
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: false
+      - name: the Lean v4.36.0 release
+        run: |
+          mkdir -p _tmp/lean
+          curl -sSfL --retry 3 -o "_tmp/lean/$LEAN_ASSET" "https://github.com/leanprover/lean4/releases/download/v4.36.0/$LEAN_ASSET"
+          echo "$LEAN_SHA256  _tmp/lean/$LEAN_ASSET" | shasum -a 256 -c -
+          zstd -dc "_tmp/lean/$LEAN_ASSET" | tar -xf - -C _tmp/lean
+      - name: lean with rulean as its kernel
+        run: scripts/lean-build.sh _tmp/lean-rulean "$PWD/_tmp/lean/lean-4.36.0-darwin_aarch64"
+      - name: the same output as the lean of the release
+        run: |
+          status=0
+          _tmp/lean/lean-4.36.0-darwin_aarch64/bin/lean tests/lean-build/smoke.lean > _tmp/smoke-cpp.txt 2>&1 || status=$?
+          echo "exit $status" >> _tmp/smoke-cpp.txt
+          status=0
+          _tmp/lean-rulean/bin/lean tests/lean-build/smoke.lean > _tmp/smoke-rulean.txt 2>&1 || status=$?
+          echo "exit $status" >> _tmp/smoke-rulean.txt
+          cat _tmp/smoke-rulean.txt
+          diff _tmp/smoke-cpp.txt _tmp/smoke-rulean.txt
 
   # The cross-validation of the `.olean` reader with lean4export on Init and Std (spec 07.3.6), for each Lean release of a profile (spec 05.2). v4.35.0 and v4.36.0 have the profile v4.35 and write oleans of version 2. v4.37.0-rc1 has the profile v4.37 and writes oleans of version 4. For a future release that has no profile yet, set NO_PROFILE=1 for the script (`scripts/olean-xval.sh`), so rulean must decline the export and the oleans give only a parse. The job depends on the Lean releases, so it is not a required check.
   olean-xval:

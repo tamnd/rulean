@@ -4,6 +4,11 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- `Kernel::elab_add_decl` and `Kernel::elab_add_decl_without_checking` of `rulean-ffi` and the exported symbols `lean_elab_add_decl` and `lean_elab_add_decl_without_checking` (spec 09.6.2). The elaborator of Lean v4.36.0 adds each declaration with `lean_elab_add_decl`, which is C++ code that calls the C++ kernel directly. The rulean functions take the kernel environment of the `Lean.Environment`, check the declaration with rulean, and give the new kernel environment to `lean_elab_environment_update_base_after_kernel_add`, as the C++ functions do. The test `dual` gives three declarations to the C++ functions and to rulean and requires the same verdicts, exceptions and constants.
+- The script `scripts/lean-build.sh` makes a `lean` binary of Lean v4.36.0 with rulean as its kernel, on macOS (spec 09.6.2). It renames the kernel symbols of `libleancpp.a` of the release with the suffix `_cpp`, and links the static libraries of the release with the static library of `rulean-ffi`. The CI job `lean-build` runs `tests/lean-build/smoke.lean` with the `lean` of the release and with the new `lean`, and requires the same output.
+
 ## [0.0.15] - 2026-11-25
 
 ### Added

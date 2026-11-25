@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ### Changed
 
+- A check with a cancel token runs on a worker thread that stays after the check (spec 09.6.3). Before, each check made a new thread with a stack of 1 GiB. Now a call makes a new thread only if all the worker threads have a check.
 - The kernels of all the threads of the exported library share one pool of mirrors (spec 09.6.3). Before, each thread had its own mirror, so each thread converted the imported constants that its checks used. Now an `add_decl` call takes a free mirror from the pool, so the process has one mirror for each call that runs at the same time. The new type `MirrorPool` and the new function `Kernel::share_mirrors` of `rulean-ffi` give the pool to a kernel. A kernel with a pool marks each `ConstantInfo` object that a mirror keeps as shared between threads, with the new function `Runtime::mark_mt`. On the smoke test of the CI job `lean-build`, 3 runs converted between 4550 and 4998 constants, and the build without the pool converted between 7578 and 8250. The mirror took 76 ms to 88 ms, and before it took 133 ms to 151 ms.
 
 ## [0.0.17] - 2026-11-25

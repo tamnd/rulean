@@ -1833,7 +1833,37 @@ unsafe fn is_set(tk: u64) -> bool {
     v >> 1 != 0
 }
 
-/// Checks `d` on a new thread and reads the cancel token `tk` on the calling thread until the check stops. The result is `Exc::Interrupted` if the token is set first. The check then continues on its thread until it stops, and the call discards its result. The check uses no Lean object, so it is safe after the call returns.
+/// The result of a check on a worker thread: the checker, the declaration and the fault.
+type Checked = (Checker, Decl, Option<Fault>);
+
+/// A check for a worker thread, and the channel of its result.
+type Job = (Checker, Decl, mpsc::Sender<Checked>);
+
+/// The worker threads of `check_with_token` that have no check. Each sender gives a check to one of them. A worker thread puts its sender back before it sends the result of its check, so the next call can use it again.
+static WORKERS: Mutex<Vec<mpsc::Sender<Job>>> = Mutex::new(Vec::new());
+
+/// Makes a worker thread for `check_with_token`, and gives the sender of its checks. The thread stays until the process stops.
+fn start_worker() -> std::io::Result<mpsc::Sender<Job>> {
+    let (jobs, rx) = mpsc::channel::<Job>();
+    let me = jobs.clone();
+    std::thread::Builder::new()
+        .name("rulean-check".to_string())
+        .stack_size(CHECK_STACK_BYTES)
+        .spawn(move || {
+            for (mut chk, d, tx) in rx {
+                let f = chk.add_decl(&d);
+                WORKERS
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(me.clone());
+                // The receiver is gone if the token was set. The result is then not necessary.
+                let _ = tx.send((chk, d, f));
+            }
+        })?;
+    Ok(jobs)
+}
+
+/// Checks `d` on a worker thread and reads the cancel token `tk` on the calling thread until the check stops. The result is `Exc::Interrupted` if the token is set first. The check then continues on its thread until it stops, and the call discards its result. The check uses no Lean object, so it is safe after the call returns. The worker threads stay after a check, so a call makes a new thread only if all the worker threads have a check.
 ///
 /// If the process cannot make a thread, the result is `Exc::Other` with the reason.
 ///
@@ -1841,7 +1871,7 @@ unsafe fn is_set(tk: u64) -> bool {
 ///
 /// `tk` is a live `IO.CancelToken` object during the call.
 unsafe fn check_with_token(
-    mut chk: Checker,
+    chk: Checker,
     d: Decl,
     tk: u64,
 ) -> Result<(Checker, Decl, Option<Fault>), Exc> {
@@ -1850,18 +1880,19 @@ unsafe fn check_with_token(
         return Err(Exc::Interrupted);
     }
     let (tx, rx) = mpsc::channel();
-    let job = std::thread::Builder::new()
-        .name("rulean-check".to_string())
-        .stack_size(CHECK_STACK_BYTES)
-        .spawn(move || {
-            let f = chk.add_decl(&d);
-            // The receiver is gone if the token was set. The result is then not necessary.
-            let _ = tx.send((chk, d, f));
-        });
-    if let Err(e) = job {
-        return Err(Exc::Other(format!(
-            "cannot make the thread of the check: {e}"
-        )));
+    let mut job = (chk, d, tx);
+    loop {
+        let idle = WORKERS.lock().unwrap_or_else(|e| e.into_inner()).pop();
+        let worker = match idle {
+            Some(w) => w,
+            None => start_worker()
+                .map_err(|e| Exc::Other(format!("cannot make the thread of the check: {e}")))?,
+        };
+        match worker.send(job) {
+            Ok(()) => break,
+            // The thread of this sender is gone, so the call gives the check to another thread.
+            Err(mpsc::SendError(j)) => job = j,
+        }
     }
     loop {
         match rx.recv_timeout(POLL) {

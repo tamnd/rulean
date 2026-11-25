@@ -1086,6 +1086,9 @@ fn the_two_kernels_give_the_same_verdicts() {
             &mut dual, elab, &st, cpp_elab, to_kernel, name, d, *check, *want,
         );
     }
+    // The calls of `add_decl` measure their times (spec 09.6.3).
+    let t = rulean_ffi::kernel::timing();
+    assert!(t.decls > 0 && t.check_ns > 0, "{}", t.report());
     // SAFETY: the test owns the environments and the local context.
     unsafe {
         rt.dec(terms.lctx);

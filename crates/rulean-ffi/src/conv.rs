@@ -18,7 +18,7 @@
 //!
 //! A `ConstantInfo` is a constructor with one object field, the value of the constant. The tags are `axiomInfo` 0, `defnInfo` 1, `thmInfo` 2, `opaqueInfo` 3, `quotInfo` 4, `inductInfo` 5, `ctorInfo` 6 and `recInfo` 7. The layouts of the values are the same as in a `.olean` file (spec 07.3).
 
-use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasherDefault, Hasher};
 
 use rulean_core::env::{ConstInfo, ConstKind, CtorInfo, InductInfo, RecInfo, RuleInfo};
 use rulean_format::ndjson::MAX_NAT_BITS;
@@ -129,6 +129,11 @@ impl<'a, H: Heap> Converter<'a, H> {
         Ok(id)
     }
 
+    /// The store of the converter.
+    pub fn store(&self) -> &Store {
+        self.c.st
+    }
+
     fn full(&self, at: u64) -> Result<(), Fault> {
         if self.c.st.is_full() {
             return Err(Fault::new(
@@ -156,6 +161,37 @@ pub struct Local {
     /// The free variable of the store for this declaration.
     pub e: ExprId,
 }
+
+/// A hasher for the keys of the tables of a conversion. A key is the address of an object or the index of a name, so it does not come from an attacker, and the hasher does not resist collisions. The std hasher, SipHash, uses most of the time of the conversion of a large environment. The hasher multiplies the key by an odd constant and folds the high half of the 128-bit product into the low half, so that each bit of the key changes the low bits of the result. The table uses the low bits for the bucket.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct AddrHasher(u64);
+
+impl Hasher for AddrHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u64(u64::from(b));
+        }
+    }
+
+    fn write_u32(&mut self, x: u32) {
+        self.write_u64(u64::from(x));
+    }
+
+    fn write_u64(&mut self, x: u64) {
+        let p = u128::from(self.0 ^ x) * 0x9E37_79B9_7F4A_7C15;
+        self.0 = (p as u64) ^ ((p >> 64) as u64);
+    }
+}
+
+/// A table with the hasher `AddrHasher`.
+type HashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<AddrHasher>>;
+
+/// A set with the hasher `AddrHasher`.
+pub(crate) type HashSet<K> = std::collections::HashSet<K, BuildHasherDefault<AddrHasher>>;
 
 /// The state of one conversion.
 struct Conv<'a, H: Heap> {
@@ -218,12 +254,12 @@ impl<'a, H: Heap> Conv<'a, H> {
         Conv {
             h,
             st,
-            names: HashMap::new(),
-            levels: HashMap::new(),
-            exprs: HashMap::new(),
+            names: HashMap::default(),
+            levels: HashMap::default(),
+            exprs: HashMap::default(),
             fvars: None,
-            skipped: HashMap::new(),
-            lmvars: HashMap::new(),
+            skipped: HashMap::default(),
+            lmvars: HashMap::default(),
             far: None,
             far_projs: Vec::new(),
         }
@@ -710,7 +746,7 @@ impl<'a, H: Heap> Conv<'a, H> {
         // The object fields are `fvarIdToDecl`, `decls` and `auxDeclToFullName`.
         self.ctor(lctx, 0..=0, 3, "LocalContext")?;
         let decls = self.parray(self.object(lctx, 1)?)?;
-        self.fvars = Some(HashMap::new());
+        self.fvars = Some(HashMap::default());
         let mut out: Vec<Local> = Vec::new();
         for f in decls {
             // `Option.none` is the boxed scalar 0, and `Option.some` has the tag 1.
@@ -1237,8 +1273,8 @@ impl<'a, H: Heap> Conv<'a, H> {
 
     /// If the term at `root` has a metavariable, and if it has a free variable. The scan stops at the first metavariable.
     fn scan_vars(&self, root: u64) -> Result<(bool, bool), Fault> {
-        let mut seen = HashSet::new();
-        let mut levels = HashSet::new();
+        let mut seen = HashSet::default();
+        let mut levels = HashSet::default();
         let mut stack = vec![root];
         let mut free = false;
         while let Some(q) = stack.pop() {
@@ -1371,5 +1407,23 @@ impl<'a, H: Heap> Conv<'a, H> {
             ctors,
             recs: Vec::new(),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::hash::Hasher;
+
+    use super::AddrHasher;
+
+    #[test]
+    fn aligned_addresses_use_all_the_low_bits_of_the_hash() {
+        let mut buckets = std::collections::BTreeSet::new();
+        for i in 0..1024u64 {
+            let mut h = AddrHasher::default();
+            h.write_u64(0x1_0000_0000 + 8 * i);
+            buckets.insert(h.finish() & 1023);
+        }
+        assert!(buckets.len() > 600, "{} buckets", buckets.len());
     }
 }

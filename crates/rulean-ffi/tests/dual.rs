@@ -118,6 +118,8 @@ struct Verdicts {
     kernel: bool,
     /// For a rejection, the tags of the `Kernel.Exception` of the C++ kernel and of `Kernel::add_decl`.
     tags: Option<(u64, u64)>,
+    /// For a rejection with a local context, the number of declarations of the context of the C++ kernel and of `Kernel::add_decl`.
+    locals: (Option<u64>, Option<u64>),
     /// For an accepted declaration, the heartbeats of the C++ kernel and of `Kernel::add_decl`.
     beats: Option<(u64, u64)>,
     /// For an accepted declaration, true if the C++ kernel gives `interrupted` with a set cancel token.
@@ -127,6 +129,31 @@ struct Verdicts {
 /// The tag of a `Kernel.Exception`. A constructor without fields is a boxed scalar.
 fn exc_tag(h: &LiveHeap, x: u64) -> u64 {
     if x & 1 == 1 { x >> 1 } else { tag(h, x) as u64 }
+}
+
+/// For a `Kernel.Exception` with a local context (the tags 5 to 10), the number of declarations of the context. The context is the second field.
+fn exc_locals(rt: &Runtime, h: &LiveHeap, x: u64) -> Option<u64> {
+    if !(5..=10).contains(&exc_tag(h, x)) {
+        return None;
+    }
+    // SAFETY: `LocalContext.numIndices` consumes its argument and gives a small `Nat`, so the test gives it a new reference.
+    unsafe {
+        let num = func::<unsafe extern "C" fn(u64) -> u64>(rt, c"lean_local_ctx_num_indices");
+        let lctx = word(h, x + 16);
+        rt.inc(lctx);
+        Some(num(lctx) >> 1)
+    }
+}
+
+/// Requires that two exceptions with the tag `tag` have local contexts that agree. `a` and `b` are the numbers of declarations of the contexts of the C++ kernel and of rulean. The context of rulean must have at least the declarations of the C++ context. The C++ kernel removes the free variables of a binder at the end of its scope, and rulean keeps each free variable of the check, so its context can have more.
+fn same_locals(tag: u64, a: Option<u64>, b: Option<u64>, what: &str) {
+    eprintln!("exception of {what}: tag {tag}, local declarations {a:?} (C++) and {b:?} (rulean)");
+    assert_eq!(
+        a.is_some(),
+        b.is_some(),
+        "one exception of {what} has no local context"
+    );
+    assert!(b >= a, "the local context of rulean is smaller on {what}");
 }
 
 impl Dual<'_> {
@@ -156,6 +183,7 @@ impl Dual<'_> {
         let new_cpp = word(&self.h, r + 8);
         let new_ours = word(&self.h, r2 + 8);
         let mut tags = None;
+        let mut locals = (None, None);
         if cpp && kernel {
             for slot in before + 1..=self.chk.env.len() {
                 let n = self.chk.env.at(slot as u32).name;
@@ -166,6 +194,10 @@ impl Dual<'_> {
             }
         } else if !cpp && !kernel {
             tags = Some((exc_tag(&self.h, new_cpp), exc_tag(&self.h, new_ours)));
+            locals = (
+                exc_locals(self.rt, &self.h, new_cpp),
+                exc_locals(self.rt, &self.h, new_ours),
+            );
         }
         #[cfg(feature = "export")]
         self.same_as_export(d, o, r2, before);
@@ -190,6 +222,7 @@ impl Dual<'_> {
             ours,
             kernel,
             tags,
+            locals,
             beats,
             cancel,
         }
@@ -786,6 +819,35 @@ fn the_two_kernels_give_the_same_verdicts() {
     };
     cases.push(("loop", Decl::Mutual(vec![d]), true));
 
+    // def bad3 : N := N.s Prop gives `appTypeMismatch`.
+    let s_prop = t.app(s, &[p]);
+    let d = t.defn("bad3", n, s_prop, Safety::Safe);
+    cases.push(("bad3", d, false));
+
+    // def bad4 : N.z := N.z gives `typeExpected`.
+    let d = t.defn("bad4", z, z, Safety::Safe);
+    cases.push(("bad4", d, false));
+
+    // def bad5 : N := let x : N := Prop; x gives `letTypeMismatch`.
+    let x_n = t.n("x");
+    let b0 = t.st.mk_bvar(0);
+    let let_v = t.st.mk_let(x_n, n, p, b0);
+    let d = t.defn("bad5", n, let_v, Safety::Safe);
+    cases.push(("bad5", d, false));
+
+    // def bad6 : N → N := fun n => n n gives `funExpected` in a local context with `n`.
+    let nn = t.app(b0, &[b0]);
+    let lam = t.lam("n", n, nn);
+    let n_to_n = t.pi("n", n, n);
+    let d = t.defn("bad6", n_to_n, lam, Safety::Safe);
+    cases.push(("bad6", d, false));
+
+    // def bad7 : N := N.z.1 gives `invalidProj`, because `N` is not a structure.
+    let n_name = t.n("N");
+    let pj = t.st.mk_proj(n_name, 0, z);
+    let d = t.defn("bad7", n, pj, Safety::Safe);
+    cases.push(("bad7", d, false));
+
     let mut same_tags = 0;
     let mut beats = Vec::new();
     let mut interrupted = Vec::new();
@@ -804,16 +866,15 @@ fn the_two_kernels_give_the_same_verdicts() {
             v.kernel, v.cpp,
             "add_decl of rulean and the C++ kernel differ on {what}"
         );
-        // `other` (12) is the exception for the kinds that `Kernel::add_decl` does not map yet.
-        if let Some((a, b)) = v.tags
-            && b != 12
-        {
+        if let Some((a, b)) = v.tags {
             assert_eq!(a, b, "the exceptions differ on {what}");
+            same_locals(a, v.locals.0, v.locals.1, what);
             same_tags += 1;
         }
     }
-    // The duplicate `two`, the theorem `bad` and the axiom `ax` give `alreadyDeclared`, `thmTypeIsNotProp` and `unknownConstant`.
-    assert_eq!(same_tags, 3);
+    // Each rejection gives the exception of the C++ kernel, and none gives `other`.
+    assert_eq!(same_tags, cases.iter().filter(|c| !c.2).count());
+    assert_eq!(same_tags, 10);
     // Each accepted declaration has a count, and most of them need more than one heartbeat, so the search finds a real limit.
     assert_eq!(beats.len(), 8);
     assert!(beats.iter().all(|&(cpp, ours)| ours <= cpp));
@@ -878,6 +939,10 @@ fn the_two_kernels_give_the_same_verdicts() {
     let missing = t.c("Missing");
     let b0 = t.st.mk_bvar(0);
     let id_n = t.lam("n", n, b0);
+    let prop = t.prop();
+    let s_prop = t.app(s, &[prop]);
+    let nn = t.app(b0, &[b0]);
+    let self_app = t.lam("n", n, nn);
     let u_n = t.n("u");
     let u = t.st.level_param(u_n);
     let sort_u = t.st.mk_sort(u);
@@ -901,6 +966,8 @@ fn the_two_kernels_give_the_same_verdicts() {
         ("check (N.z N.z)", Q::Check(z_z), Want::Err),
         ("check (N.s N.z N.z)", Q::Check(szz), Want::Err),
         ("check Missing", Q::Check(missing), Want::Err),
+        ("check (N.s Prop)", Q::Check(s_prop), Want::Err),
+        ("check (fun n => n n)", Q::Check(self_app), Want::Err),
     ];
     // SAFETY: the runtime is Lean v4.36.0.
     let terms = unsafe { Terms::new(&rt, &st, fvars, &locals) };
@@ -908,8 +975,8 @@ fn the_two_kernels_give_the_same_verdicts() {
     for (what, q, want) in &qs {
         same_tags += terms.same(&dual, &st, elab, what, q, *want);
     }
-    // `check Missing` gives `unknownConstant`. The other two rejections give `other` in rulean.
-    assert_eq!(same_tags, 1);
+    // `check Missing` gives `unknownConstant`, the two checks with too many arguments and `check (fun n => n n)` give `funExpected`, and `check (N.s Prop)` gives `appTypeMismatch`.
+    assert_eq!(same_tags, 5);
     // SAFETY: the test owns the environments and the local context.
     unsafe {
         rt.dec(terms.lctx);
@@ -1175,7 +1242,7 @@ impl<'a> Terms<'a> {
         }
     }
 
-    /// Gives the query `q` to the C++ kernel, to `Kernel` and, with the feature `export`, to the exported symbol of rulean. The C++ kernel must give `want`, and the results must be the same. The result is 1 if the two kernels reject with the same exception, and 0 if not.
+    /// Gives the query `q` to the C++ kernel, to `Kernel` and, with the feature `export`, to the exported symbol of rulean. The C++ kernel must give `want`, and the results must be the same. A rejection must give the exception of the C++ kernel. The result is 1 for a rejection, and 0 if not.
     fn same(&self, dual: &Dual, st: &Store, elab: u64, what: &str, q: &Q, want: Want) -> usize {
         let es: Vec<ExprId> = match *q {
             Q::DefEq(a, b) => vec![a, b],
@@ -1261,12 +1328,14 @@ impl<'a> Terms<'a> {
                     same,
                     "rulean ({who}) and the C++ kernel give different results on {what}"
                 );
-            } else if exc_tag(h, v) != 12 {
+            } else {
                 assert_eq!(
                     exc_tag(h, cv),
                     exc_tag(h, v),
                     "the exceptions differ on {what}"
                 );
+                let (a, b) = (exc_locals(self.rt, h, cv), exc_locals(self.rt, h, v));
+                same_locals(exc_tag(h, cv), a, b, what);
                 if who == 1 {
                     same_tag = 1;
                 }

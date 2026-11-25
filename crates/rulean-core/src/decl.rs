@@ -128,7 +128,8 @@ impl Checker {
             return;
         }
         if !self.is_def_eq(val_type, ty) && !self.bad() {
-            self.fail(ErrorKind::DefTypeMismatch, value);
+            let d = self.dummy;
+            self.fail_with(ErrorKind::DefTypeMismatch, value, val_type, d);
         }
     }
 
@@ -569,7 +570,7 @@ impl Checker {
 
     /// Checks one declaration of the stream and adds it to the environment. Then it compares the new primitives with their references (spec 05.8).
     ///
-    /// The terms that the check of an axiom, a definition, a theorem, an opaque constant or a mutual block makes go to the scratch tier of the store, and the call removes them at the end (spec 04.8). These constants keep only input terms in the environment, so no scratch handle stays. An inductive or a quotient declaration adds terms that the checker makes, such as the recursor rules, so it uses the frozen tier. If the fault is at a scratch term, `Fault::at` is the dummy term after the call.
+    /// The terms that the check of an axiom, a definition, a theorem, an opaque constant or a mutual block makes go to the scratch tier of the store, and the call removes them at the end (spec 04.8). These constants keep only input terms in the environment, so no scratch handle stays. An inductive or a quotient declaration adds terms that the checker makes, such as the recursor rules, so it uses the frozen tier. If the fault is at a scratch term, `Fault::at` is the dummy term after the call. With `kernel_api`, the call first copies the terms of the fault and the local context into the frozen tier, so the caller can give them to Lean (spec 09.6.4).
     pub fn add_decl(&mut self, d: &Decl) -> Option<Fault> {
         self.sess_start();
         self.heartbeats = 0;
@@ -605,19 +606,32 @@ impl Checker {
             // Only an axiom, a definition, a theorem, an opaque constant or a mutual block checks in the scratch tier. The other declarations add temporary constants, so their entries are not kept.
             self.sess_commit();
         }
+        let r = if self.kernel_api && self.st.uses_scratch() {
+            match r {
+                Some(f) => Some(self.keep_fault(f)),
+                None => None,
+            }
+        } else {
+            r
+        };
         self.st.clear_scratch();
         match r {
-            Some(f) => {
-                if f.at.tier() == Tier::Scratch {
-                    Some(Fault {
-                        kind: f.kind,
-                        at: self.dummy,
-                    })
-                } else {
-                    Some(f)
-                }
-            }
+            Some(f) => Some(Fault {
+                kind: f.kind,
+                at: self.not_scratch(f.at),
+                ty1: self.not_scratch(f.ty1),
+                ty2: self.not_scratch(f.ty2),
+            }),
             None => None,
+        }
+    }
+
+    /// `e`, or the dummy term if `e` is in the scratch tier.
+    fn not_scratch(&self, e: ExprId) -> ExprId {
+        if e.tier() == Tier::Scratch {
+            self.dummy
+        } else {
+            e
         }
     }
 }

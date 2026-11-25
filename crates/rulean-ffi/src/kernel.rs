@@ -6,7 +6,7 @@
 //!
 //! The kernel keeps the mirror between the calls of a thread (spec 09.6.3). Each constant of the mirror keeps a reference to its `ConstantInfo` object, so the runtime cannot free the object or change it in place, and an object at the same address is the same constant. Each call walks the constants that the check can use and finds each one in the Lean environment. A constant with the same object is not converted again. If a constant that the walk finds is in the mirror and is not the same constant in the Lean environment, or if only the mirror has the quotient, the call makes a new mirror. The checker of the mirror has no session, so the heartbeats of a declaration do not depend on the earlier calls.
 //!
-//! If rulean accepts the declaration, the call adds the new constants to the Lean environment with `lean_environment_add`. If rulean rejects it, the call gives a `Kernel.Exception`. The kinds `unknownConstant`, `alreadyDeclared`, `thmTypeIsNotProp`, `deterministicTimeout`, `excessiveMemory`, `deepRecursion` and `interrupted` have the constructors of the C++ kernel. The other kinds give `other` with a message.
+//! If rulean accepts the declaration, the call adds the new constants to the Lean environment with `lean_environment_add`. If rulean rejects it, the call gives the `Kernel.Exception` constructor of the C++ kernel (spec 09.6.4). The kinds `declHasMVars`, `declHasFVars` and `exprTypeMismatch` give `other` with a message, and so do the errors that the C++ kernel gives as `other`. An exception with a local context has the free variables of the checker. A free variable that the check makes gets the name `_kernel_fresh.N`.
 //!
 //! `max_heartbeat` is the heartbeat limit of the checker (spec 09.6.4). The C++ kernel counts one heartbeat for each call of `infer_type_core`, `whnf_core` and `is_def_eq_core`, and the checker counts one at the same functions. The C++ count is for each thread and starts at 0 at the start of a task, but the count of rulean starts at 0 for each declaration. The term functions have no limit, because the C++ functions use the limit of the thread and Lean does not export it. The recursion limit has no effect yet.
 //!
@@ -28,7 +28,7 @@ use std::time::Duration;
 use rulean_core::env::{ConstInfo, ConstKind};
 use rulean_core::tc::{Checker, ErrorKind, Fault};
 use rulean_format::{Decl, Safety};
-use rulean_store::{Expr, ExprId, NameId, Store};
+use rulean_store::{BinderInfo, Expr, ExprId, NameId, Store};
 
 use crate::conv::{self, Converter};
 use crate::heap::{Heap, boxed};
@@ -59,6 +59,12 @@ enum Out {
 /// The tags of `Kernel.Exception` of Lean v4.36.0.
 const UNKNOWN_CONSTANT: u8 = 0;
 const ALREADY_DECLARED: u8 = 1;
+const DECL_TYPE_MISMATCH: u8 = 2;
+const FUN_EXPECTED: u8 = 5;
+const TYPE_EXPECTED: u8 = 6;
+const LET_TYPE_MISMATCH: u8 = 7;
+const APP_TYPE_MISMATCH: u8 = 9;
+const INVALID_PROJ: u8 = 10;
 const THM_TYPE_IS_NOT_PROP: u8 = 11;
 const OTHER: u8 = 12;
 const DETERMINISTIC_TIMEOUT: u64 = 13;
@@ -77,11 +83,37 @@ enum Exc {
     Unknown(NameId),
     Already(NameId),
     ThmNotProp(NameId, ExprId),
+    /// `declTypeMismatch`: the `Declaration` object of the call, which the call borrows, and the type of the value. The exception takes a new reference to the object.
+    DeclType(u64, ExprId),
+    /// A kind with a local context: the tag, the name of the `let` for `letTypeMismatch`, the terms of the other fields, and the local context of the checker.
+    Lctx {
+        tag: u8,
+        name: Option<NameId>,
+        terms: Vec<ExprId>,
+        locals: Vec<Local>,
+    },
     Timeout,
     Memory,
     DeepRecursion,
     Interrupted,
     Other(String),
+}
+
+/// A free variable of the local context of an exception.
+struct Local {
+    /// The `FVarId`.
+    id: NameId,
+    user: NameId,
+    info: BinderInfo,
+    ty: ExprId,
+    value: Option<ExprId>,
+}
+
+/// A part of an exception that the encoder makes.
+#[derive(Clone, Copy)]
+enum Part {
+    Name(NameId),
+    Term(ExprId),
 }
 
 /// The largest memory of a mirror in bytes. Above it, the next call makes a new mirror, because the store keeps the terms of each declaration.
@@ -239,7 +271,7 @@ impl<'a> Kernel<'a> {
             },
         };
         if let Some(f) = fault {
-            let exc = exception(&chk, &d, f.kind);
+            let exc = exception(&mut chk, &d, f, decl);
             // SAFETY: the caller gives `env`.
             let r = unsafe { self.error(env, &chk.st, exc) };
             // A failed check adds no constant to the Lean environment, so the mirror must not keep one.
@@ -589,7 +621,8 @@ impl<'a> Kernel<'a> {
             TermOp::Check => Out::Expr(chk.check_ignore_undefined_universes(ids[0])),
         };
         if let Some(f) = chk.fault() {
-            let exc = term_exception(&chk, &start, f.kind);
+            let known: Vec<NameId> = locals.iter().map(|l| l.fvar).collect();
+            let exc = term_exception(&mut chk, &start, f, &known);
             // SAFETY: the caller gives `kenv`.
             return unsafe { self.error(kenv, &chk.st, exc) };
         }
@@ -834,6 +867,33 @@ impl<'a> Kernel<'a> {
                     }
                 }
             }
+            Exc::DeclType(decl, given) => {
+                let to = Encoder::new(&mut m, st).expr(given);
+                match to {
+                    Ok(to) => {
+                        m.inc(decl);
+                        with_env(&mut m, DECL_TYPE_MISMATCH, &[decl, to])
+                    }
+                    Err(f) => {
+                        m.dec(env);
+                        let s = m.string(f.to_string().as_bytes());
+                        m.ctor(OTHER, &[s], &[])
+                    }
+                }
+            }
+            Exc::Lctx {
+                tag,
+                name,
+                terms,
+                locals,
+            } => match lctx_fields(&mut m, st, name, &terms, &locals) {
+                Ok(objs) => with_env(&mut m, tag, &objs),
+                Err(msg) => {
+                    m.dec(env);
+                    let s = m.string(msg.as_bytes());
+                    m.ctor(OTHER, &[s], &[])
+                }
+            },
             Exc::Timeout | Exc::Memory | Exc::DeepRecursion | Exc::Interrupted | Exc::Other(_) => {
                 m.dec(env);
                 match x {
@@ -934,8 +994,9 @@ unsafe fn check_with_token(
     }
 }
 
-/// The exception of a rejection of `d` with the kind `kind`.
-fn exception(chk: &Checker, d: &Decl, kind: ErrorKind) -> Exc {
+/// The exception of the fault `f` of the declaration `d`. `decl` is the `Declaration` object of `d`.
+fn exception(chk: &mut Checker, d: &Decl, f: Fault, decl: u64) -> Exc {
+    let kind = f.kind;
     match kind {
         ErrorKind::UnknownConst => {
             let mut names = Vec::new();
@@ -956,15 +1017,22 @@ fn exception(chk: &Checker, d: &Decl, kind: ErrorKind) -> Exc {
             Decl::Thm(t) => Exc::ThmNotProp(t.name, t.ty),
             _ => Exc::Other(message(kind)),
         },
+        // The C++ kernel gives the declaration and the type of the value. `Fault::at` is the value of the declaration. The fault of a `let` has its expected type in `Fault::ty2`.
+        ErrorKind::DefTypeMismatch
+            if f.ty2 == chk.dummy() && f.ty1 != chk.dummy() && decl_values(d).contains(&f.at) =>
+        {
+            Exc::DeclType(decl, f.ty1)
+        }
         ErrorKind::Heartbeat => Exc::Timeout,
         ErrorKind::MemoryLimit => Exc::Memory,
         ErrorKind::DeepRecursion => Exc::DeepRecursion,
-        _ => Exc::Other(message(kind)),
+        _ => lctx_exception(chk, f, &[]).unwrap_or_else(|| Exc::Other(message(kind))),
     }
 }
 
-/// The exception of a term function that fails with the kind `kind`. `terms` are the types and the values of the local context and the terms of the call.
-fn term_exception(chk: &Checker, terms: &[ExprId], kind: ErrorKind) -> Exc {
+/// The exception of a term function that fails with the fault `f`. `terms` are the types and the values of the local context and the terms of the call. `known` is the `FVarId` of each free variable of the local context of the call.
+fn term_exception(chk: &mut Checker, terms: &[ExprId], f: Fault, known: &[NameId]) -> Exc {
+    let kind = f.kind;
     match kind {
         ErrorKind::UnknownConst => {
             let mut names = Vec::new();
@@ -977,8 +1045,112 @@ fn term_exception(chk: &Checker, terms: &[ExprId], kind: ErrorKind) -> Exc {
         ErrorKind::Heartbeat => Exc::Timeout,
         ErrorKind::MemoryLimit => Exc::Memory,
         ErrorKind::DeepRecursion => Exc::DeepRecursion,
-        _ => Exc::Other(message(kind)),
+        _ => lctx_exception(chk, f, known).unwrap_or_else(|| Exc::Other(message(kind))),
     }
+}
+
+/// The exception of a kind with a local context, as the C++ kernel gives it: `typeExpected`, `funExpected`, `appTypeMismatch`, `letTypeMismatch` or `invalidProj`. It is `None` for the other kinds, and if the fault does not have a term that the exception needs. `known` is the `FVarId` of each free variable of the local context of the call.
+fn lctx_exception(chk: &mut Checker, f: Fault, known: &[NameId]) -> Option<Exc> {
+    let (tag, name, terms) = match f.kind {
+        ErrorKind::TypeExpected => (TYPE_EXPECTED, None, vec![f.at]),
+        ErrorKind::FunctionExpected => (FUN_EXPECTED, None, vec![f.at]),
+        ErrorKind::InvalidProj => (INVALID_PROJ, None, vec![f.at]),
+        ErrorKind::AppTypeMismatch => (APP_TYPE_MISMATCH, None, vec![f.at, f.ty1, f.ty2]),
+        // The fault of a `let` is at the `let` term, and it has the type of the value and the expected type.
+        ErrorKind::DefTypeMismatch => match chk.st.node(f.at) {
+            Expr::Let(l) => (LET_TYPE_MISMATCH, Some(l.name), vec![f.ty1, f.ty2]),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    if terms.contains(&chk.dummy()) {
+        return None;
+    }
+    Some(Exc::Lctx {
+        tag,
+        name,
+        terms,
+        locals: local_context(chk, known),
+    })
+}
+
+/// The local context of the checker. The free variables of the levels below `known.len()` have the `FVarId` of `known`. The checker made the other free variables, and they get the names `_kernel_fresh.N`, as the C++ kernel gives them.
+fn local_context(chk: &mut Checker, known: &[NameId]) -> Vec<Local> {
+    let anon = chk.st.anon();
+    let fresh = chk.st.name_str_bytes(anon, b"_kernel_fresh");
+    (0..chk.local_count())
+        .map(|i| {
+            let (user, info, ty, value) = chk.local(i);
+            let id = match known.get(i) {
+                Some(&n) => n,
+                None => chk.st.name_num(fresh, (i - known.len()) as u64),
+            };
+            Local {
+                id,
+                user,
+                info,
+                ty,
+                value,
+            }
+        })
+        .collect()
+}
+
+/// The fields after the environment of an exception with a local context: the `LocalContext` object, the name if there is one, and the terms. The result has new references. If a term cannot be encoded, the result is the message.
+fn lctx_fields(
+    m: &mut LeanMake,
+    st: &Store,
+    name: Option<NameId>,
+    terms: &[ExprId],
+    locals: &[Local],
+) -> Result<Vec<u64>, String> {
+    let mut parts = Vec::new();
+    for l in locals {
+        parts.extend([Part::Name(l.id), Part::Name(l.user), Part::Term(l.ty)]);
+        parts.extend(l.value.map(Part::Term));
+    }
+    parts.extend(name.map(Part::Name));
+    parts.extend(terms.iter().map(|&t| Part::Term(t)));
+    let mut objs = Vec::with_capacity(parts.len());
+    let mut fault = None;
+    {
+        let fvars = locals.iter().map(|l| l.id).collect();
+        let mut enc = Encoder::new(m, st).with_fvars(fvars);
+        for p in parts {
+            match p {
+                Part::Name(n) => objs.push(enc.name(n)),
+                Part::Term(t) => match enc.expr(t) {
+                    Ok(o) => objs.push(o),
+                    Err(f) => {
+                        fault = Some(f.to_string());
+                        break;
+                    }
+                },
+            }
+        }
+    }
+    if let Some(msg) = fault {
+        for o in objs {
+            m.dec(o);
+        }
+        return Err(msg);
+    }
+    let mut it = objs.into_iter();
+    let mut next = || it.next().expect("an object for each part");
+    let mut lctx = m.local_ctx_empty();
+    for l in locals {
+        let (id, user, ty) = (next(), next(), next());
+        lctx = match l.value {
+            Some(_) => {
+                let v = next();
+                m.local_ctx_let(lctx, id, user, ty, v)
+            }
+            None => m.local_ctx_local(lctx, id, user, ty, l.info),
+        };
+    }
+    let mut out = vec![lctx];
+    out.extend(it);
+    Ok(out)
 }
 
 /// The message of `other` for a rejection of the kind `kind`. The elaborator writes `(kernel)` before it.
@@ -1022,6 +1194,17 @@ fn declared_names(chk: &Checker, d: &Decl) -> Vec<NameId> {
             .chain(b.ctors.iter().map(|c| c.name))
             .collect(),
         Decl::Mutual(ds) => ds.iter().map(|x| x.name).collect(),
+    }
+}
+
+/// The values of the definitions, the theorems and the opaque constants of `d`.
+fn decl_values(d: &Decl) -> Vec<ExprId> {
+    match d {
+        Decl::Defn(x) => vec![x.value],
+        Decl::Thm(t) => vec![t.value],
+        Decl::Opaque(o) => vec![o.value],
+        Decl::Mutual(ds) => ds.iter().map(|x| x.value).collect(),
+        Decl::Axiom(_) | Decl::Quot(_) | Decl::Induct(_) => Vec::new(),
     }
 }
 

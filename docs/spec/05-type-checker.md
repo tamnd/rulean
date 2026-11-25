@@ -270,7 +270,7 @@ A resource failure is not a verdict (02.2, P2 exceptions).
 |---|---|---|---|
 | recursion depth | 16 × maxRecDepth (#13956) | explicit stacks in a `Vec`; the limit is memory, by default 1 GiB of stack data per worker | 16 × maxRecDepth on the R-engine call depth |
 | heartbeats | per declaration (#16548); `leanchecker --from-export` sets no limit | none in external mode | rulean counts R-engine steps and reports `resource:heartbeat` at a calibrated bound (09.6) |
-| Nat literal size | 128 MiB | 128 MiB; this is semantics, not a resource limit, so it is never changed | same |
+| Nat literal size | 128 MiB, or the value of `LEAN_NAT_MAX_SIZE` | 128 MiB; this is semantics, not a resource limit, so the CLI never changes it. The in-process kernel reads `LEAN_NAT_MAX_SIZE` as the C++ kernel does (09.6.4) | same |
 | memory | none | `--max-memory`, default 0.8 × physical memory | same |
 | wall time | none | `--timeout`, default none | same |
 

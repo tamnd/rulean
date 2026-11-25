@@ -792,7 +792,7 @@ impl Checker {
         let one = Nat::from_u64(1);
         if base.compare(&one) == core::cmp::Ordering::Greater
             && k != 0
-            && Checker::nat_size(base) > crate::tc::NAT_MAX_BYTES / k
+            && Checker::nat_size(base) > self.nat_max / k
         {
             self.fail(ErrorKind::NatTooLarge, e);
             return None;

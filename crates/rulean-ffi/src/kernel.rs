@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 
 use rulean_core::env::{ConstInfo, ConstKind};
 use rulean_core::expr;
-use rulean_core::tc::{Checker, ErrorKind, Fault};
+use rulean_core::tc::{Checker, ErrorKind, Fault, NAT_MAX_BYTES};
 use rulean_format::{Decl, Safety};
 use rulean_store::{BinderInfo, Expr, ExprId, NameId, Raw, Store};
 
@@ -184,6 +184,7 @@ impl Mirror {
     fn new() -> Mirror {
         let mut chk = Checker::new(Store::new());
         chk.kernel_api = true;
+        chk.nat_max = nat_max();
         chk.sess.on = false;
         Mirror {
             chk,
@@ -313,6 +314,36 @@ static T_IMPORT: AtomicU64 = AtomicU64::new(0);
 static T_CHECK: AtomicU64 = AtomicU64::new(0);
 static T_RESULT: AtomicU64 = AtomicU64::new(0);
 static T_CPP: AtomicU64 = AtomicU64::new(0);
+
+/// The bound in bytes of a `Nat` literal of the in-process kernel. The C++ kernel reads `LEAN_NAT_MAX_SIZE` one time when it starts (`read_nat_size_env`), and rulean reads it one time before the first mirror (spec 09.6.4).
+fn nat_max() -> u64 {
+    static MAX: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *MAX.get_or_init(|| {
+        let v = std::env::var_os("LEAN_NAT_MAX_SIZE");
+        nat_max_size(v.as_ref().map(|v| v.to_str()))
+    })
+}
+
+/// The bound of the value `v` of `LEAN_NAT_MAX_SIZE`, as `read_nat_size_env` reads it with `strtoull` in base 10. `None` is a variable that is not set, and `Some(None)` is a value that is not UTF-8. The value can have white space and a sign before the digits. A negative value wraps, and a value above `u64::MAX` gives `u64::MAX`, as in `strtoull`. A value with no digits, or with a character after the digits, gives the default bound `NAT_MAX_BYTES`.
+pub fn nat_max_size(v: Option<Option<&str>>) -> u64 {
+    let Some(Some(s)) = v else {
+        return NAT_MAX_BYTES;
+    };
+    let t = s.trim_start_matches([' ', '\t', '\n', '\x0b', '\x0c', '\r']);
+    let (neg, d) = match t.as_bytes().first() {
+        Some(b'-') => (true, &t[1..]),
+        Some(b'+') => (false, &t[1..]),
+        _ => (false, t),
+    };
+    if d.is_empty() || !d.bytes().all(|b| b.is_ascii_digit()) {
+        return NAT_MAX_BYTES;
+    }
+    match d.parse::<u64>() {
+        Ok(n) if neg => n.wrapping_neg(),
+        Ok(n) => n,
+        Err(_) => u64::MAX,
+    }
+}
 
 /// The file of the environment variable `RULEAN_DUAL_BEATS`, if it has a path. The dual-kernel build appends a line with the heartbeats of rulean, the heartbeats of the C++ kernel and the name for each declaration that the two kernels accept (`Kernel::dual_add`, spec 09.6.4).
 fn beats_log() -> Option<&'static Mutex<std::fs::File>> {
@@ -2144,6 +2175,7 @@ fn exception(chk: &mut Checker, d: &Decl, f: Fault, decl: u64) -> Exc {
         ErrorKind::UnsafeUse | ErrorKind::PartialUse => {
             Exc::Other(use_message(&chk.st, f).unwrap_or_else(|| message(kind)))
         }
+        ErrorKind::NatTooLarge | ErrorKind::CountTooLarge => Exc::Other(nat_message(&chk.st, f)),
         ErrorKind::BadMutual
         | ErrorKind::BadInductive
         | ErrorKind::NestedPrefix
@@ -2190,6 +2222,7 @@ fn term_exception(
         ErrorKind::UnsafeUse | ErrorKind::PartialUse => {
             Exc::Other(use_message(&chk.st, f).unwrap_or_else(|| message(kind)))
         }
+        ErrorKind::NatTooLarge | ErrorKind::CountTooLarge => Exc::Other(nat_message(&chk.st, f)),
         ErrorKind::Heartbeat => Exc::Timeout,
         ErrorKind::MemoryLimit => Exc::Memory,
         ErrorKind::DeepRecursion => Exc::DeepRecursion,
@@ -2458,6 +2491,26 @@ fn use_message(st: &Store, f: Fault) -> Option<String> {
     Some(format!("{s} '{}'", name_string(st, n)))
 }
 
+/// The message of `other` for a fault of the `Nat` size guard, as the C++ kernel gives it. The guard of `Nat.pow` has its own message. `Fault::at` is the application of the operation, or the literal for the guard of `infer_lit`.
+fn nat_message(st: &Store, f: Fault) -> String {
+    let op = match st.node(expr::app_fn(st, f.at)) {
+        Expr::Const(n, _) => name_string(st, n),
+        _ => String::new(),
+    };
+    let more = "increase the LEAN_NAT_MAX_SIZE environment variable to allow it";
+    if f.kind == ErrorKind::CountTooLarge {
+        format!(
+            "the kernel refused to evaluate `{op}` because its second argument does not fit in a 32-bit unsigned integer"
+        )
+    } else if op == "Nat.pow" {
+        format!(
+            "the kernel refused to evaluate `Nat.pow` because the result would exceed the maximum numeral size; {more}"
+        )
+    } else {
+        format!("the kernel refused a `Nat` numeral because its size exceeds the maximum; {more}")
+    }
+}
+
 /// The message of `other` for a rejection of the kind `kind`. The elaborator writes `(kernel)` before it.
 fn message(kind: ErrorKind) -> String {
     let s = match kind {
@@ -2655,7 +2708,29 @@ fn const_refs(st: &Store, es: &[ExprId], seen: &mut HashSet<Raw>, out: &mut Vec<
 
 #[cfg(test)]
 mod tests {
-    use super::Timing;
+    use super::{NAT_MAX_BYTES, Timing, nat_max_size};
+
+    #[test]
+    fn the_nat_bound_is_read_as_strtoull_reads_it() {
+        let d = NAT_MAX_BYTES;
+        for (v, want) in [
+            (None, d),
+            (Some(None), d),
+            (Some(Some("16")), 16),
+            (Some(Some(" \t+16")), 16),
+            (Some(Some("0")), 0),
+            (Some(Some("-1")), u64::MAX),
+            (Some(Some("99999999999999999999")), u64::MAX),
+            (Some(Some("")), d),
+            (Some(Some("+")), d),
+            (Some(Some("16 ")), d),
+            (Some(Some("16k")), d),
+            (Some(Some("0x10")), d),
+            (Some(Some("+-16")), d),
+        ] {
+            assert_eq!(nat_max_size(v), want, "{v:?}");
+        }
+    }
 
     #[test]
     fn the_timing_line_has_the_percentage_of_the_cpp_kernel() {

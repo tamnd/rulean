@@ -24,7 +24,7 @@ use crate::session::{S_INFER, Session};
 use crate::trace::Trace;
 use crate::value::Arena;
 
-/// The upper bound in bytes of a `Nat` literal (`LEAN_NAT_MAX_SIZE_DEFAULT`). This is semantics and not a resource limit (spec 05.11).
+/// The default upper bound in bytes of a `Nat` literal (`LEAN_NAT_MAX_SIZE_DEFAULT`). This is semantics and not a resource limit (spec 05.11). The in-process kernel can set another bound in `Checker::nat_max` (spec 09.6).
 pub const NAT_MAX_BYTES: u64 = 128 * 1024 * 1024;
 
 /// The default bound of the call depth: 4 times 16 times the default `maxRecDepth` of 512 (spec 05.5 and 05.11).
@@ -402,6 +402,8 @@ pub struct Checker {
     pub(crate) eager: bool,
     pub(crate) depth: u32,
     pub max_depth: u32,
+    /// The upper bound in bytes of a `Nat` literal (`g_nat_max_size`). The default is `NAT_MAX_BYTES`. Only the in-process kernel changes it, to the value of `LEAN_NAT_MAX_SIZE` (spec 09.6).
+    pub nat_max: u64,
     // The memory budget in bytes (`--max-memory`). `usize::MAX` is no budget.
     pub(crate) max_memory: usize,
     // The calls of `enter`. Each `MEMORY_TICKS` calls, `enter` compares the memory with the budget.
@@ -485,6 +487,7 @@ impl Checker {
             eager: false,
             depth: 0,
             max_depth: MAX_DEPTH,
+            nat_max: NAT_MAX_BYTES,
             max_memory: usize::MAX,
             ticks: 0,
             steps: 0,
@@ -967,7 +970,7 @@ impl Checker {
 
     /// Records a fault if the size is above the bound (`check_nat_size`). It gives true if the size is in the bound.
     pub(crate) fn check_nat_size(&mut self, bytes: u64, at: ExprId) -> bool {
-        if bytes > NAT_MAX_BYTES {
+        if bytes > self.nat_max {
             self.fail(ErrorKind::NatTooLarge, at);
             return false;
         }

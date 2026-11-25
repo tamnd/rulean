@@ -345,6 +345,7 @@ impl Checker {
         c.confirm_all = main.confirm_all;
         c.trust_primitives = main.trust_primitives;
         c.max_depth = main.max_depth;
+        c.nat_max = main.nat_max;
         c.max_heartbeat = main.max_heartbeat;
         c.max_rec_depth = main.max_rec_depth;
         c.set_max_memory(main.max_memory);

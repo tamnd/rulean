@@ -114,9 +114,12 @@ impl<'a, H: Heap> Converter<'a, H> {
         self.c.lmvars.values().copied().collect()
     }
 
-    /// The `FVarId` name of each far free variable of the terms, by its number. After `local_context`, `expr` converts a free variable that is not in the local context to the far free variable `rulean_core::expr::far_fvar(st, k)`, where `k` is the index of its name in the result. `Encoder::with_far_fvars` writes each far free variable as its `Expr.fvar` again.
-    pub fn far_fvars(&self) -> Vec<NameId> {
-        self.c.far.clone().unwrap_or_default()
+    /// The far free variables and the far projection indices of the terms. After `local_context`, `expr` converts a free variable that is not in the local context to the far free variable `rulean_core::expr::far_fvar(st, k)`, where `k` is the index of its name in `Far::fvars`. It also converts a projection index of `FAR_PROJ` or more to the index `FAR_PROJ + k`, where `k` is the index of the number in `Far::projs`. `Encoder::with_far` writes each far free variable and each far index as its object again.
+    pub fn far(&self) -> Far {
+        Far {
+            fvars: self.c.far.clone().unwrap_or_default(),
+            projs: self.c.far_projs.clone(),
+        }
     }
 
     /// Converts the `Expr` object at `e`. After `local_context`, a free variable that is not in the local context is a far free variable, see `far_fvars`. Without `local_context`, a free variable is a fault.
@@ -167,8 +170,22 @@ struct Conv<'a, H: Heap> {
     skipped: HashMap<u32, Fault>,
     /// The level metavariables of a term, by the name of their `LMVarId`: the level parameter that stands for the metavariable and the first `Level.mvar` object. See `Converter::level_mvars`.
     lmvars: HashMap<u32, (NameId, u64)>,
-    /// The `FVarId` name of each far free variable of the terms, by its number. `None` before the end of `local_context`. See `Converter::far_fvars`.
+    /// The `FVarId` name of each far free variable of the terms, by its number. `None` before the end of `local_context`. See `Converter::far`.
     far: Option<Vec<NameId>>,
+    /// The far projection indices of the terms, by their number. See `Converter::far`.
+    far_projs: Vec<Nat>,
+}
+
+/// The first far projection index. A structure has fewer fields than this number, so a projection with a far index is always invalid.
+pub const FAR_PROJ: u32 = 1 << 31;
+
+/// The far free variables and the far projection indices of the terms of a call, as `Converter::far` gives them.
+#[derive(Clone, Debug, Default)]
+pub struct Far {
+    /// The `FVarId` name of each far free variable, by its number.
+    pub fvars: Vec<NameId>,
+    /// The number of each far projection index, by its number.
+    pub projs: Vec<Nat>,
 }
 
 fn bad(at: u64, msg: impl Into<String>) -> Fault {
@@ -208,6 +225,7 @@ impl<'a, H: Heap> Conv<'a, H> {
             skipped: HashMap::new(),
             lmvars: HashMap::new(),
             far: None,
+            far_projs: Vec::new(),
         }
     }
 
@@ -384,6 +402,29 @@ impl<'a, H: Heap> Conv<'a, H> {
             Some(x) => Ok(x),
             None => Err(decline(p, "a count or an index does not fit in 32 bits")),
         }
+    }
+
+    /// The index of the projection at `p`. After `local_context`, an index of `FAR_PROJ` or more is a far index, see `Converter::far`. The C++ kernel rejects such a projection, but it keeps the term in `whnf`, so the index must go back to Lean. Without `local_context`, such an index is a decline, because the mirror keeps the constants after the call.
+    fn proj_index(&mut self, p: u64) -> Result<u32, Fault> {
+        let n = self.nat(p, 1)?;
+        if let Some(x) = n.to_u64().filter(|&x| x < u64::from(FAR_PROJ)) {
+            return Ok(x as u32);
+        }
+        if self.far.is_none() {
+            return Err(decline(p, "a count or an index does not fit in 32 bits"));
+        }
+        let k = match self.far_projs.iter().position(|m| *m == n) {
+            Some(k) => k,
+            None => {
+                self.far_projs.push(n);
+                self.far_projs.len() - 1
+            }
+        };
+        u32::try_from(k)
+            .ok()
+            .filter(|&k| k < u32::MAX - FAR_PROJ)
+            .map(|k| FAR_PROJ + k)
+            .ok_or_else(|| decline(p, "a term has too many far projection indices"))
     }
 
     // Lists.
@@ -895,7 +936,7 @@ impl<'a, H: Heap> Conv<'a, H> {
             }
             _ => {
                 let n = self.name(q, 0)?;
-                let i = self.small(q, 1)?;
+                let i = self.proj_index(q)?;
                 let e = self.done_expr(q, 2)?;
                 self.st.mk_proj(n, i, e)
             }

@@ -33,7 +33,7 @@ use rulean_core::tc::{Checker, ErrorKind, Fault};
 use rulean_format::{Decl, Safety};
 use rulean_store::{BinderInfo, Expr, ExprId, NameId, Store};
 
-use crate::conv::{self, Converter};
+use crate::conv::{self, Converter, Far};
 use crate::heap::{Heap, boxed};
 use crate::live::LiveHeap;
 use crate::make::{Encoder, Make};
@@ -99,7 +99,7 @@ const CHECK_STACK_BYTES: usize = 1 << 30;
 const POLL: Duration = Duration::from_millis(1);
 
 /// The level metavariables of a term call, as `Converter::level_mvars` gives them, and the far free variables of the call, as `Converter::far_fvars` gives them.
-type TermVars = (Vec<(NameId, u64)>, Vec<NameId>);
+type TermVars = (Vec<(NameId, u64)>, Far);
 
 /// A rejection, before it is a `Kernel.Exception` object.
 enum Exc {
@@ -952,7 +952,7 @@ impl<'a> Kernel<'a> {
                     .iter()
                     .map(|&t| c.expr(t))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok((locals, ids, c.level_mvars(), c.far_fvars()))
+                Ok((locals, ids, c.level_mvars(), c.far()))
             })
         };
         let (locals, ids, lmvars, far) = match conv {
@@ -1012,7 +1012,7 @@ impl<'a> Kernel<'a> {
                 let mut m = unsafe { LeanMake::new(self.rt) };
                 Encoder::new(&mut m, &chk.st)
                     .with_fvars(fvars)
-                    .with_far_fvars(far)
+                    .with_far(far)
                     .with_level_mvars(&lmvars)
                     .expr(e)
             }
@@ -1418,7 +1418,7 @@ fn exception(chk: &mut Checker, d: &Decl, f: Fault, decl: u64) -> Exc {
         ErrorKind::Heartbeat => Exc::Timeout,
         ErrorKind::MemoryLimit => Exc::Memory,
         ErrorKind::DeepRecursion => Exc::DeepRecursion,
-        _ => lctx_exception(chk, f, &[], None, (&[], &[]))
+        _ => lctx_exception(chk, f, &[], None, (&[], &Far::default()))
             .unwrap_or_else(|| Exc::Other(message(kind))),
     }
 }
@@ -1429,7 +1429,7 @@ fn term_exception(
     terms: &[ExprId],
     f: Fault,
     known: &[NameId],
-    (lctx, lmvars, far): (u64, &[(NameId, u64)], &[NameId]),
+    (lctx, lmvars, far): (u64, &[(NameId, u64)], &Far),
 ) -> Exc {
     let kind = f.kind;
     match kind {
@@ -1455,7 +1455,7 @@ fn lctx_exception(
     f: Fault,
     known: &[NameId],
     lctx: Option<u64>,
-    (lmvars, far): (&[(NameId, u64)], &[NameId]),
+    (lmvars, far): (&[(NameId, u64)], &Far),
 ) -> Option<Exc> {
     let (tag, name, terms) = match f.kind {
         ErrorKind::TypeExpected => (TYPE_EXPECTED, None, vec![f.at]),
@@ -1478,7 +1478,7 @@ fn lctx_exception(
         terms,
         locals: local_context(chk, known),
         base: lctx.map(|o| (o, known.len())),
-        vars: Box::new((lmvars.to_vec(), far.to_vec())),
+        vars: Box::new((lmvars.to_vec(), far.clone())),
     })
 }
 
@@ -1512,7 +1512,7 @@ fn lctx_fields(
     terms: &[ExprId],
     locals: &[Local],
     base: Option<(u64, usize)>,
-    (lmvars, far): (&[(NameId, u64)], &[NameId]),
+    (lmvars, far): (&[(NameId, u64)], &Far),
 ) -> Result<Vec<u64>, String> {
     let skip = base.map_or(0, |(_, n)| n);
     let mut parts = Vec::new();
@@ -1528,7 +1528,7 @@ fn lctx_fields(
         let fvars = locals.iter().map(|l| l.id).collect();
         let mut enc = Encoder::new(m, st)
             .with_fvars(fvars)
-            .with_far_fvars(far.to_vec())
+            .with_far(far.clone())
             .with_level_mvars(lmvars);
         for p in parts {
             match p {

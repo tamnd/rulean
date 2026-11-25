@@ -28,7 +28,7 @@ use std::path::PathBuf;
 use common::qname;
 use rulean_core::env::ConstInfo;
 use rulean_core::tc::Checker;
-use rulean_ffi::conv::{self, Converter};
+use rulean_ffi::conv::{self, Converter, FAR_PROJ, Far};
 use rulean_ffi::heap::{Heap, boxed};
 use rulean_ffi::kernel::Kernel;
 use rulean_ffi::live::LiveHeap;
@@ -37,6 +37,7 @@ use rulean_ffi::rt::{LeanMake, Runtime};
 use rulean_format::{
     Axiom, Ctor, Decl, Defn, Hints, Induct, InductType, Quot, QuotKind, Safety, Thm,
 };
+use rulean_nat::Nat;
 use rulean_store::{BinderInfo, ExprId, NameId, Store};
 
 fn library() -> Option<PathBuf> {
@@ -1032,12 +1033,36 @@ fn the_two_kernels_give_the_same_verdicts() {
         ("check w", Q::Check(w), Want::Err),
         ("check (N.s w)", Q::Check(sw), Want::Err),
     ];
+    // A projection index can be larger than 32 bits. The index 2^32 is the field 0 if it is cut to 32 bits. The C++ kernel rejects `N.z.(2^32)`, but `whnf` keeps it, so rulean must give the same index back.
+    terms.far_projs.push(Nat::from_u64(1 << 32));
+    terms.far_projs.push(Nat::from_u64((1 << 32) + 1));
+    let mut t = T { st: &mut st };
+    let n_name = t.n("N");
+    let z = t.c("N.z");
+    let far0 = t.st.mk_proj(n_name, FAR_PROJ, z);
+    let far1 = t.st.mk_proj(n_name, FAR_PROJ + 1, z);
+    let near = t.st.mk_proj(n_name, 0, z);
+    let ps: Vec<(&str, Q, Want)> = vec![
+        ("whnf N.z.(2^32)", Q::Whnf(far0), Want::Ok),
+        (
+            "N.z.(2^32) = N.z.(2^32)",
+            Q::DefEq(far0, far0),
+            Want::Bool(true),
+        ),
+        (
+            "N.z.(2^32) = N.z.(2^32 + 1)",
+            Q::DefEq(far0, far1),
+            Want::Err,
+        ),
+        ("N.z.(2^32) = N.z.0", Q::DefEq(far0, near), Want::Err),
+        ("check N.z.(2^32)", Q::Check(far0), Want::Err),
+    ];
     let mut same_tags = 0;
-    for (what, q, want) in qs.iter().chain(&hs).chain(&ws) {
+    for (what, q, want) in qs.iter().chain(&hs).chain(&ws).chain(&ps) {
         same_tags += terms.same(&dual, &st, elab, what, q, *want);
     }
-    // `check Missing` gives `unknownConstant`, the two checks with too many arguments and `check (fun n => n n)` give `funExpected`, `check (N.s Prop)` gives `appTypeMismatch`, and the three queries that infer the type of `w` give "unknown free variable".
-    assert_eq!(same_tags, 8);
+    // `check Missing` gives `unknownConstant`, the two checks with too many arguments and `check (fun n => n n)` give `funExpected`, `check (N.s Prop)` gives `appTypeMismatch`, the three queries that infer the type of `w` give "unknown free variable", and `check N.z.(2^32)` and the two queries that compare it with another projection give `invalidProj`.
+    assert_eq!(same_tags, 11);
 
     // The functions that the elaborator calls. `e1` is correct, the value of `e2` has the wrong type, and `e3` is `e2` without the check.
     let mut t = T { st: &mut st };
@@ -1527,6 +1552,8 @@ struct Terms<'a> {
     fvars: Vec<NameId>,
     /// The names of the `FVarId` of the far free variables, by number. These free variables are not in the local context.
     far: Vec<NameId>,
+    /// The numbers of the far projection indices, by number. The store has the index `FAR_PROJ + k` for the number `far_projs[k]`.
+    far_projs: Vec<Nat>,
     /// The `LocalContext` object. The test owns one reference.
     lctx: u64,
     is_def_eq: DefEqFn,
@@ -1571,6 +1598,7 @@ impl<'a> Terms<'a> {
                 rt,
                 fvars,
                 far: Vec::new(),
+                far_projs: Vec::new(),
                 lctx,
                 is_def_eq: func::<DefEqFn>(rt, c"lean_kernel_is_def_eq"),
                 whnf: func::<TermFn>(rt, c"lean_kernel_whnf"),
@@ -1617,7 +1645,10 @@ impl<'a> Terms<'a> {
                 let mut m = unsafe { LeanMake::new(self.rt) };
                 Encoder::new(&mut m, st)
                     .with_fvars(self.fvars.clone())
-                    .with_far_fvars(self.far.clone())
+                    .with_far(Far {
+                        fvars: self.far.clone(),
+                        projs: self.far_projs.clone(),
+                    })
                     .expr(e)
                     .expect("a term")
             })

@@ -199,6 +199,30 @@ impl Dual<'_> {
                 exc_locals(self.rt, &self.h, new_ours),
             );
         }
+        // The comparison of the dual-kernel build (spec 11.3) must find no difference when the verdicts and the constructors are the same. A C++ result that is not the same verdict must be a difference.
+        let agree = cpp == kernel && tags.is_none_or(|(a, b)| a == b);
+        // SAFETY: `o`, `r` and `r2` are live, and `r` and `r2` have a `Kernel.Environment`.
+        let diff = unsafe { self.kernel.compare_add(o, r, r2, false) };
+        assert_eq!(
+            diff.is_none(),
+            agree,
+            "compare_add on {:?}: {diff:?}",
+            d.name()
+        );
+        if kernel {
+            // SAFETY: the maker makes `Except.error (Kernel.Exception.other "x")`, and the test owns it.
+            unsafe {
+                let mut m = LeanMake::new(self.rt);
+                let msg = m.string(b"x");
+                let exc = m.ctor(12, &[msg], &[]);
+                let err = m.ctor(0, &[exc], &[]);
+                assert!(
+                    self.kernel.compare_add(o, err, r2, false).is_some(),
+                    "compare_add accepts an error and a success"
+                );
+                self.rt.dec(err);
+            }
+        }
         #[cfg(feature = "export")]
         self.same_as_export(d, o, r2, before);
         let beats = (cpp && kernel).then(|| self.same_heartbeats(d, o));
@@ -1657,6 +1681,21 @@ impl<'a> Terms<'a> {
                 "rulean ({who}) and the C++ kernel differ on {what}"
             );
             let v = word(h, r + 8);
+            let is_bool = matches!(q, Q::DefEq(..));
+            let diff = dual.kernel.compare_term(cpp, r, is_bool);
+            assert!(diff.is_none(), "compare_term on {what}: {diff:?}");
+            if is_bool && cpp_ok && who == 1 {
+                // SAFETY: the maker makes `Except.ok` with the other `Bool`, and the test owns it.
+                unsafe {
+                    let mut m = LeanMake::new(self.rt);
+                    let flip = m.ctor(1, &[boxed(u64::from(cv != boxed(1)))], &[]);
+                    assert!(
+                        dual.kernel.compare_term(cpp, flip, true).is_some(),
+                        "compare_term accepts two different results on {what}"
+                    );
+                    self.rt.dec(flip);
+                }
+            }
             if cpp_ok {
                 let same = match q {
                     Q::DefEq(..) => v == cv,

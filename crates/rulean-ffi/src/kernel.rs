@@ -54,6 +54,15 @@ enum TermOp {
     Check,
 }
 
+/// The verdict of a kernel function: it accepts, or it gives the `Kernel.Exception` constructor with the tag.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    /// The function gives `Except.ok`.
+    Ok,
+    /// The function gives `Except.error` with the constructor of this tag.
+    Err(u64),
+}
+
 /// The result of a term function, before it is an object.
 enum Out {
     Bool(bool),
@@ -597,6 +606,195 @@ impl<'a> Kernel<'a> {
         };
         // SAFETY: the maker makes `Except.ok e`, and the result owns `e`.
         unsafe { LeanMake::new(self.rt) }.ctor(1, &[e], &[])
+    }
+
+    /// The Lean runtime of the kernel.
+    pub fn runtime(&self) -> &'a Runtime {
+        self.rt
+    }
+
+    /// The verdict of the `Except Kernel.Exception α` object `r`.
+    pub fn verdict(&self, r: u64) -> Verdict {
+        // `Except.error` has the tag 0 and `Except.ok` has the tag 1.
+        if self.word(r) >> 56 == 1 {
+            return Verdict::Ok;
+        }
+        let x = self.field(r, 0);
+        // A constructor of `Kernel.Exception` without fields is a boxed scalar.
+        Verdict::Err(if x & 1 == 1 {
+            x >> 1
+        } else {
+            self.word(x) >> 56
+        })
+    }
+
+    /// Compares two results of an `addDecl` function for the `Declaration` object `decl`, for the dual-kernel build (spec 11.3). `cpp` is the result of the C++ kernel and `ours` is the result of rulean. `elab` is true if the results have a `Lean.Environment`, and false if they have a `Kernel.Environment`. The call borrows its arguments. The result is `None` if the two results agree, or else the difference.
+    ///
+    /// The verdicts must be the same, and two exceptions must have the same constructor. `deterministicTimeout` and `interrupted` of the C++ kernel agree with each result of rulean, because rulean can count fewer heartbeats (deviation D2) and reads the cancel token at other times. `interrupted` of rulean agrees with each result of the C++ kernel for the same reason. For an inductive block, the types, the constructors and the recursors must be the same constants in the two environments. For the other kinds, the two kernels add the objects of the declaration, so the verdicts are sufficient.
+    ///
+    /// # Safety
+    ///
+    /// `decl` is a live `Declaration` object, and `cpp` and `ours` are live `Except` objects of this kind.
+    pub unsafe fn compare_add(&self, decl: u64, cpp: u64, ours: u64, elab: bool) -> Option<String> {
+        let (a, b) = (self.verdict(cpp), self.verdict(ours));
+        if matches!(a, Verdict::Err(DETERMINISTIC_TIMEOUT | INTERRUPTED))
+            || b == Verdict::Err(INTERRUPTED)
+        {
+            return None;
+        }
+        let mut st = Store::new();
+        let d = conv::declaration(&self.h, &mut st, decl).ok();
+        let what = match &d {
+            Some(Decl::Quot(_)) => "the quotient".to_string(),
+            Some(d) => {
+                let names: Vec<String> = decl_names(d)
+                    .iter()
+                    .map(|&n| String::from_utf8_lossy(&st.name_text(n)).into_owned())
+                    .collect();
+                names.join(", ")
+            }
+            None => "a declaration that rulean cannot convert".to_string(),
+        };
+        if a != b {
+            return Some(format!(
+                "{what}: the C++ kernel gives {a:?} and rulean gives {b:?}"
+            ));
+        }
+        let (Verdict::Ok, Some(Decl::Induct(blk))) = (a, &d) else {
+            return None;
+        };
+        // SAFETY: the results are `Except.ok` with an environment, and the call owns the new references.
+        let envs = unsafe {
+            [cpp, ours].map(|r| {
+                let e = self.field(r, 0);
+                self.rt.inc(e);
+                if elab { (self.to_kernel)(e) } else { e }
+            })
+        };
+        let mut names: Vec<NameId> = decl_names(&Decl::Induct(blk.clone()));
+        for t in &blk.types {
+            names.push(st.name_str_bytes(t.name, b"rec"));
+        }
+        // A nested inductive type has the recursors `rec_1`, `rec_2` and so on of the auxiliary types, after the name of the first type.
+        if let Some(first) = blk.types.first() {
+            for i in 1.. {
+                let n = st.name_str_bytes(first.name, format!("rec_{i}").as_bytes());
+                // SAFETY: `envs[0]` is a live environment.
+                match unsafe { self.lookup(envs[0], &st, n) } {
+                    Some(ci) => {
+                        // SAFETY: the call owns `ci`.
+                        unsafe { self.rt.dec(ci) };
+                        names.push(n);
+                    }
+                    None => break,
+                }
+            }
+        }
+        let mut diff = None;
+        for n in names {
+            // SAFETY: the environments are live, and the call owns each `ConstantInfo` object that `lookup` gives.
+            let [x, y] = envs.map(|e| unsafe {
+                self.lookup(e, &st, n).map(|ci| {
+                    let k = Converter::new(&self.h, &mut st)
+                        .constant(ci)
+                        .map_err(|f| f.to_string());
+                    self.rt.dec(ci);
+                    k
+                })
+            });
+            if x != y {
+                let name = String::from_utf8_lossy(&st.name_text(n)).into_owned();
+                diff = Some(format!(
+                    "{what}: the constant {name} is not the same in the two environments"
+                ));
+                break;
+            }
+        }
+        // SAFETY: the call owns the environments.
+        unsafe {
+            for e in envs {
+                self.rt.dec(e);
+            }
+        }
+        diff
+    }
+
+    /// Compares two results of a term function, for the dual-kernel build (spec 11.3). `cpp` is the result of the C++ kernel and `ours` is the result of rulean. `bool` is true for `isDefEq`, which gives a `Bool`. The call borrows its arguments. The result is `None` if the two results agree, or else the difference.
+    ///
+    /// The verdicts must be the same, two exceptions must have the same constructor, and the results of `isDefEq` must be the same. The terms of `whnf` and `check` are not compared, because the results of rulean have no `mdata` (spec 09.6.2). `deterministicTimeout` and `interrupted` of the C++ kernel agree with each result of rulean, because the C++ functions use the heartbeat limit of the thread and rulean has no limit for these functions.
+    pub fn compare_term(&self, cpp: u64, ours: u64, bool: bool) -> Option<String> {
+        let (a, b) = (self.verdict(cpp), self.verdict(ours));
+        if matches!(a, Verdict::Err(DETERMINISTIC_TIMEOUT | INTERRUPTED)) {
+            return None;
+        }
+        if a != b {
+            return Some(format!("the C++ kernel gives {a:?} and rulean gives {b:?}"));
+        }
+        if bool && a == Verdict::Ok && self.field(cpp, 0) != self.field(ours, 0) {
+            let [x, y] = [cpp, ours].map(|r| self.field(r, 0) == boxed(1));
+            return Some(format!("the C++ kernel gives {x} and rulean gives {y}"));
+        }
+        None
+    }
+
+    /// Runs an `addDecl` function of the C++ kernel (`cpp`) and of rulean (`ours`) on `env`, for the dual-kernel build (spec 11.3). The two functions consume the environment, and the call consumes `env`. If the results differ (`compare_add`), the call writes the difference to the standard error and stops the process. Otherwise the result is the result of rulean.
+    ///
+    /// # Safety
+    ///
+    /// `env` is a live environment and `decl` is a live `Declaration` object. `cpp` and `ours` give `Except` objects of the kind that `elab` tells.
+    pub unsafe fn dual_add(
+        &self,
+        env: u64,
+        decl: u64,
+        elab: bool,
+        what: &str,
+        cpp: impl FnOnce(u64) -> u64,
+        ours: impl FnOnce(u64) -> u64,
+    ) -> u64 {
+        // SAFETY: each function consumes a reference to `env`.
+        let a = unsafe {
+            self.rt.inc(env);
+            cpp(env)
+        };
+        let b = ours(env);
+        // SAFETY: the caller gives `decl`, and the results are live.
+        if let Some(r) = unsafe { self.compare_add(decl, a, b, elab) } {
+            eprintln!("rulean dual: {what}: {r}");
+            std::process::abort();
+        }
+        // SAFETY: the call owns `a`, and only the result of rulean goes back.
+        unsafe { self.rt.dec(a) };
+        b
+    }
+
+    /// Runs a term function of the C++ kernel (`cpp`) and of rulean (`ours`) on the objects `args`, for the dual-kernel build (spec 11.3). The two functions consume the objects, and the call consumes them. If the results differ (`compare_term`), the call writes the difference to the standard error and stops the process. Otherwise the result is the result of rulean.
+    ///
+    /// # Safety
+    ///
+    /// `args` are live objects, and `cpp` and `ours` give `Except` objects. `bool` is true if they give `Except Kernel.Exception Bool`.
+    pub unsafe fn dual_term(
+        &self,
+        args: &[u64],
+        bool: bool,
+        what: &str,
+        cpp: impl FnOnce() -> u64,
+        ours: impl FnOnce() -> u64,
+    ) -> u64 {
+        // SAFETY: each function consumes a reference to each object.
+        let a = unsafe {
+            for &o in args {
+                self.rt.inc(o);
+            }
+            cpp()
+        };
+        let b = ours();
+        if let Some(r) = self.compare_term(a, b, bool) {
+            eprintln!("rulean dual: {what}: {r}");
+            std::process::abort();
+        }
+        // SAFETY: the call owns `a`, and only the result of rulean goes back.
+        unsafe { self.rt.dec(a) };
+        b
     }
 
     /// `Lean.Kernel.isDefEq`. The call consumes `env`, `lctx`, `a` and `b`, as `lean_kernel_is_def_eq` does. The result is a new `Except Kernel.Exception Bool` object.
@@ -1317,6 +1515,24 @@ fn declared_names(chk: &Checker, d: &Decl) -> Vec<NameId> {
         Decl::Thm(t) => vec![t.name],
         Decl::Opaque(o) => vec![o.name],
         Decl::Quot(_) => vec![chk.b.quot, chk.b.quot_mk, chk.b.quot_lift, chk.b.quot_ind],
+        Decl::Induct(b) => b
+            .types
+            .iter()
+            .map(|t| t.name)
+            .chain(b.ctors.iter().map(|c| c.name))
+            .collect(),
+        Decl::Mutual(ds) => ds.iter().map(|x| x.name).collect(),
+    }
+}
+
+/// The names of the constants of `d`, without the names that the check makes. The quotient gives no names.
+fn decl_names(d: &Decl) -> Vec<NameId> {
+    match d {
+        Decl::Axiom(a) => vec![a.name],
+        Decl::Defn(x) => vec![x.name],
+        Decl::Thm(t) => vec![t.name],
+        Decl::Opaque(o) => vec![o.name],
+        Decl::Quot(_) => Vec::new(),
         Decl::Induct(b) => b
             .types
             .iter()

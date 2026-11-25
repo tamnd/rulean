@@ -16,6 +16,8 @@ layer = "hardened"
 [features]
 # The exported symbols of spec 09.6.2, for the static library that a build of Lean links.
 export = []
+# The dual-kernel build of spec 11.3. Each exported symbol also calls the C++ function with the suffix `_cpp`, and the process stops if the results differ. The binary must export the `_cpp` functions, as scripts/lean-build.sh --dual makes it.
+dual = ["export"]
 
 [dependencies]
 rulean-core = { path = "../rulean-core" }

@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- `rulean-ffi` gives the texts of the C++ kernel for three more rejections. A use of an unsafe constant gives "invalid declaration, it uses unsafe declaration 'N'", and a use of a partial constant gives "invalid declaration, safe declaration must not contain partial declaration 'N'". A constructor with a return type that is not valid gives "invalid return type for 'C'", and a duplicate constructor name gives "duplicate constructor name 'C'". Before, rulean gave its own text for these rejections, and the tests `elab_fail/2125`, `elab_fail/partialIssue` and `elab_fail/sanitychecks` of the Lean suite gave a different output. For the fault `BadCtor`, `Fault::ty1` of `rulean-core` now has the return type of the constructor if the return type is not valid.
+
 ## [0.0.16] - 2026-11-25
 
 ### Added

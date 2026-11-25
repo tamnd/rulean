@@ -1590,10 +1590,14 @@ fn exception(chk: &mut Checker, d: &Decl, f: Fault, decl: u64) -> Exc {
             Some(n) => Exc::Already(n),
             None => Exc::Other(message(kind)),
         },
+        ErrorKind::UnsafeUse | ErrorKind::PartialUse => {
+            Exc::Other(use_message(&chk.st, f).unwrap_or_else(|| message(kind)))
+        }
         ErrorKind::BadMutual
         | ErrorKind::BadInductive
         | ErrorKind::NestedPrefix
-        | ErrorKind::NonUniformOcc => {
+        | ErrorKind::NonUniformOcc
+        | ErrorKind::BadCtor => {
             Exc::Other(cpp_message(&chk.st, d, f).unwrap_or_else(|| message(kind)))
         }
         ErrorKind::TheoremNotProp => match d {
@@ -1631,6 +1635,9 @@ fn term_exception(
                 Some(n) => Exc::Unknown(n),
                 None => Exc::Other(message(kind)),
             }
+        }
+        ErrorKind::UnsafeUse | ErrorKind::PartialUse => {
+            Exc::Other(use_message(&chk.st, f).unwrap_or_else(|| message(kind)))
         }
         ErrorKind::Heartbeat => Exc::Timeout,
         ErrorKind::MemoryLimit => Exc::Memory,
@@ -1856,6 +1863,23 @@ fn cpp_message(st: &Store, d: &Decl, f: Fault) -> Option<String> {
                 "invalid inductive datatype declaration, incorrect number of parameters".to_string()
             })
         }
+        // `check_constructors` checks the constructors of each inductive type in their order. A duplicate name has the dummy term in `Fault::ty1` and in `Fault::ty2`, and the first duplicate is the name of the fault. Otherwise `Fault::at` is the type of the constructor, and the first constructor with this type has the return type that is not valid.
+        (ErrorKind::BadCtor, Decl::Induct(b)) => {
+            if f.ty1 == f.ty2 {
+                let n = b.types.iter().find_map(|t| {
+                    (1..t.ctors.len())
+                        .find(|&i| t.ctors[..i].contains(&t.ctors[i]))
+                        .map(|i| t.ctors[i])
+                })?;
+                Some(format!(
+                    "duplicate constructor name '{}'",
+                    name_string(st, n)
+                ))
+            } else {
+                let n = b.ctors.iter().find(|c| c.ty == f.at)?.name;
+                Some(format!("invalid return type for '{}'", name_string(st, n)))
+            }
+        }
         // `check_uniform_ind_occs`. `Fault::at` is the occurrence, and its head is the inductive type.
         (ErrorKind::NonUniformOcc, Decl::Induct(_)) => match st.node(expr::app_fn(st, f.at)) {
             Expr::Const(n, _) => Some(format!(
@@ -1866,6 +1890,21 @@ fn cpp_message(st: &Store, d: &Decl, f: Fault) -> Option<String> {
         },
         _ => None,
     }
+}
+
+/// The message of `infer_constant` for a use of an unsafe or partial constant. `Fault::at` is the constant. It is `None` for the other kinds.
+fn use_message(st: &Store, f: Fault) -> Option<String> {
+    let Expr::Const(n, _) = st.node(f.at) else {
+        return None;
+    };
+    let s = match f.kind {
+        ErrorKind::UnsafeUse => "invalid declaration, it uses unsafe declaration",
+        ErrorKind::PartialUse => {
+            "invalid declaration, safe declaration must not contain partial declaration"
+        }
+        _ => return None,
+    };
+    Some(format!("{s} '{}'", name_string(st, n)))
 }
 
 /// The message of `other` for a rejection of the kind `kind`. The elaborator writes `(kernel)` before it.

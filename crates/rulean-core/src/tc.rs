@@ -123,7 +123,7 @@ pub struct Fault {
     pub kind: ErrorKind,
     /// The term where the error was found.
     pub at: ExprId,
-    /// Two types of the error, as the C++ kernel gives them in its exception. For `AppTypeMismatch`, they are the type of the function and the type of the argument. For `DefTypeMismatch`, they are the type of the value and the expected type. The expected type of a declaration is not kept, because the declaration has it. For the other kinds, they are the dummy term.
+    /// Two types of the error, as the C++ kernel gives them in its exception. For `AppTypeMismatch`, they are the type of the function and the type of the argument. For `DefTypeMismatch`, they are the type of the value and the expected type. The expected type of a declaration is not kept, because the declaration has it. For `BadCtor`, `ty1` is the return type of the constructor if the return type is not valid, and the dummy term if the name of the constructor is a duplicate. For the other kinds, they are the dummy term.
     pub ty1: ExprId,
     pub ty2: ExprId,
 }

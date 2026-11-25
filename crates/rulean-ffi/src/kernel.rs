@@ -23,6 +23,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::ffi::CStr;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
@@ -190,6 +191,21 @@ impl Mirror {
     }
 }
 
+/// The mirrors of `add_decl` that the kernels of a process share (spec 09.6.3). A call takes a mirror from the pool, or makes a new mirror if the pool is empty, and gives it back after the call. Thus the process has one mirror for each call that runs at the same time, and not one mirror for each thread. The mirrors of a pool move between threads, so a kernel with a pool marks each `ConstantInfo` object that a mirror keeps as shared between threads (`lean_mark_mt`).
+#[derive(Debug, Default)]
+pub struct MirrorPool {
+    mirrors: Mutex<Vec<Mirror>>,
+}
+
+impl MirrorPool {
+    /// An empty pool.
+    pub const fn new() -> MirrorPool {
+        MirrorPool {
+            mirrors: Mutex::new(Vec::new()),
+        }
+    }
+}
+
 /// The reason that the mirror cannot be used.
 enum Miss {
     /// A constant of the mirror is not the constant of the Lean environment.
@@ -333,8 +349,10 @@ pub struct Kernel<'a> {
     diag_enabled: DiagEnabled,
     record_unfold: RecordUnfold,
     set_diag: SetDiag,
-    /// The mirror of `add_decl`. A call takes it and puts it back.
+    /// The mirror of `add_decl`, if the kernel has no pool. A call takes it and puts it back.
     cache: RefCell<Option<Mirror>>,
+    /// The pool of mirrors that the kernel shares with other kernels (`Kernel::share_mirrors`).
+    pool: Option<&'a MirrorPool>,
     stats: Cell<MirrorStats>,
 }
 
@@ -375,6 +393,7 @@ impl<'a> Kernel<'a> {
                 record_unfold: func(rt, c"lean_kernel_record_unfold")?,
                 set_diag: func(rt, c"lean_kernel_set_diag")?,
                 cache: RefCell::new(None),
+                pool: None,
                 stats: Cell::new(MirrorStats::default()),
             })
         }
@@ -396,7 +415,7 @@ impl<'a> Kernel<'a> {
         cancel: u64,
     ) -> u64 {
         T_DECLS.fetch_add(1, Ordering::Relaxed);
-        let mut m = self.cache.borrow_mut().take().unwrap_or_else(Mirror::new);
+        let mut m = self.take().unwrap_or_else(Mirror::new);
         if m.chk.memory() > MAX_MIRROR_BYTES {
             // SAFETY: the mirror owns its references.
             unsafe { self.release(m) };
@@ -829,6 +848,8 @@ impl<'a> Kernel<'a> {
                 return false;
             };
             let refs = direct_refs(&m.chk.st, k);
+            // SAFETY: `lookup` gives a live object of this thread.
+            unsafe { self.share(ci) };
             if let Some(old) = m.origin.insert(k.name.0, Entry { ci, refs }) {
                 // SAFETY: the mirror owned the reference of the old entry.
                 unsafe { self.rt.dec(old.ci) };
@@ -860,8 +881,37 @@ impl<'a> Kernel<'a> {
         }
     }
 
+    /// Uses the mirrors of `pool` for `add_decl`, and not a mirror of this kernel only. All the kernels of the pool must use the same Lean runtime.
+    pub fn share_mirrors(&mut self, pool: &'a MirrorPool) {
+        self.pool = Some(pool);
+    }
+
+    /// Takes a mirror from the pool, or the mirror of this kernel.
+    fn take(&self) -> Option<Mirror> {
+        match self.pool {
+            Some(p) => p.mirrors.lock().unwrap_or_else(|e| e.into_inner()).pop(),
+            None => self.cache.borrow_mut().take(),
+        }
+    }
+
+    /// Marks `ci` as shared between threads if the kernel has a pool, because a mirror of the pool can give back its reference on another thread.
+    ///
+    /// # Safety
+    ///
+    /// `ci` is a live object of this thread.
+    unsafe fn share(&self, ci: u64) {
+        if self.pool.is_some() {
+            // SAFETY: the contract of the function.
+            unsafe { self.rt.mark_mt(ci) };
+        }
+    }
+
     /// Keeps the mirror `m` for the next call.
     fn put(&self, m: Mirror) {
+        if let Some(p) = self.pool {
+            p.mirrors.lock().unwrap_or_else(|e| e.into_inner()).push(m);
+            return;
+        }
         if let Some(old) = self.cache.replace(Some(m)) {
             // A call takes the mirror first, so no other mirror is there.
             // SAFETY: the mirror owns its references.
@@ -1579,6 +1629,8 @@ impl<'a> Kernel<'a> {
                             refs
                         };
                         chk.env.add(k);
+                        // SAFETY: `ci` is a live object of this thread.
+                        unsafe { self.share(ci) };
                         // The entry keeps the reference of `ci`.
                         if let Some(e) = origin.insert(n.0, Entry { ci, refs }) {
                             old.push(e.ci);

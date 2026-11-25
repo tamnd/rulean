@@ -17,7 +17,7 @@
 use std::cell::OnceCell;
 use std::sync::Once;
 
-use crate::kernel::Kernel;
+use crate::kernel::{Kernel, MirrorPool};
 use crate::rt::Runtime;
 
 /// The types of the C++ functions of the dual-kernel build (spec 11.3).
@@ -81,6 +81,9 @@ fn register_timing() {
     });
 }
 
+/// The mirrors of `add_decl` that the kernels of all the threads share.
+static MIRRORS: MirrorPool = MirrorPool::new();
+
 thread_local! {
     /// The kernel of this thread, or the reason that the process has no Lean runtime.
     static KERNEL: OnceCell<Result<Kernel<'static>, String>> = const { OnceCell::new() };
@@ -99,7 +102,9 @@ unsafe fn with_kernel<R>(f: impl FnOnce(&Kernel<'static>) -> R) -> R {
             let rt = unsafe { Runtime::process() }?;
             let rt: &'static Runtime = Box::leak(Box::new(rt));
             // SAFETY: `rt` is the runtime of Lean v4.36.0, and the callers of the symbols keep their objects alive during the call.
-            unsafe { Kernel::new(rt) }
+            let mut k = unsafe { Kernel::new(rt) }?;
+            k.share_mirrors(&MIRRORS);
+            Ok(k)
         });
         match k {
             Ok(k) => f(k),

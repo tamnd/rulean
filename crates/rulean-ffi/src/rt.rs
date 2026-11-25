@@ -111,6 +111,7 @@ exports! {
     mark_end_initialization: "lean_io_mark_end_initialization" => fn();
     alloc_small_object_core: "lean_alloc_small_object_core" => fn(u32) -> Obj;
     dec_ref_cold: "lean_dec_ref_cold" => fn(Obj);
+    mark_mt: "lean_mark_mt" => fn(Obj);
     mk_string_from_bytes: "lean_mk_string_from_bytes" => fn(*const c_char, usize) -> Obj;
     cstr_to_nat: "lean_cstr_to_nat" => fn(*const c_char) -> Obj;
     name_mk_string: "lean_name_mk_string" => fn(Obj, Obj) -> Obj;
@@ -223,6 +224,19 @@ impl Runtime {
             // SAFETY: this is the call of `lean_dec_ref` for a count of 1 or a thread-shared count.
             unsafe { (self.f.dec_ref_cold)(p) };
         }
+    }
+
+    /// Marks `o` and the objects that it refers to as shared between threads, as `lean_mark_mt` does. After the call, the counts of these objects change with atomic operations, so another thread can take and give back references to them.
+    ///
+    /// # Safety
+    ///
+    /// `o` is a boxed scalar or a live Lean object, and no other thread uses the objects of `o` that are not shared yet.
+    pub unsafe fn mark_mt(&self, o: u64) {
+        if o & 1 == 1 {
+            return;
+        }
+        // SAFETY: `o` is a live object by the contract of the function.
+        unsafe { (self.f.mark_mt)(obj(o)) };
     }
 
     /// Takes one more reference to `o`, as `lean_inc` does.

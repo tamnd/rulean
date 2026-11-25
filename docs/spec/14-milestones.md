@@ -19,6 +19,8 @@ The proof work runs in parallel with the code from M0. Aeneas extraction is gree
 
 Total: about 38 weeks (9 months). The range is 6 to 12 months (15.1, R7).
 
+The exit criteria of M6 have this meaning. The Lean test suite passes if each test gives the output and the exit code of the C++ kernel, or if the difference is a deviation of 05.12. Deviation D2 lets rulean accept a declaration where the official kernel times out, so the test `kernel_maxheartbeats.lean` is not a failure. The conversion overhead is the time of the conversion of the declarations and of the results, as a part of the time of the C++ kernel for the same declarations (09.6.3). The mirror converts the imported constants that the checks use. Its time is measured and given in 09.6.3, but it is not part of this criterion.
+
 ## 14.2 After 1.0
 
 | Milestone | Content |

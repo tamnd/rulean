@@ -878,7 +878,8 @@ impl Checker {
         }
         let r = self.ctor_telescope(s, t);
         if !self.bad() && !self.is_valid_ind_app(s, r, k) {
-            self.fail(ErrorKind::BadCtor, t);
+            let d = self.dummy;
+            self.fail_with(ErrorKind::BadCtor, t, r, d);
         }
     }
 

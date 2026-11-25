@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.0.19] - 2026-11-25
+
 ### Changed
 
 - Each mirror of `rulean-ffi` keeps a cache of the handles of the persistent objects that its conversions made (spec 09.6.3). A persistent object, for example an object of an imported `.olean` file, has the reference count 0, and the runtime does not free it or change it. Thus the next `add_decl` calls use the handle and do not read the object again. The new type `conv::Cache` and the new function `Converter::with_cache` give the cache to a converter. The walk of an expression is now in post order and reads the header of each object one time, and it does not record an object with the count 1. On `tests/elab/treeMap2.lean`, the conversion of the imported constants used 17.2 ms and 17.3 ms in 2 runs, and the build without these changes used 24.0 ms and 25.2 ms. The conversion of the declarations did not change.
@@ -358,7 +360,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.18...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.19...HEAD
+[0.0.19]: https://github.com/tamnd/rulean/compare/v0.0.18...v0.0.19
 [0.0.18]: https://github.com/tamnd/rulean/compare/v0.0.17...v0.0.18
 [0.0.17]: https://github.com/tamnd/rulean/compare/v0.0.16...v0.0.17
 [0.0.16]: https://github.com/tamnd/rulean/compare/v0.0.15...v0.0.16

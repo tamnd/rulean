@@ -8,11 +8,14 @@
 //!
 //! With the feature `dual`, each symbol also calls the C++ function with the suffix `_cpp` and compares the two results (spec 11.3). If they differ, the call writes the difference to the standard error and stops the process. Otherwise the result is the result of rulean. `Kernel::compare_add` and `Kernel::compare_term` tell which results agree.
 //!
+//! If the environment variable `RULEAN_FFI_TIMING` has a path, the process appends the times of `kernel::timing` to the file at the path when it stops, as one line (spec 09.6.3). The line is not written to the standard error, so the output of `lean` does not change.
+//!
 //! This module, `rt`, `live` and `kernel` are the only modules of the crate with `unsafe` code (spec 12).
 
 #![allow(unsafe_code)]
 
 use std::cell::OnceCell;
+use std::sync::Once;
 
 use crate::kernel::Kernel;
 use crate::rt::Runtime;
@@ -47,6 +50,37 @@ unsafe fn cpp<F: Copy>(k: &Kernel<'static>, name: &std::ffi::CStr) -> F {
     }
 }
 
+unsafe extern "C" {
+    /// `atexit` of the C library.
+    fn atexit(f: extern "C" fn()) -> core::ffi::c_int;
+}
+
+/// Appends the line of `kernel::timing` to the file of `RULEAN_FFI_TIMING`. An error is ignored, because the process stops.
+extern "C" fn write_timing() {
+    use std::io::Write;
+    if let Some(path) = std::env::var_os("RULEAN_FFI_TIMING") {
+        let line = crate::kernel::timing().report();
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path);
+        if let Ok(mut f) = file {
+            let _ = writeln!(f, "{line}");
+        }
+    }
+}
+
+/// Registers `write_timing` with `atexit` once, if `RULEAN_FFI_TIMING` is set.
+fn register_timing() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        if std::env::var_os("RULEAN_FFI_TIMING").is_some() {
+            // SAFETY: `write_timing` is a function without arguments that does not unwind, as `atexit` requires.
+            let _ = unsafe { atexit(write_timing) };
+        }
+    });
+}
+
 thread_local! {
     /// The kernel of this thread, or the reason that the process has no Lean runtime.
     static KERNEL: OnceCell<Result<Kernel<'static>, String>> = const { OnceCell::new() };
@@ -60,6 +94,7 @@ thread_local! {
 unsafe fn with_kernel<R>(f: impl FnOnce(&Kernel<'static>) -> R) -> R {
     KERNEL.with(|k| {
         let k = k.get_or_init(|| {
+            register_timing();
             // SAFETY: the contract of the function. The `Runtime` stays on this thread, because the thread-local value owns the `Kernel`.
             let rt = unsafe { Runtime::process() }?;
             let rt: &'static Runtime = Box::leak(Box::new(rt));

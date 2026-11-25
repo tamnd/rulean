@@ -21,19 +21,19 @@
 #![allow(unsafe_code)]
 
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rulean_core::env::{ConstInfo, ConstKind};
 use rulean_core::expr;
 use rulean_core::tc::{Checker, ErrorKind, Fault};
 use rulean_format::{Decl, Safety};
-use rulean_store::{BinderInfo, Expr, ExprId, NameId, Store};
+use rulean_store::{BinderInfo, Expr, ExprId, NameId, Raw, Store};
 
-use crate::conv::{self, Converter, Far};
+use crate::conv::{self, Converter, Far, HashSet};
 use crate::heap::{Heap, boxed};
 use crate::live::LiveHeap;
 use crate::make::{Encoder, Make};
@@ -194,6 +194,91 @@ pub struct MirrorStats {
     pub rebuilds: u64,
 }
 
+/// The times of the `add_decl` calls of all the threads since the start of the process, in nanoseconds (spec 09.6.3). The kernel always measures them, because the cost of a clock read is small in comparison with a call.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Timing {
+    /// The calls of `add_decl`.
+    pub decls: u64,
+    /// The conversion of the `Declaration` objects into the store.
+    pub decl_ns: u64,
+    /// The walk of the constants that the check can use, and the conversion of the constants that the mirror does not have.
+    pub mirror_ns: u64,
+    /// The part of `mirror_ns` that converts the constants that the mirror does not have. For the imported constants, this is once for each thread and each new mirror.
+    pub import_ns: u64,
+    /// The checks of rulean.
+    pub check_ns: u64,
+    /// The objects of the results: the new constants, the diagnostics and the exceptions.
+    pub result_ns: u64,
+    /// The calls of the C++ kernel in the dual-kernel build (`Kernel::dual_add`).
+    pub cpp_ns: u64,
+    /// The constants that the walks of the mirror converted, and the constants that they found in the mirror with the same object.
+    pub converted: u64,
+    pub reused: u64,
+}
+
+impl Timing {
+    /// One line with the times in milliseconds. If the C++ kernel has a time, the line also has the conversion of the declarations and of the results as a percentage of the time of the C++ kernel, the same percentage with the walk of the mirror, and the same percentage with all of the mirror.
+    pub fn report(&self) -> String {
+        let ms = |ns: u64| ns as f64 / 1e6;
+        let mut r = format!(
+            "rulean-ffi timing: {} declarations, declarations {:.1} ms, mirror {:.1} ms (conversion {:.1} ms, {} converted, {} reused), check {:.1} ms, results {:.1} ms, C++ kernel {:.1} ms",
+            self.decls,
+            ms(self.decl_ns),
+            ms(self.mirror_ns),
+            ms(self.import_ns),
+            self.converted,
+            self.reused,
+            ms(self.check_ns),
+            ms(self.result_ns),
+            ms(self.cpp_ns)
+        );
+        if self.cpp_ns > 0 {
+            let conv = (self.decl_ns + self.result_ns) as f64;
+            let walk = self.mirror_ns.saturating_sub(self.import_ns) as f64;
+            let pct = |x: f64| 100.0 * x / self.cpp_ns as f64;
+            r.push_str(&format!(
+                ", conversion {:.1}% of the C++ kernel, {:.1}% with the walk, {:.1}% with the mirror",
+                pct(conv),
+                pct(conv + walk),
+                pct(conv + self.mirror_ns as f64)
+            ));
+        }
+        r
+    }
+}
+
+static T_DECLS: AtomicU64 = AtomicU64::new(0);
+static T_DECL: AtomicU64 = AtomicU64::new(0);
+static T_MIRROR: AtomicU64 = AtomicU64::new(0);
+static T_IMPORT: AtomicU64 = AtomicU64::new(0);
+static T_CHECK: AtomicU64 = AtomicU64::new(0);
+static T_RESULT: AtomicU64 = AtomicU64::new(0);
+static T_CPP: AtomicU64 = AtomicU64::new(0);
+static T_CONVERTED: AtomicU64 = AtomicU64::new(0);
+static T_REUSED: AtomicU64 = AtomicU64::new(0);
+
+/// Adds the time since `t` to the counter `c`.
+fn add_time(c: &AtomicU64, t: Instant) {
+    let ns = u64::try_from(t.elapsed().as_nanos()).unwrap_or(u64::MAX);
+    c.fetch_add(ns, Ordering::Relaxed);
+}
+
+/// The times of the `add_decl` calls of all the threads since the start of the process.
+pub fn timing() -> Timing {
+    let get = |c: &AtomicU64| c.load(Ordering::Relaxed);
+    Timing {
+        decls: get(&T_DECLS),
+        decl_ns: get(&T_DECL),
+        mirror_ns: get(&T_MIRROR),
+        import_ns: get(&T_IMPORT),
+        check_ns: get(&T_CHECK),
+        result_ns: get(&T_RESULT),
+        cpp_ns: get(&T_CPP),
+        converted: get(&T_CONVERTED),
+        reused: get(&T_REUSED),
+    }
+}
+
 /// The in-process kernel on a Lean runtime.
 #[derive(Debug)]
 pub struct Kernel<'a> {
@@ -271,6 +356,7 @@ impl<'a> Kernel<'a> {
         decl: u64,
         cancel: u64,
     ) -> u64 {
+        T_DECLS.fetch_add(1, Ordering::Relaxed);
         let mut m = self.cache.borrow_mut().take().unwrap_or_else(Mirror::new);
         if m.chk.memory() > MAX_MIRROR_BYTES {
             // SAFETY: the mirror owns its references.
@@ -295,8 +381,9 @@ impl<'a> Kernel<'a> {
         m.chk.clear_diag();
         let Mirror { chk, mut origin } = m;
         let before = chk.env.len();
+        let t = Instant::now();
         // SAFETY: the caller gives `cancel`, and the call borrows it.
-        let (mut chk, d, fault) = match unsafe { token(cancel) } {
+        let (chk, d, fault) = match unsafe { token(cancel) } {
             None => {
                 let mut chk = chk;
                 let f = chk.add_decl(&d);
@@ -317,6 +404,27 @@ impl<'a> Kernel<'a> {
                 }
             },
         };
+        add_time(&T_CHECK, t);
+        let t = Instant::now();
+        // SAFETY: the caller gives `env` and `decl`, and the call owns `diag`.
+        let r = unsafe { self.finish(env, chk, origin, (d, fault), (before, decl, diag)) };
+        add_time(&T_RESULT, t);
+        r
+    }
+
+    /// The end of `add_decl` after the check: the exception, or the new environment with the new constants and the diagnostics. The call consumes `env` and `diag`, and puts the mirror back if it can be used again.
+    ///
+    /// # Safety
+    ///
+    /// `env` is a live `Kernel.Environment` object and `decl` is a live `Declaration` object. `diag` is an owned `Kernel.Diagnostics` object, if any.
+    unsafe fn finish(
+        &self,
+        env: u64,
+        mut chk: Checker,
+        origin: BTreeMap<u32, Entry>,
+        (d, fault): (Decl, Option<Fault>),
+        (before, decl, diag): (usize, u64, Option<u64>),
+    ) -> u64 {
         if let Some(f) = fault {
             let exc = exception(&mut chk, &d, f, decl);
             // SAFETY: the caller gives `env`, and the call owns `diag`.
@@ -428,11 +536,16 @@ impl<'a> Kernel<'a> {
     /// `env` is a live `Kernel.Environment` object and `decl` is a live `Declaration` object. The call does not consume them.
     unsafe fn convert_and_mirror(&self, env: u64, m: &mut Mirror, decl: u64) -> Result<Decl, Exc> {
         for _ in 0..2 {
-            let d = conv::declaration(&self.h, &mut m.chk.st, decl)
-                .map_err(|f| self.conversion_exception(decl, f))?;
+            let t = Instant::now();
+            let d = conv::declaration(&self.h, &mut m.chk.st, decl);
+            add_time(&T_DECL, t);
+            let d = d.map_err(|f| self.conversion_exception(decl, f))?;
             let names = declared_names(&m.chk, &d);
+            let t = Instant::now();
             // SAFETY: the caller gives `env`.
-            match unsafe { self.mirror_from(env, m, names, &decl_terms(&d)) } {
+            let mirrored = unsafe { self.mirror_from(env, m, names, &decl_terms(&d)) };
+            add_time(&T_MIRROR, t);
+            match mirrored {
                 Ok(()) => return Ok(d),
                 Err(Miss::Fault(msg)) => return Err(Exc::Other(msg)),
                 Err(Miss::Stale) => {
@@ -842,11 +955,13 @@ impl<'a> Kernel<'a> {
         cpp: impl FnOnce(u64) -> u64,
         ours: impl FnOnce(u64) -> u64,
     ) -> u64 {
+        let t = Instant::now();
         // SAFETY: each function consumes a reference to `env`.
         let a = unsafe {
             self.rt.inc(env);
             cpp(env)
         };
+        add_time(&T_CPP, t);
         let b = ours(env);
         // SAFETY: the caller gives `decl`, and the results are live.
         if let Some(r) = unsafe { self.compare_add(decl, a, b, elab) } {
@@ -1080,6 +1195,16 @@ impl<'a> Kernel<'a> {
             let mut m = unsafe { LeanMake::new(self.rt) };
             Encoder::new(&mut m, st).name(n)
         };
+        // SAFETY: the caller gives `env`, and the call owns `name`.
+        unsafe { self.find(env, name) }
+    }
+
+    /// The `ConstantInfo` object of the constant with the `Name` object `name` in `env`, as a new reference, or `None`. The call consumes `name`.
+    ///
+    /// # Safety
+    ///
+    /// `env` is a live `Kernel.Environment` object, and the call owns a reference to the live `Name` object `name`. The call does not consume `env`.
+    unsafe fn find(&self, env: u64, name: u64) -> Option<u64> {
         // SAFETY: `find?` consumes the environment and the name, so the call gives it a new reference to the environment. The result is an `Option ConstantInfo` that the call owns.
         unsafe {
             self.rt.inc(env);
@@ -1123,7 +1248,7 @@ impl<'a> Kernel<'a> {
     ) -> Result<(), Miss> {
         let Mirror { chk, origin } = m;
         let mut queue = names;
-        const_refs(&chk.st, terms, &mut BTreeSet::new(), &mut queue);
+        const_refs(&chk.st, terms, &mut HashSet::default(), &mut queue);
         let b = &chk.b;
         queue.extend([
             b.nat,
@@ -1150,16 +1275,29 @@ impl<'a> Kernel<'a> {
         ]);
         queue.extend(b.pin_names.iter().copied());
         let ops = b.nat_ops.clone();
-        const_refs(&chk.st, &ops, &mut BTreeSet::new(), &mut queue);
+        const_refs(&chk.st, &ops, &mut HashSet::default(), &mut queue);
         let mut stats = self.stats.get();
-        let mut seen = BTreeSet::new();
+        let start = stats;
+        let mut seen = HashSet::default();
+        // One converter for the walk, so that the constants share the tables of the conversion. The objects of the tables stay alive while the converter exists, because each converted constant keeps its reference in `origin`, and an error ends the walk.
+        let mut conv = Converter::new(&self.h, &mut chk.st);
         while let Some(n) = queue.pop() {
-            if !seen.insert(n) {
+            if !seen.insert(n.0) {
                 continue;
             }
-            // SAFETY: the caller gives `env`.
-            let ci = unsafe { self.lookup(env, &chk.st, n) };
-            match (ci, origin.get(&n.0)) {
+            let e = origin.get(&n.0);
+            // SAFETY: the caller gives `env`. The `ConstantInfo` object of an entry is live, because the entry keeps a reference to it. Its first field is the value of the constant, and the first field of the value is its `ConstantVal`, with the `Name` object of the constant. The call gives `find` a new reference to the name. This lookup does not make a new `Name` object, so it costs less than `lookup`.
+            let ci = unsafe {
+                match e {
+                    Some(e) => {
+                        let name = self.field(self.field(self.field(e.ci, 0), 0), 0);
+                        self.rt.inc(name);
+                        self.find(env, name)
+                    }
+                    None => self.lookup(env, conv.store(), n),
+                }
+            };
+            match (ci, e) {
                 (None, None) => {
                     if chk.env.contains(n) {
                         return Err(Miss::Stale);
@@ -1182,7 +1320,10 @@ impl<'a> Kernel<'a> {
                         unsafe { self.rt.dec(ci) };
                         return Err(Miss::Stale);
                     }
-                    let k = match Converter::new(&self.h, &mut chk.st).constant(ci) {
+                    let t = Instant::now();
+                    let k = conv.constant(ci);
+                    add_time(&T_IMPORT, t);
+                    let k = match k {
                         Ok(k) => k,
                         Err(f) => {
                             // SAFETY: the call owns `ci`.
@@ -1190,7 +1331,7 @@ impl<'a> Kernel<'a> {
                             return Err(Miss::Fault(f.to_string()));
                         }
                     };
-                    let refs = direct_refs(&chk.st, &k);
+                    let refs = direct_refs(conv.store(), &k);
                     queue.extend_from_slice(&refs);
                     chk.env.add(k);
                     // The entry keeps the reference of `ci`.
@@ -1200,6 +1341,8 @@ impl<'a> Kernel<'a> {
             }
         }
         self.stats.set(stats);
+        T_CONVERTED.fetch_add(stats.converted - start.converted, Ordering::Relaxed);
+        T_REUSED.fetch_add(stats.reused - start.reused, Ordering::Relaxed);
         // SAFETY: `quot_init` consumes the environment, so the call gives it a new reference.
         let init = unsafe {
             self.rt.inc(env);
@@ -1391,7 +1534,7 @@ fn exception(chk: &mut Checker, d: &Decl, f: Fault, decl: u64) -> Exc {
     match kind {
         ErrorKind::UnknownConst => {
             let mut names = Vec::new();
-            const_refs(&chk.st, &decl_terms(d), &mut BTreeSet::new(), &mut names);
+            const_refs(&chk.st, &decl_terms(d), &mut HashSet::default(), &mut names);
             match names.into_iter().find(|&n| !chk.env.contains(n)) {
                 Some(n) => Exc::Unknown(n),
                 None => Exc::Other(message(kind)),
@@ -1437,7 +1580,7 @@ fn term_exception(
     match kind {
         ErrorKind::UnknownConst => {
             let mut names = Vec::new();
-            const_refs(&chk.st, terms, &mut BTreeSet::new(), &mut names);
+            const_refs(&chk.st, terms, &mut HashSet::default(), &mut names);
             match names.into_iter().find(|&n| !chk.env.contains(n)) {
                 Some(n) => Exc::Unknown(n),
                 None => Exc::Other(message(kind)),
@@ -1788,14 +1931,14 @@ fn all_of(d: &Decl, n: NameId) -> Vec<NameId> {
 /// The constants that the constant `k` refers to, each one time.
 fn direct_refs(st: &Store, k: &ConstInfo) -> Vec<NameId> {
     let mut out = Vec::new();
-    const_info_refs(st, k, &mut BTreeSet::new(), &mut out);
+    const_info_refs(st, k, &mut HashSet::default(), &mut out);
     out.sort_by_key(|n| n.0);
     out.dedup();
     out
 }
 
 /// Pushes the names of the constants that `k` refers to.
-fn const_info_refs(st: &Store, k: &ConstInfo, seen: &mut BTreeSet<ExprId>, out: &mut Vec<NameId>) {
+fn const_info_refs(st: &Store, k: &ConstInfo, seen: &mut HashSet<Raw>, out: &mut Vec<NameId>) {
     let mut es = vec![k.ty];
     match &k.kind {
         ConstKind::Defn { value, .. } | ConstKind::Thm { value } | ConstKind::Opaque { value } => {
@@ -1819,10 +1962,10 @@ fn const_info_refs(st: &Store, k: &ConstInfo, seen: &mut BTreeSet<ExprId>, out: 
 }
 
 /// Pushes the names of the constants and the projection structures in the terms `es`. A term in `seen` is not visited again.
-fn const_refs(st: &Store, es: &[ExprId], seen: &mut BTreeSet<ExprId>, out: &mut Vec<NameId>) {
+fn const_refs(st: &Store, es: &[ExprId], seen: &mut HashSet<Raw>, out: &mut Vec<NameId>) {
     let mut stack: Vec<ExprId> = es.to_vec();
     while let Some(e) = stack.pop() {
-        if !seen.insert(e) {
+        if !seen.insert(e.0) {
             continue;
         }
         match st.node(e) {
@@ -1837,5 +1980,31 @@ fn const_refs(st: &Store, es: &[ExprId], seen: &mut BTreeSet<ExprId>, out: &mut 
             Expr::FVar(_, ty) => stack.push(ty),
             Expr::BVar(_) | Expr::Sort(_) | Expr::Lit(_) => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Timing;
+
+    #[test]
+    fn the_timing_line_has_the_percentage_of_the_cpp_kernel() {
+        let t = Timing {
+            decls: 3,
+            decl_ns: 1_000_000,
+            mirror_ns: 4_000_000,
+            import_ns: 3_000_000,
+            check_ns: 7_000_000,
+            result_ns: 1_000_000,
+            cpp_ns: 20_000_000,
+            converted: 5,
+            reused: 9,
+        };
+        assert_eq!(
+            t.report(),
+            "rulean-ffi timing: 3 declarations, declarations 1.0 ms, mirror 4.0 ms (conversion 3.0 ms, 5 converted, 9 reused), check 7.0 ms, results 1.0 ms, C++ kernel 20.0 ms, conversion 10.0% of the C++ kernel, 15.0% with the walk, 30.0% with the mirror"
+        );
+        let t = Timing { cpp_ns: 0, ..t };
+        assert!(!t.report().contains('%'));
     }
 }

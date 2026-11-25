@@ -176,6 +176,8 @@ struct Mirror {
     origin: BTreeMap<u32, Entry>,
     /// The constants that the checker knows by name, from the last walk. The checker reads some of them only one time, for example a pin, so the mirror does not replace or remove them.
     fixed: HashSet<u32>,
+    /// The count of the names of `MirrorPool::missed` that a walk of this mirror had in its queue.
+    hot: usize,
 }
 
 impl Mirror {
@@ -187,6 +189,7 @@ impl Mirror {
             chk,
             origin: BTreeMap::new(),
             fixed: HashSet::default(),
+            hot: 0,
         }
     }
 }
@@ -195,6 +198,8 @@ impl Mirror {
 #[derive(Debug, Default)]
 pub struct MirrorPool {
     mirrors: Mutex<Vec<Mirror>>,
+    /// The `Name` objects of the constants that a check of a mirror looked up and that the mirror did not have, in the order of the first lookup. The walk of `add_decl` starts also from each name that the mirror did not have in its queue before, so that the other mirrors do not run a check again for the same name. The pool keeps a reference to each name and does not give it back.
+    missed: Mutex<Vec<u64>>,
 }
 
 impl MirrorPool {
@@ -202,6 +207,7 @@ impl MirrorPool {
     pub const fn new() -> MirrorPool {
         MirrorPool {
             mirrors: Mutex::new(Vec::new()),
+            missed: Mutex::new(Vec::new()),
         }
     }
 }
@@ -464,7 +470,12 @@ impl<'a> Kernel<'a> {
             let held = m.chk.st.name_count();
             m.chk.env.record_start(held);
             let before = m.chk.env.len();
-            let Mirror { chk, origin, fixed } = m;
+            let Mirror {
+                chk,
+                origin,
+                fixed,
+                hot,
+            } = m;
             let t = Instant::now();
             // SAFETY: the caller gives `cancel`, and the call borrows it.
             let (mut chk, dd, fault) = match unsafe { token(cancel) } {
@@ -497,7 +508,12 @@ impl<'a> Kernel<'a> {
                 chk.env.mark_known(*n);
             }
             d = dd;
-            m = Mirror { chk, origin, fixed };
+            m = Mirror {
+                chk,
+                origin,
+                fixed,
+                hot,
+            };
             let t = Instant::now();
             // SAFETY: the caller gives `env`.
             let stale =
@@ -539,6 +555,16 @@ impl<'a> Kernel<'a> {
                 continue;
             }
             let was = self.stats.get();
+            // The names that the mirror did not have before the walk.
+            let new: Vec<NameId> = if missed && self.pool.is_some() {
+                stale
+                    .iter()
+                    .filter(|n| !m.origin.contains_key(&n.0))
+                    .copied()
+                    .collect()
+            } else {
+                Vec::new()
+            };
             // SAFETY: the caller gives `env`.
             let walked = unsafe { self.walk(env, &mut m, stale, true) };
             add_time(&T_MIRROR, t);
@@ -553,7 +579,7 @@ impl<'a> Kernel<'a> {
                 w => w,
             };
             match walked {
-                Ok(()) => {}
+                Ok(()) => self.note_missed(&m, &new),
                 Err(Miss::Fault(msg)) => {
                     // SAFETY: the call owns `diag`, and the caller gives `env`.
                     let r = unsafe {
@@ -600,10 +626,24 @@ impl<'a> Kernel<'a> {
                 }
             }
         };
-        let Mirror { chk, origin, fixed } = m;
+        let Mirror {
+            chk,
+            origin,
+            fixed,
+            hot,
+        } = m;
         let t = Instant::now();
         // SAFETY: the caller gives `env` and `decl`, and the call owns `diag`.
-        let r = unsafe { self.finish(env, chk, origin, fixed, (d, fault), (before, decl, diag)) };
+        let r = unsafe {
+            self.finish(
+                env,
+                chk,
+                origin,
+                (fixed, hot),
+                (d, fault),
+                (before, decl, diag),
+            )
+        };
         add_time(&T_RESULT, t);
         r
     }
@@ -618,7 +658,7 @@ impl<'a> Kernel<'a> {
         env: u64,
         mut chk: Checker,
         origin: BTreeMap<u32, Entry>,
-        fixed: HashSet<u32>,
+        (fixed, hot): (HashSet<u32>, usize),
         (d, fault): (Decl, Option<Fault>),
         (before, decl, diag): (usize, u64, Option<u64>),
     ) -> u64 {
@@ -631,12 +671,22 @@ impl<'a> Kernel<'a> {
             };
             // A failed check adds no constant to the Lean environment, so the mirror must not keep one.
             chk.env.truncate(before);
-            self.put(Mirror { chk, origin, fixed });
+            self.put(Mirror {
+                chk,
+                origin,
+                fixed,
+                hot,
+            });
             return r;
         }
         // SAFETY: the caller gives `env` and `decl`.
         let r = unsafe { self.add_new(env, &chk, &d, before, decl) };
-        let m = Mirror { chk, origin, fixed };
+        let m = Mirror {
+            chk,
+            origin,
+            fixed,
+            hot,
+        };
         match r {
             Ok(e) => {
                 let mut m = m;
@@ -932,6 +982,51 @@ impl<'a> Kernel<'a> {
             // SAFETY: the mirror owns its references.
             unsafe { self.release(old) };
         }
+    }
+
+    /// Puts the `Name` objects of the constants `names` of the mirror in `MirrorPool::missed`, if the kernel has a pool and the list does not have the object. The object is shared between threads, because `share` marked its `ConstantInfo` object.
+    fn note_missed(&self, m: &Mirror, names: &[NameId]) {
+        let Some(p) = self.pool else {
+            return;
+        };
+        if names.is_empty() {
+            return;
+        }
+        let mut list = p.missed.lock().unwrap_or_else(|e| e.into_inner());
+        for n in names {
+            if let Some(e) = m.origin.get(&n.0) {
+                // The field of `walk`.
+                let name = self.field(self.field(self.field(e.ci, 0), 0), 0);
+                if !list.contains(&name) {
+                    // SAFETY: the entry keeps the `ConstantInfo` object alive, and the object has the name. The list keeps the new reference.
+                    unsafe { self.rt.inc(name) };
+                    list.push(name);
+                }
+            }
+        }
+    }
+
+    /// Puts the names of `MirrorPool::missed` that a walk of `m` did not have in its queue in `queue`.
+    fn add_missed(&self, m: &mut Mirror, queue: &mut Vec<NameId>) -> Result<(), Miss> {
+        let Some(p) = self.pool else {
+            return Ok(());
+        };
+        let names: Vec<u64> = {
+            let list = p.missed.lock().unwrap_or_else(|e| e.into_inner());
+            if m.hot >= list.len() {
+                return Ok(());
+            }
+            let v = list[m.hot..].to_vec();
+            m.hot = list.len();
+            v
+        };
+        // The list keeps the names alive while the converter exists.
+        let mut conv = Converter::new(&self.h, &mut m.chk.st);
+        for o in names {
+            let n = conv.name(o).map_err(|f| Miss::Fault(f.to_string()))?;
+            queue.push(n);
+        }
+        Ok(())
     }
 
     /// The counts of the mirror of this kernel since it was made.
@@ -1478,8 +1573,11 @@ impl<'a> Kernel<'a> {
         lazy: bool,
     ) -> Result<(), Miss> {
         m.chk.env.known_reset();
-        let chk = &m.chk;
         let mut queue = names;
+        if lazy {
+            self.add_missed(m, &mut queue)?;
+        }
+        let chk = &m.chk;
         const_refs(&chk.st, terms, &mut HashSet::default(), &mut queue);
         let first = queue.len();
         let b = &chk.b;
@@ -1539,7 +1637,9 @@ impl<'a> Kernel<'a> {
         mut queue: Vec<NameId>,
         lazy: bool,
     ) -> Result<(), Miss> {
-        let Mirror { chk, origin, fixed } = m;
+        let Mirror {
+            chk, origin, fixed, ..
+        } = m;
         let mut stats = self.stats.get();
         let start = stats;
         let mut seen = HashSet::default();

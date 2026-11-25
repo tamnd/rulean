@@ -36,4 +36,9 @@ impl Heap for LiveHeap {
         }
         true
     }
+
+    /// The Lean runtime counts each reference to an object that is not persistent and not shared between threads. A persistent object has the count 0 and a shared object has a negative count.
+    fn exact_counts(&self) -> bool {
+        true
+    }
 }

@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- Each mirror of `rulean-ffi` keeps a cache of the handles of the persistent objects that its conversions made (spec 09.6.3). A persistent object, for example an object of an imported `.olean` file, has the reference count 0, and the runtime does not free it or change it. Thus the next `add_decl` calls use the handle and do not read the object again. The new type `conv::Cache` and the new function `Converter::with_cache` give the cache to a converter. The walk of an expression is now in post order and reads the header of each object one time, and it does not record an object with the count 1. On `tests/elab/treeMap2.lean`, the conversion of the imported constants used 17.2 ms and 17.3 ms in 2 runs, and the build without these changes used 24.0 ms and 25.2 ms. The conversion of the declarations did not change.
+
 ### Added
 
 - The manual workflow `mathlib` builds Mathlib v4.36.0 from its source with the dual-kernel build on Linux (spec 11.3.1). The new script `scripts/mathlib-build.sh` runs `lake build Mathlib` with a time limit, and the workflow continues the build in up to 6 parts, because one CI job has a limit of 6 hours. Each lean process stops if the two kernels give different results, so a build with no error shows that Mathlib builds with rulean as its kernel.

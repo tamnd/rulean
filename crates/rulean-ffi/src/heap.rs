@@ -23,11 +23,20 @@ pub mod tag {
 pub trait Heap {
     /// Copies the bytes at address `addr` into `out`. It gives false if the bytes cannot be read.
     fn read(&self, addr: u64, out: &mut [u8]) -> bool;
+
+    /// True if the reference count of each object is the true count of the references to it. Then the conversion does not record an object with the count 1, because no other field points to it. `OwnedHeap` gives false, because a test can point two fields to one object with the count 1.
+    fn exact_counts(&self) -> bool {
+        false
+    }
 }
 
 impl<T: Heap + ?Sized> Heap for &T {
     fn read(&self, addr: u64, out: &mut [u8]) -> bool {
         (**self).read(addr, out)
+    }
+
+    fn exact_counts(&self) -> bool {
+        (**self).exact_counts()
     }
 }
 

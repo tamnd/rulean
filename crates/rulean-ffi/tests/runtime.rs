@@ -16,7 +16,7 @@ use std::ffi::{CStr, c_void};
 use std::path::PathBuf;
 
 use common::{qname, sample};
-use rulean_ffi::conv::Converter;
+use rulean_ffi::conv::{Cache, Converter};
 use rulean_ffi::heap::Heap;
 use rulean_ffi::live::LiveHeap;
 use rulean_ffi::make::Encoder;
@@ -148,6 +148,52 @@ fn terms_made_with_the_lean_runtime() {
     unsafe {
         rt.dec(a);
         rt.dec(b);
+    }
+
+    // The cache of a store keeps the handles of the persistent objects, and only of these objects (spec 09.6.3).
+    // SAFETY: this is the type of the Lean function of v4.36.0.
+    let mark_persistent =
+        unsafe { func::<unsafe extern "C" fn(u64)>(&rt, c"lean_mark_persistent") };
+    let p = make();
+    let q = make();
+    // SAFETY: `p` is a live object of this thread. The call gives each object of `p` the count 0, so the runtime does not free it.
+    unsafe { mark_persistent(p) };
+    assert_eq!(rc(&h, p), 0);
+    let mut cache = Cache::default();
+    let got = Converter::with_cache(&h, &mut st, &mut cache).expr(p);
+    assert_eq!(got.expect("a term"), lam);
+    let n = cache.len();
+    assert!(n > 0, "the cache has the objects of `p`");
+    let got = Converter::with_cache(&h, &mut st, &mut cache).expr(q);
+    assert_eq!(got.expect("a term"), lam);
+    assert_eq!(cache.len(), n, "the objects of `q` are not persistent");
+    let got = Converter::with_cache(&h, &mut st, &mut cache).expr(p);
+    assert_eq!(got.expect("a term"), lam);
+    assert_eq!(cache.len(), n);
+    // With the scratch tier, the converter does not use the cache, and it leaves the cache as it is.
+    st.set_scratch(true);
+    let got = Converter::with_cache(&h, &mut st, &mut cache).expr(p);
+    assert_eq!(got.expect("a term"), lam);
+    assert_eq!(cache.len(), n);
+    st.clear_scratch();
+    // A local context turns the cache off, and the converter does not change the cache.
+    let lctx = {
+        // SAFETY: this is the type of the Lean function of v4.36.0.
+        let mk =
+            unsafe { func::<unsafe extern "C" fn(u64) -> u64>(&rt, c"lean_mk_empty_local_ctx") };
+        // SAFETY: the argument is a boxed unit.
+        unsafe { mk(1) }
+    };
+    {
+        let mut c = Converter::with_cache(&h, &mut st, &mut cache);
+        c.local_context(lctx).expect("a local context");
+        assert_eq!(c.expr(p).expect("a term"), lam);
+    }
+    assert_eq!(cache.len(), n);
+    // SAFETY: the test owns `q` and `lctx`, and does not use them again.
+    unsafe {
+        rt.dec(q);
+        rt.dec(lctx);
     }
 
     // A deep term goes to Lean and is freed without a stack overflow.

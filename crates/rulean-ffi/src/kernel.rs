@@ -33,7 +33,7 @@ use rulean_core::tc::{Checker, ErrorKind, Fault};
 use rulean_format::{Decl, Safety};
 use rulean_store::{BinderInfo, Expr, ExprId, NameId, Raw, Store};
 
-use crate::conv::{self, Converter, Far, HashSet};
+use crate::conv::{self, Converter, Far, HashMap, HashSet};
 use crate::heap::{Heap, boxed};
 use crate::live::LiveHeap;
 use crate::make::{Encoder, Make};
@@ -149,7 +149,19 @@ enum Part {
 /// The largest memory of a mirror in bytes. Above it, the next call makes a new mirror, because the store keeps the terms of each declaration.
 const MAX_MIRROR_BYTES: usize = 2 << 30;
 
-/// A constant of the mirror: the `ConstantInfo` object of the Lean environment and the constants that it refers to. The entry owns one reference to the object, so the runtime cannot free the object or change it in place. Thus an object at the same address is the same constant.
+/// The heartbeat limit of the first pass of `add_decl`, if the limit of the call is not smaller. A pass can see a constant that the mirror does not have yet, or a stale constant. Then the check can take a long path, or a path that does not stop, before it gives a result. If a pass stops at its limit and all its lookups agree with the Lean environment, the next pass has a limit that is `PASS_GROWTH` times larger, but not larger than the limit of the call.
+const PASS_HEARTBEATS: u64 = 1_000_000;
+
+/// The factor of the heartbeat limit of a pass after a pass that stopped at its limit with lookups that agree.
+const PASS_GROWTH: u64 = 10;
+
+/// The number of steps that a lazy walk goes from the names of the declaration and from the names of the lookups that did not agree. A conversion of a constant costs much less than a pass of the check, so the walk converts some constants that the check does not use. In the smoke test of `lean-build`, 3 steps gave less time than 1, 2 or 4 steps.
+const PRELOAD_DEPTH: u32 = 3;
+
+/// The largest number of passes of one `add_decl` call. Each pass changes the mirror, marks a new name as known, or has a larger heartbeat limit, so this is a guard only.
+const MAX_PASSES: u32 = 10_000;
+
+/// A constant of the mirror: the `ConstantInfo` object of the Lean environment and the constants that it refers to. The mirror of `add_decl` loads a constant only when a check looks it up, so its entries do not keep the constants that they refer to. The entry owns one reference to the object, so the runtime cannot free the object or change it in place. Thus an object at the same address is the same constant.
 #[derive(Debug)]
 struct Entry {
     ci: u64,
@@ -161,6 +173,8 @@ struct Entry {
 struct Mirror {
     chk: Checker,
     origin: BTreeMap<u32, Entry>,
+    /// The constants that the checker knows by name, from the last walk. The checker reads some of them only one time, for example a pin, so the mirror does not replace or remove them.
+    fixed: HashSet<u32>,
 }
 
 impl Mirror {
@@ -171,6 +185,7 @@ impl Mirror {
         Mirror {
             chk,
             origin: BTreeMap::new(),
+            fixed: HashSet::default(),
         }
     }
 }
@@ -196,6 +211,8 @@ pub struct MirrorStats {
     pub replaced: u64,
     /// The constants of the mirror that the Lean environment did not have, and that the mirror removed.
     pub removed: u64,
+    /// The checks that ran again, because a lookup of the check before did not agree with the Lean environment.
+    pub rechecks: u64,
 }
 
 /// The times of the `add_decl` calls of all the threads since the start of the process, in nanoseconds (spec 09.6.3). The kernel always measures them, because the cost of a clock read is small in comparison with a call.
@@ -215,13 +232,15 @@ pub struct Timing {
     pub result_ns: u64,
     /// The calls of the C++ kernel in the dual-kernel build (`Kernel::dual_add`).
     pub cpp_ns: u64,
-    /// The constants that the walks of the mirror converted, and the constants that they found in the mirror with the same object.
+    /// The constants that the walks of `add_decl` converted, and the constants that they found in the mirror with the same object. The walks of the term functions are not in these counts.
     pub converted: u64,
     pub reused: u64,
     /// The constants that the walks of the mirror replaced or removed, and the new mirrors after a stale constant. See `MirrorStats`.
     pub replaced: u64,
     pub removed: u64,
     pub rebuilds: u64,
+    /// The checks that ran again. See `MirrorStats`.
+    pub rechecks: u64,
 }
 
 impl Timing {
@@ -229,7 +248,7 @@ impl Timing {
     pub fn report(&self) -> String {
         let ms = |ns: u64| ns as f64 / 1e6;
         let mut r = format!(
-            "rulean-ffi timing: {} declarations, declarations {:.1} ms, mirror {:.1} ms (conversion {:.1} ms, {} converted, {} reused, {} replaced, {} removed, {} rebuilds), check {:.1} ms, results {:.1} ms, C++ kernel {:.1} ms",
+            "rulean-ffi timing: {} declarations, declarations {:.1} ms, mirror {:.1} ms (conversion {:.1} ms, {} converted, {} reused, {} replaced, {} removed, {} rebuilds), check {:.1} ms ({} rechecks), results {:.1} ms, C++ kernel {:.1} ms",
             self.decls,
             ms(self.decl_ns),
             ms(self.mirror_ns),
@@ -240,6 +259,7 @@ impl Timing {
             self.removed,
             self.rebuilds,
             ms(self.check_ns),
+            self.rechecks,
             ms(self.result_ns),
             ms(self.cpp_ns)
         );
@@ -270,6 +290,7 @@ static T_REUSED: AtomicU64 = AtomicU64::new(0);
 static T_REPLACED: AtomicU64 = AtomicU64::new(0);
 static T_REMOVED: AtomicU64 = AtomicU64::new(0);
 static T_REBUILDS: AtomicU64 = AtomicU64::new(0);
+static T_RECHECKS: AtomicU64 = AtomicU64::new(0);
 
 /// Adds the time since `t` to the counter `c`.
 fn add_time(c: &AtomicU64, t: Instant) {
@@ -293,6 +314,7 @@ pub fn timing() -> Timing {
         replaced: get(&T_REPLACED),
         removed: get(&T_REMOVED),
         rebuilds: get(&T_REBUILDS),
+        rechecks: get(&T_RECHECKS),
     }
 }
 
@@ -390,42 +412,164 @@ impl<'a> Kernel<'a> {
                 return r;
             }
         };
-        // `convert_and_mirror` can make a new mirror with the default limit, so the call sets the limit after it.
-        m.chk.max_heartbeat = max_heartbeat as u64;
-        m.chk.max_rec_depth = max_rec_depth as u64;
         // SAFETY: the caller gives `env`.
         let diag = unsafe { self.diag_of(env) };
-        m.chk.diag_on = diag.is_some();
-        m.chk.clear_diag();
-        let Mirror { chk, mut origin } = m;
-        let before = chk.env.len();
-        let t = Instant::now();
-        // SAFETY: the caller gives `cancel`, and the call borrows it.
-        let (chk, d, fault) = match unsafe { token(cancel) } {
-            None => {
-                let mut chk = chk;
-                let f = chk.add_decl(&d);
-                (chk, d, f)
-            }
-            // SAFETY: the caller gives `env` and `cancel`.
-            Some(tk) => match unsafe { check_with_token(chk, d, tk) } {
-                Ok(r) => r,
-                Err(x) => {
-                    // The checker of the mirror is on the thread of the check, so the call drops the mirror.
-                    // SAFETY: the mirror owns the references of `origin`, and the call owns `diag`.
-                    unsafe {
-                        self.release_origin(&mut origin);
-                        self.drop_diag(diag);
-                    }
-                    // SAFETY: the caller gives `env`. The exception has no `Store` objects, so an empty `Store` is sufficient.
-                    return unsafe { self.error(env, &Store::new(), x) };
-                }
-            },
+        let mut d = d;
+        // The heartbeat limit of the call, with `u64::MAX` for no limit, and the limit of the next pass.
+        let cap = if max_heartbeat == 0 {
+            u64::MAX
+        } else {
+            max_heartbeat as u64
         };
-        add_time(&T_CHECK, t);
+        let mut budget = PASS_HEARTBEATS;
+        let mut rebuilt = false;
+        let mut passes = 0;
+        let (m, before, fault) = loop {
+            // `convert_and_mirror` can make a new mirror with the default limit, so the call sets the limit after it.
+            let limit = budget.min(cap);
+            m.chk.max_heartbeat = if limit == u64::MAX { 0 } else { limit };
+            m.chk.max_rec_depth = max_rec_depth as u64;
+            m.chk.diag_on = diag.is_some();
+            m.chk.clear_diag();
+            let held = m.chk.st.name_count();
+            m.chk.env.record_start(held);
+            let before = m.chk.env.len();
+            let Mirror { chk, origin, fixed } = m;
+            let t = Instant::now();
+            // SAFETY: the caller gives `cancel`, and the call borrows it.
+            let (mut chk, dd, fault) = match unsafe { token(cancel) } {
+                None => {
+                    let mut chk = chk;
+                    let f = chk.add_decl(&d);
+                    (chk, d, f)
+                }
+                // SAFETY: the caller gives `env` and `cancel`.
+                Some(tk) => match unsafe { check_with_token(chk, d, tk) } {
+                    Ok(r) => r,
+                    Err(x) => {
+                        let mut origin = origin;
+                        // The checker of the mirror is on the thread of the check, so the call drops the mirror.
+                        // SAFETY: the mirror owns the references of `origin`, and the call owns `diag`.
+                        unsafe {
+                            self.release_origin(&mut origin);
+                            self.drop_diag(diag);
+                        }
+                        // SAFETY: the caller gives `env`. The exception has no `Store` objects, so an empty `Store` is sufficient.
+                        return unsafe { self.error(env, &Store::new(), x) };
+                    }
+                },
+            };
+            add_time(&T_CHECK, t);
+            chk.env.record_stop();
+            let (looked, over) = chk.env.take_record();
+            // A name of `looked` agrees with `env`, or the walk below makes it agree.
+            for n in &looked {
+                chk.env.mark_known(*n);
+            }
+            d = dd;
+            m = Mirror { chk, origin, fixed };
+            let t = Instant::now();
+            // SAFETY: the caller gives `env`.
+            let stale =
+                unsafe { self.stale_lookups(env, &m, looked, over.then_some(held), before) };
+            let timeout = matches!(&fault, Some(f) if f.kind == ErrorKind::Heartbeat);
+            let missed = matches!(&fault, Some(f) if f.kind == ErrorKind::Missed);
+            passes += 1;
+            if passes > MAX_PASSES {
+                // SAFETY: the call owns `diag`, and the caller gives `env`.
+                let r = unsafe {
+                    self.drop_diag(diag);
+                    let x = Exc::Other("rulean: the check of the mirror did not stop".to_string());
+                    self.error(env, &m.chk.st, x)
+                };
+                self.put(m);
+                return r;
+            }
+            if stale.is_empty() && !missed && !(timeout && limit < cap) {
+                add_time(&T_MIRROR, t);
+                break (m, before, fault);
+            }
+            T_RECHECKS.fetch_add(1, Ordering::Relaxed);
+            self.stats.set(MirrorStats {
+                rechecks: self.stats.get().rechecks + 1,
+                ..self.stats.get()
+            });
+            // The check runs again on the environment of the mirror before the pass.
+            m.chk.env.truncate(before);
+            if stale.is_empty() {
+                // A lookup with no constant stopped the check, and now its name is known. Or the limit of the pass stopped the check, but the limit of the call is larger.
+                if !missed {
+                    budget = budget.saturating_mul(PASS_GROWTH);
+                }
+                add_time(&T_MIRROR, t);
+                continue;
+            }
+            let was = self.stats.get();
+            // SAFETY: the caller gives `env`.
+            let walked = unsafe { self.walk(env, &mut m, stale, true) };
+            add_time(&T_MIRROR, t);
+            let now = self.stats.get();
+            let changed = (now.converted, now.replaced, now.removed)
+                != (was.converted, was.replaced, was.removed);
+            let walked = match walked {
+                // A walk that changes no constant gives the same pass again.
+                Ok(()) if !changed => Err(Miss::Fault(
+                    "rulean: the mirror does not agree with the Lean environment".to_string(),
+                )),
+                w => w,
+            };
+            match walked {
+                Ok(()) => {}
+                Err(Miss::Fault(msg)) => {
+                    // SAFETY: the call owns `diag`, and the caller gives `env`.
+                    let r = unsafe {
+                        self.drop_diag(diag);
+                        self.error(env, &m.chk.st, Exc::Other(msg))
+                    };
+                    self.put(m);
+                    return r;
+                }
+                Err(Miss::Stale) if !rebuilt => {
+                    rebuilt = true;
+                    T_REBUILDS.fetch_add(1, Ordering::Relaxed);
+                    self.stats.set(MirrorStats {
+                        rebuilds: self.stats.get().rebuilds + 1,
+                        ..self.stats.get()
+                    });
+                    let old = std::mem::replace(&mut m, Mirror::new());
+                    // SAFETY: the mirror owns its references.
+                    unsafe { self.release(old) };
+                    // SAFETY: the caller gives `env` and `decl`.
+                    let conv = unsafe { self.convert_and_mirror(env, &mut m, decl) };
+                    d = match conv {
+                        Ok(d) => d,
+                        Err(x) => {
+                            // SAFETY: the call owns `diag`, and the caller gives `env`.
+                            let r = unsafe {
+                                self.drop_diag(diag);
+                                self.error(env, &m.chk.st, x)
+                            };
+                            self.put(m);
+                            return r;
+                        }
+                    };
+                }
+                Err(Miss::Stale) => {
+                    let x = Exc::Other("rulean: the new mirror is stale".to_string());
+                    // SAFETY: the call owns `diag`, and the caller gives `env`.
+                    let r = unsafe {
+                        self.drop_diag(diag);
+                        self.error(env, &m.chk.st, x)
+                    };
+                    self.put(m);
+                    return r;
+                }
+            }
+        };
+        let Mirror { chk, origin, fixed } = m;
         let t = Instant::now();
         // SAFETY: the caller gives `env` and `decl`, and the call owns `diag`.
-        let r = unsafe { self.finish(env, chk, origin, (d, fault), (before, decl, diag)) };
+        let r = unsafe { self.finish(env, chk, origin, fixed, (d, fault), (before, decl, diag)) };
         add_time(&T_RESULT, t);
         r
     }
@@ -440,6 +584,7 @@ impl<'a> Kernel<'a> {
         env: u64,
         mut chk: Checker,
         origin: BTreeMap<u32, Entry>,
+        fixed: HashSet<u32>,
         (d, fault): (Decl, Option<Fault>),
         (before, decl, diag): (usize, u64, Option<u64>),
     ) -> u64 {
@@ -452,12 +597,12 @@ impl<'a> Kernel<'a> {
             };
             // A failed check adds no constant to the Lean environment, so the mirror must not keep one.
             chk.env.truncate(before);
-            self.put(Mirror { chk, origin });
+            self.put(Mirror { chk, origin, fixed });
             return r;
         }
         // SAFETY: the caller gives `env` and `decl`.
         let r = unsafe { self.add_new(env, &chk, &d, before, decl) };
-        let m = Mirror { chk, origin };
+        let m = Mirror { chk, origin, fixed };
         match r {
             Ok(e) => {
                 let mut m = m;
@@ -561,7 +706,7 @@ impl<'a> Kernel<'a> {
             let names = walk_names(&mut m.chk, &d);
             let t = Instant::now();
             // SAFETY: the caller gives `env`.
-            let mirrored = unsafe { self.mirror_from(env, m, names, &decl_terms(&d)) };
+            let mirrored = unsafe { self.mirror_from(env, m, names, &decl_terms(&d), true) };
             add_time(&T_MIRROR, t);
             match mirrored {
                 Ok(()) => return Ok(d),
@@ -1103,11 +1248,12 @@ impl<'a> Kernel<'a> {
         }
         start.extend_from_slice(&ids);
         // SAFETY: the caller gives `kenv`.
-        let mirrored = unsafe { self.mirror_from(kenv, &mut m, Vec::new(), &start) };
+        let mirrored = unsafe { self.mirror_from(kenv, &mut m, Vec::new(), &start, false) };
         // The term functions do not keep the mirror.
         let Mirror {
             mut chk,
             mut origin,
+            ..
         } = m;
         // SAFETY: the map owns its references.
         unsafe { self.release_origin(&mut origin) };
@@ -1251,9 +1397,9 @@ impl<'a> Kernel<'a> {
         u64::from_le_bytes(b)
     }
 
-    /// Adds to the mirror each constant of `env` that a check can use when it starts with the constants `names` and the terms `terms`, without a check. A constant that the mirror has with the same object is not converted again. If the mirror has a constant with a different object, the walk converts the object of `env` and replaces the constant. If only the mirror has a constant, the walk removes it. The result is `Miss::Stale` if one of these constants is a constant that the checker knows by name, if the environment of the checker has a constant without an origin, or if only the mirror has the quotient.
+    /// Makes the mirror agree with `env` for the constants `names`, the constants of the terms `terms`, and the constants that the checker knows by name. A constant that the mirror has with the same object is not converted again. If the mirror has a constant with a different object, the walk converts the object of `env` and replaces the constant. If only the mirror has a constant, the walk removes it. The result is `Miss::Stale` if one of these constants is a constant that the checker knows by name, if the environment of the checker has a constant without an origin, or if only the mirror has the quotient.
     ///
-    /// The walk finds each constant that the check can use, so a constant of the mirror that the walk does not find has no effect on the check.
+    /// With `lazy`, the walk goes only `PRELOAD_DEPTH` steps further, as `walk` tells. `add_decl` uses this, and loads each other constant when a check looks it up (`stale_lookups`). The call makes all the names not known (`Env::known_reset`), and the walk marks each name that it finds as known. Without `lazy`, the walk goes to each constant that the check can use, so a constant of the mirror that the walk does not find has no effect on the check. The term functions use this.
     ///
     /// # Safety
     ///
@@ -1264,8 +1410,10 @@ impl<'a> Kernel<'a> {
         m: &mut Mirror,
         names: Vec<NameId>,
         terms: &[ExprId],
+        lazy: bool,
     ) -> Result<(), Miss> {
-        let Mirror { chk, origin } = m;
+        m.chk.env.known_reset();
+        let chk = &m.chk;
         let mut queue = names;
         const_refs(&chk.st, terms, &mut HashSet::default(), &mut queue);
         let first = queue.len();
@@ -1296,11 +1444,46 @@ impl<'a> Kernel<'a> {
         queue.extend(b.pin_names.iter().copied());
         let ops = b.nat_ops.clone();
         const_refs(&chk.st, &ops, &mut HashSet::default(), &mut queue);
-        // The constants that the checker knows by name. The checker reads some of them only one time, for example a pin, so the mirror does not replace or remove them.
-        let fixed: HashSet<u32> = queue[first..].iter().map(|n| n.0).collect();
+        m.fixed = queue[first..].iter().map(|n| n.0).collect();
+        // SAFETY: the caller gives `env`.
+        unsafe { self.walk(env, m, queue, lazy) }?;
+        let chk = &mut m.chk;
+        // SAFETY: `quot_init` consumes the environment, so the call gives it a new reference.
+        let init = unsafe {
+            self.rt.inc(env);
+            (self.quot_init)(env)
+        };
+        if init != 0 {
+            chk.env.mark_quot_initialized();
+        } else if chk.env.quot_initialized() {
+            return Err(Miss::Stale);
+        }
+        chk.check_pins();
+        Ok(())
+    }
+
+    /// The walk of `mirror_from` from the constants `queue`. The constants of `m.fixed` make the result `Miss::Stale` if the mirror does not agree with `env`. If `lazy` is false, the walk goes to all the constants that the constants of the walk refer to. If `lazy` is true, it goes at most `PRELOAD_DEPTH` steps from the names of `queue` through the converted constants, and from the fixed inductive types to their constructors.
+    ///
+    /// # Safety
+    ///
+    /// `env` is a live `Kernel.Environment` object. The call does not consume it.
+    unsafe fn walk(
+        &self,
+        env: u64,
+        m: &mut Mirror,
+        mut queue: Vec<NameId>,
+        lazy: bool,
+    ) -> Result<(), Miss> {
+        let Mirror { chk, origin, fixed } = m;
         let mut stats = self.stats.get();
         let start = stats;
         let mut seen = HashSet::default();
+        // In lazy mode, the walk goes `PRELOAD_DEPTH` steps from the names of the first queue: a converted constant with `k` steps left puts the constants that it refers to in the queue with `k - 1` steps left. The check then needs fewer passes.
+        let mut roots: HashMap<u32, u32> = if lazy {
+            queue.iter().map(|n| (n.0, PRELOAD_DEPTH)).collect()
+        } else {
+            HashMap::default()
+        };
         // The `ConstantInfo` objects of the entries that the walk replaced or removed. The walk gives back their references after the converter is dropped, so that no object of the tables of the converter is freed while the converter exists.
         let mut old = Vec::new();
         // One converter for the walk, so that the constants share the tables of the conversion. The objects of the tables stay alive while the converter exists, because each constant that the walk converts keeps its reference in `origin`, and the walk keeps the references of `old`.
@@ -1310,6 +1493,8 @@ impl<'a> Kernel<'a> {
                 if !seen.insert(n.0) {
                     continue;
                 }
+                // If the walk does not stop, the mirror agrees with `env` for this name after the walk.
+                chk.env.mark_known(n);
                 let e = origin.get(&n.0);
                 // SAFETY: the caller gives `env`. The `ConstantInfo` object of an entry is live, because the entry keeps a reference to it. Its first field is the value of the constant, and the first field of the value is its `ConstantVal`, with the `Name` object of the constant. The call gives `find` a new reference to the name. This lookup does not make a new `Name` object, so it costs less than `lookup`.
                 let ci = unsafe {
@@ -1341,7 +1526,14 @@ impl<'a> Kernel<'a> {
                     (Some(ci), Some(e)) if e.ci == ci => {
                         // SAFETY: the call owns `ci`, and the entry keeps a reference to the same object.
                         unsafe { self.rt.dec(ci) };
-                        queue.extend_from_slice(&e.refs);
+                        if !lazy {
+                            queue.extend_from_slice(&e.refs);
+                        } else if fixed.contains(&n.0) {
+                            let s = chk.env.find(n);
+                            if s != 0 {
+                                fixed_ctors(&chk.env.at(s).kind, fixed, &mut queue);
+                            }
+                        }
                         stats.reused += 1;
                     }
                     (Some(ci), e) => {
@@ -1354,7 +1546,10 @@ impl<'a> Kernel<'a> {
                         }
                         let t = Instant::now();
                         let k = conv.constant(ci);
-                        add_time(&T_IMPORT, t);
+                        // The times of `timing` are for `add_decl`, and only `add_decl` uses a lazy walk.
+                        if lazy {
+                            add_time(&T_IMPORT, t);
+                        }
                         let k = match k {
                             Ok(k) => k,
                             Err(f) => {
@@ -1363,8 +1558,26 @@ impl<'a> Kernel<'a> {
                                 break 'walk Err(Miss::Fault(f.to_string()));
                             }
                         };
-                        let refs = direct_refs(conv.store(), &k);
-                        queue.extend_from_slice(&refs);
+                        let refs = if lazy {
+                            if fixed.contains(&n.0) {
+                                fixed_ctors(&k.kind, fixed, &mut queue);
+                            }
+                            let left = roots.get(&n.0).copied().unwrap_or(0);
+                            if left > 0 {
+                                for r in direct_refs(conv.store(), &k) {
+                                    let e = roots.entry(r.0).or_insert(0);
+                                    if *e < left - 1 {
+                                        *e = left - 1;
+                                    }
+                                    queue.push(r);
+                                }
+                            }
+                            Vec::new()
+                        } else {
+                            let refs = direct_refs(conv.store(), &k);
+                            queue.extend_from_slice(&refs);
+                            refs
+                        };
                         chk.env.add(k);
                         // The entry keeps the reference of `ci`.
                         if let Some(e) = origin.insert(n.0, Entry { ci, refs }) {
@@ -1385,22 +1598,61 @@ impl<'a> Kernel<'a> {
         }
         walk?;
         self.stats.set(stats);
-        T_CONVERTED.fetch_add(stats.converted - start.converted, Ordering::Relaxed);
-        T_REUSED.fetch_add(stats.reused - start.reused, Ordering::Relaxed);
-        T_REPLACED.fetch_add(stats.replaced - start.replaced, Ordering::Relaxed);
-        T_REMOVED.fetch_add(stats.removed - start.removed, Ordering::Relaxed);
-        // SAFETY: `quot_init` consumes the environment, so the call gives it a new reference.
-        let init = unsafe {
-            self.rt.inc(env);
-            (self.quot_init)(env)
-        };
-        if init != 0 {
-            chk.env.mark_quot_initialized();
-        } else if chk.env.quot_initialized() {
-            return Err(Miss::Stale);
+        if lazy {
+            T_CONVERTED.fetch_add(stats.converted - start.converted, Ordering::Relaxed);
+            T_REUSED.fetch_add(stats.reused - start.reused, Ordering::Relaxed);
+            T_REPLACED.fetch_add(stats.replaced - start.replaced, Ordering::Relaxed);
+            T_REMOVED.fetch_add(stats.removed - start.removed, Ordering::Relaxed);
         }
-        chk.check_pins();
         Ok(())
+    }
+
+    /// The names of `names` for which the check of a pass found another result than the Lean environment `env` gives, as `lookup_agrees` decides. If `created` is a count of names, a lookup had a name that the record cannot hold, so the call also compares each name of the store from that count. A constant after the first `before` constants is a new constant of the pass, so the mirror did not have it before the pass.
+    ///
+    /// # Safety
+    ///
+    /// `env` is a live `Kernel.Environment` object. The call does not consume it.
+    unsafe fn stale_lookups(
+        &self,
+        env: u64,
+        m: &Mirror,
+        mut names: Vec<NameId>,
+        created: Option<usize>,
+        before: usize,
+    ) -> Vec<NameId> {
+        if let Some(k) = created {
+            names.extend((k..m.chk.st.name_count()).map(|i| NameId(i as u32)));
+        }
+        let mut stale = Vec::new();
+        for n in names {
+            let s = m.chk.env.find_any(n) as usize;
+            let e = if s > before { None } else { m.origin.get(&n.0) };
+            // SAFETY: the caller gives `env`. The `ConstantInfo` object of an entry is live, and its name is the field of `walk`.
+            let ci = unsafe {
+                match e {
+                    Some(e) => {
+                        let name = self.field(self.field(self.field(e.ci, 0), 0), 0);
+                        self.rt.inc(name);
+                        self.find(env, name)
+                    }
+                    None => self.lookup(env, &m.chk.st, n),
+                }
+            };
+            let agrees = match (ci, e) {
+                // Lean does not have the constant, and the mirror did not have it before the pass.
+                (None, None) => s == 0 || s > before,
+                (Some(ci), Some(e)) => ci == e.ci,
+                _ => false,
+            };
+            if let Some(ci) = ci {
+                // SAFETY: the call owns `ci`.
+                unsafe { self.rt.dec(ci) };
+            }
+            if !agrees {
+                stale.push(n);
+            }
+        }
+        stale
     }
 
     /// Gives `Except.error` with the exception `x`. The call consumes `env`: the exception keeps it, or the call gives it back.
@@ -1951,6 +2203,17 @@ fn declared_names(chk: &Checker, d: &Decl) -> Vec<NameId> {
     }
 }
 
+/// Adds the constructors of an inductive type that the checker knows by name to `fixed` and to `queue`. A pin reads the types of these constructors (05.8).
+fn fixed_ctors(kind: &ConstKind, fixed: &mut HashSet<u32>, queue: &mut Vec<NameId>) {
+    if let ConstKind::Induct(i) = kind {
+        for c in &i.ctors {
+            if fixed.insert(c.0) {
+                queue.push(*c);
+            }
+        }
+    }
+}
+
 /// The names at the start of the walk of the mirror for `d`: the names of `declared_names`, and for an inductive block, the names of the recursors that the check makes. These are `I.rec` for each type `I`, and `main.rec_1`, `main.rec_2` and so on for the auxiliary types of a nested block, while the mirror has them. Thus the walk replaces or removes a recursor of the mirror that the Lean environment does not have, and the check does not find it as an earlier constant.
 fn walk_names(chk: &mut Checker, d: &Decl) -> Vec<NameId> {
     let mut names = declared_names(chk, d);
@@ -2110,10 +2373,11 @@ mod tests {
             replaced: 2,
             removed: 1,
             rebuilds: 0,
+            rechecks: 4,
         };
         assert_eq!(
             t.report(),
-            "rulean-ffi timing: 3 declarations, declarations 1.0 ms, mirror 4.0 ms (conversion 3.0 ms, 5 converted, 9 reused, 2 replaced, 1 removed, 0 rebuilds), check 7.0 ms, results 1.0 ms, C++ kernel 20.0 ms, conversion 10.0% of the C++ kernel, 15.0% with the walk, 30.0% with the mirror"
+            "rulean-ffi timing: 3 declarations, declarations 1.0 ms, mirror 4.0 ms (conversion 3.0 ms, 5 converted, 9 reused, 2 replaced, 1 removed, 0 rebuilds), check 7.0 ms (4 rechecks), results 1.0 ms, C++ kernel 20.0 ms, conversion 10.0% of the C++ kernel, 15.0% with the walk, 30.0% with the mirror"
         );
         let t = Timing { cpp_ns: 0, ..t };
         assert!(!t.report().contains('%'));

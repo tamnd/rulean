@@ -60,7 +60,7 @@ impl Axioms {
 
     /// The axioms of the constant `n`, or the empty list if `n` is not in the environment.
     pub fn of_const(&self, env: &Env, n: NameId) -> &[NameId] {
-        self.of_slot(env.find(n))
+        self.of_slot(env.peek(n))
     }
 
     /// The union of the sets of all constants that `update` saw, sorted by handle.
@@ -150,7 +150,7 @@ impl Axioms {
         first: u32,
         edges: &mut Vec<(u32, u32)>,
     ) -> u32 {
-        let slot = env.find(c);
+        let slot = env.peek(c);
         if slot == 0 {
             0
         } else if slot >= first {

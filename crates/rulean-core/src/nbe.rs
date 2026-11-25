@@ -439,7 +439,7 @@ impl Checker {
     }
 
     /// True if the type of the major premise of the recursor of the slot is an inductive type that is never in `Prop`.
-    fn major_not_prop(&self, slot: u32, major_idx: u32) -> bool {
+    fn major_not_prop(&mut self, slot: u32, major_idx: u32) -> bool {
         let mut t = self.env.at(slot).ty;
         let mut i = 0;
         while i < major_idx {

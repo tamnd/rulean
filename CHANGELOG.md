@@ -4,8 +4,15 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- The mirror of `rulean-ffi` converts only the constants near a declaration (spec 09.6.3). Before, each `addDecl` walked all the constants that the check could use, and a thread converted about 36000 imported constants for the smoke test of `lean-build`. Now the walk goes at most 3 steps from the constants of the declaration. `Env::find` of `rulean-core` records the names of the lookups of the check, and after the check the mirror compares each name with the Lean environment. If a lookup does not agree, the mirror removes the new constants of the check, walks from the names of these lookups, and checks the declaration again. A lookup that finds no constant for a name that the mirror does not know stops the check with the new fault `ErrorKind::Missed`, and the first pass has a limit of 10^6 heartbeats that grows 10 times after each pass that stops at it. In 3 runs of the smoke test on a machine with other work, the mirror converted between 5806 and 7826 constants and used between 150 ms and 286 ms, and the check used between 111 ms and 248 ms. The build before this change used between 7489 ms and 12555 ms for the mirror at the same time.
+- `Env::find` and `Env::contains` of `rulean-core` take `&mut self`, because they record the name of the lookup when the record is on. The new function `Env::peek` gives the slot with no record. The new functions `Env::record_start`, `Env::record_stop`, `Env::take_record`, `Env::missed`, `Env::known_reset` and `Env::mark_known` control the record. The checker stops with `ErrorKind::Missed` at the next heartbeat if `Env::missed` is true.
+- The counts and the conversion time of `rulean_ffi::kernel::timing` are for `add_decl` only. Before, they also had the walks of the term functions.
+
 ### Fixed
 
+- `Env::truncate` of `rulean-core` removes the record of the quotient constants if it removes them.
 - `rulean-ffi` gives the texts of the C++ kernel for three more rejections. A use of an unsafe constant gives "invalid declaration, it uses unsafe declaration 'N'", and a use of a partial constant gives "invalid declaration, safe declaration must not contain partial declaration 'N'". A constructor with a return type that is not valid gives "invalid return type for 'C'", and a duplicate constructor name gives "duplicate constructor name 'C'". Before, rulean gave its own text for these rejections, and the tests `elab_fail/2125`, `elab_fail/partialIssue` and `elab_fail/sanitychecks` of the Lean suite gave a different output. For the fault `BadCtor`, `Fault::ty1` of `rulean-core` now has the return type of the constructor if the return type is not valid.
 
 ## [0.0.16] - 2026-11-25

@@ -188,7 +188,7 @@ impl Hasher for AddrHasher {
 }
 
 /// A table with the hasher `AddrHasher`.
-type HashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<AddrHasher>>;
+pub(crate) type HashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<AddrHasher>>;
 
 /// A set with the hasher `AddrHasher`.
 pub(crate) type HashSet<K> = std::collections::HashSet<K, BuildHasherDefault<AddrHasher>>;

@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.0.16] - 2026-11-25
+
 ### Added
 
 - `Kernel::elab_add_decl` and `Kernel::elab_add_decl_without_checking` of `rulean-ffi` and the exported symbols `lean_elab_add_decl` and `lean_elab_add_decl_without_checking` (spec 09.6.2). The elaborator of Lean v4.36.0 adds each declaration with `lean_elab_add_decl`, which is C++ code that calls the C++ kernel directly. The rulean functions take the kernel environment of the `Lean.Environment`, check the declaration with rulean, and give the new kernel environment to `lean_elab_environment_update_base_after_kernel_add`, as the C++ functions do. The test `dual` gives three declarations to the C++ functions and to rulean and requires the same verdicts, exceptions and constants.
@@ -315,7 +317,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.15...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.16...HEAD
+[0.0.16]: https://github.com/tamnd/rulean/compare/v0.0.15...v0.0.16
 [0.0.15]: https://github.com/tamnd/rulean/compare/v0.0.14...v0.0.15
 [0.0.14]: https://github.com/tamnd/rulean/compare/v0.0.13...v0.0.14
 [0.0.13]: https://github.com/tamnd/rulean/compare/v0.0.12...v0.0.13

@@ -132,6 +132,19 @@ fn unknown_constant_is_a_fault() {
 }
 
 #[test]
+fn is_prop_gives_the_type_in_the_fault() {
+    // `a : A` with `A : Type`. The type of `a` is not a sort, so `is_prop a` gives `typeExpected`. The C++ kernel gives the type `A` in the exception, not `a`.
+    let mut t = T::new();
+    let s1 = t.sort(1);
+    let a_ty = t.axiom("A", s1);
+    let a = t.axiom("a", a_ty);
+    assert!(!t.c.is_prop(a));
+    let f = t.c.fault().expect("fault");
+    assert_eq!(f.kind, ErrorKind::TypeExpected);
+    assert_eq!(f.at, a_ty);
+}
+
+#[test]
 fn application_type_mismatch() {
     let mut t = T::new();
     let s1 = t.sort(1);

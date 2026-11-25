@@ -1374,10 +1374,10 @@ impl Checker {
         self.ensure_pi_core(e, s)
     }
 
-    /// `is_prop`: the type of `e` is a sort whose level normalizes to zero.
+    /// `is_prop`: the type of `e` is a sort whose level normalizes to zero. As in the C++ kernel, the term of `typeExpected` is the type of `e`, not `e`.
     pub fn is_prop(&mut self, e: ExprId) -> bool {
         let t = self.infer(e);
-        let s = self.ensure_sort(t, e);
+        let s = self.ensure_sort(t, t);
         if self.bad() {
             return false;
         }

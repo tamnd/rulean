@@ -595,6 +595,12 @@ fn the_two_kernels_give_the_same_verdicts() {
         rt.dec(r);
         (e, to_kernel(e))
     };
+    // The empty kernel environment, for the test of the mirror. The test owns one reference.
+    // SAFETY: `env` is a live environment.
+    let base = unsafe {
+        rt.inc(env);
+        env
+    };
     let mut chk = Checker::new(Store::new());
     chk.kernel_api = true;
     // SAFETY: the runtime is Lean v4.36.0, and the test gives `add_decl` live objects.
@@ -840,6 +846,8 @@ fn the_two_kernels_give_the_same_verdicts() {
         dual.same_constant(s);
     }
 
+    same_with_mirror(&dual, base, &mut st, &cases);
+
     // The term functions. The elaborator environment has the final kernel environment of the C++ kernel.
     // SAFETY: `updateBaseAfterKernelAdd` consumes its arguments, so the test gives it a new reference to the kernel environment.
     let elab = unsafe {
@@ -909,6 +917,166 @@ fn the_two_kernels_give_the_same_verdicts() {
         rt.dec(dual.env);
         rt.dec(dual.cancel.0);
         rt.dec(dual.cancel.1);
+    }
+}
+
+/// The result of `addDecl` of a kernel: the new environment, or the tag of the exception.
+type Added = Result<u64, u64>;
+
+/// Gives `d` to the C++ kernel (`cpp`) or to the kernel `k` on the environment `env` with the heartbeat limit `max`. The call borrows `env`.
+fn add_with(
+    dual: &Dual,
+    k: &Kernel,
+    cpp: bool,
+    env: u64,
+    st: &Store,
+    d: &Decl,
+    max: usize,
+) -> Added {
+    let o = {
+        // SAFETY: the encoder gives the maker only objects that it made.
+        let mut m = unsafe { LeanMake::new(dual.rt) };
+        Encoder::new(&mut m, st).declaration(d).expect("an object")
+    };
+    // SAFETY: `env` and `o` are live objects. The functions consume the environment, so the call gives them a new reference.
+    let r = unsafe {
+        dual.rt.inc(env);
+        if cpp {
+            (dual.add_decl)(env, max, 512, o, boxed(0))
+        } else {
+            k.add_decl(env, max, 512, o, boxed(0))
+        }
+    };
+    let v = word(&dual.h, r + 8);
+    let out = if tag(&dual.h, r) == 1 {
+        // SAFETY: `v` is a field of `r`. The caller gets a new reference to it.
+        unsafe { dual.rt.inc(v) };
+        Ok(v)
+    } else {
+        Err(exc_tag(&dual.h, v))
+    };
+    // SAFETY: the call owns `r` and `o`.
+    unsafe {
+        dual.rt.dec(r);
+        dual.rt.dec(o);
+    }
+    out
+}
+
+/// The test of the mirror of `Kernel::add_decl` (spec 09.6.3). A new kernel checks the declarations of `cases` on its own environments from `base`, so each call can use the constants of the mirror. Then two environments get a constant `c` with different values, and a definition that uses `c` must have the verdict of the C++ kernel on each environment.
+fn same_with_mirror(dual: &Dual, base: u64, st: &mut Store, cases: &[(&str, Decl, bool)]) {
+    // SAFETY: the runtime is Lean v4.36.0.
+    let k = unsafe { Kernel::new(dual.rt) }.expect("the kernel functions");
+    let mut env = base;
+    let mut steps = Vec::new();
+    for (what, d, want) in cases {
+        let before = k.mirror_stats();
+        match add_with(dual, &k, false, env, st, d, 0) {
+            Ok(e) => {
+                assert!(*want, "the kernel with the mirror accepts {what}");
+                // SAFETY: the test owns `env`.
+                unsafe { dual.rt.dec(env) };
+                env = e;
+            }
+            Err(x) => {
+                assert!(!*want, "the kernel with the mirror rejects {what} with {x}");
+            }
+        }
+        let after = k.mirror_stats();
+        steps.push((
+            *what,
+            after.converted - before.converted,
+            after.reused - before.reused,
+        ));
+    }
+    eprintln!("mirror (declaration, converted, reused): {steps:?}");
+    // The environments come from the kernel, so the mirror has each constant with the same object.
+    assert_eq!(k.mirror_stats().rebuilds, 0);
+    // `N` and `Eq` refer to no earlier constant. Each declaration after them uses constants from the mirror.
+    assert!(steps.iter().skip(2).all(|&(_, _, reused)| reused > 0));
+    // The mirror converts no constant of the Lean environment, because each one comes from a check of the kernel.
+    assert_eq!(k.mirror_stats().converted, 0);
+
+    // The heartbeats of a declaration do not depend on the mirror. A new kernel finds the count of `w3 : V (pred two) := V.mk`, and the kernel with the full mirror must reject it with one heartbeat less and accept it with the count. A rejection keeps the mirror, so the two checks use it.
+    let mut t = T { st: &mut *st };
+    let v = t.c("V");
+    let pred = t.c("pred");
+    let two = t.c("two");
+    let pt = t.app(pred, &[two]);
+    let w3_ty = t.app(v, &[pt]);
+    let vmk = t.c("V.mk");
+    let w3 = t.defn("w3", w3_ty, vmk, Safety::Safe);
+    // SAFETY: the runtime is Lean v4.36.0.
+    let fresh = unsafe { Kernel::new(dual.rt) }.expect("the kernel functions");
+    let accepts = |k: &Kernel, max: usize| match add_with(dual, k, false, env, st, &w3, max) {
+        Ok(e) => {
+            // SAFETY: the test owns `e`.
+            unsafe { dual.rt.dec(e) };
+            true
+        }
+        Err(x) => {
+            assert_eq!(x, TIMEOUT, "a rejection of w3 is not a timeout");
+            false
+        }
+    };
+    let mut count = 1;
+    while !accepts(&fresh, count) {
+        count += 1;
+        assert!(count < 1000, "no heartbeat limit is sufficient for w3");
+    }
+    assert!(count > 1);
+    let warm = k.mirror_stats();
+    assert!(
+        !accepts(&k, count - 1),
+        "the mirror accepts w3 with fewer heartbeats"
+    );
+    assert!(
+        accepts(&k, count),
+        "the mirror rejects w3 with the count of a new kernel"
+    );
+    let used = k.mirror_stats();
+    assert_eq!(used.rebuilds, warm.rebuilds);
+    assert_eq!(used.converted, warm.converted);
+    eprintln!("heartbeats of w3: {count}, with a new kernel and with the mirror");
+
+    // Two environments with `c : N`: `N.z` in `a` and `N.s N.z` in `b`. `V.mk : V (N.s N.z)`, so `t : V c := V.mk` is correct only in `b`.
+    let mut t = T { st };
+    let n = t.c("N");
+    let z = t.c("N.z");
+    let s = t.c("N.s");
+    let sz = t.app(s, &[z]);
+    let c_a = t.defn("c", n, z, Safety::Safe);
+    let c_b = t.defn("c", n, sz, Safety::Safe);
+    let v = t.c("V");
+    let c = t.c("c");
+    let vc = t.app(v, &[c]);
+    let vmk = t.c("V.mk");
+    let use_c = t.defn("t", vc, vmk, Safety::Safe);
+    let st = &*t.st;
+    let a = add_with(dual, &k, false, env, st, &c_a, 0).expect("c in a");
+    let b = add_with(dual, &k, false, env, st, &c_b, 0).expect("c in b");
+    // The mirror has `c` of `a`, and the environment `b` has a different `c`.
+    let rebuilds = k.mirror_stats().rebuilds;
+    assert_eq!(rebuilds, 1);
+    for (e, want) in [(b, true), (a, false), (b, true), (b, true), (a, false)] {
+        let cpp = add_with(dual, &k, true, e, st, &use_c, 0);
+        let ours = add_with(dual, &k, false, e, st, &use_c, 0);
+        assert_eq!(cpp.is_ok(), want, "the C++ kernel on t");
+        assert_eq!(ours.is_ok(), want, "the kernel with the mirror on t");
+        for x in [cpp, ours].into_iter().flatten() {
+            // SAFETY: the test owns `x`.
+            unsafe { dual.rt.dec(x) };
+        }
+    }
+    let stats = k.mirror_stats();
+    eprintln!("mirror after the two environments: {stats:?}");
+    // Each change between `a` and `b` makes a new mirror. After `t` is accepted on `b`, the mirror has the `t` of the new environment, and `b` does not have it. Thus the second check of `t` on `b` makes a new mirror too.
+    assert_eq!(stats.rebuilds, rebuilds + 4);
+    // SAFETY: the test owns the environments.
+    unsafe {
+        dual.rt.dec(a);
+        dual.rt.dec(b);
+        dual.rt.dec(env);
     }
 }
 

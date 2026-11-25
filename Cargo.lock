@@ -68,14 +68,14 @@ dependencies = [
 
 [[package]]
 name = "rulean-bench"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "rulean-cli"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "rulean-core",
  "rulean-format",
@@ -88,7 +88,7 @@ dependencies = [
 
 [[package]]
 name = "rulean-core"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "rulean-format",
  "rulean-nat",
@@ -97,11 +97,11 @@ dependencies = [
 
 [[package]]
 name = "rulean-diff"
-version = "0.0.17"
+version = "0.0.18"
 
 [[package]]
 name = "rulean-ffi"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "rulean-core",
  "rulean-format",
@@ -111,7 +111,7 @@ dependencies = [
 
 [[package]]
 name = "rulean-format"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "rulean-nat",
  "rulean-store",
@@ -119,21 +119,21 @@ dependencies = [
 
 [[package]]
 name = "rulean-io"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "rulean-core",
 ]
 
 [[package]]
 name = "rulean-nat"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "num-bigint",
 ]
 
 [[package]]
 name = "rulean-olean"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "rulean-core",
  "rulean-format",
@@ -144,7 +144,7 @@ dependencies = [
 
 [[package]]
 name = "rulean-pack"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "rulean-format",
  "rulean-store",
@@ -152,15 +152,15 @@ dependencies = [
 
 [[package]]
 name = "rulean-pool"
-version = "0.0.17"
+version = "0.0.18"
 
 [[package]]
 name = "rulean-simd"
-version = "0.0.17"
+version = "0.0.18"
 
 [[package]]
 name = "rulean-store"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "rulean-nat",
 ]
@@ -237,7 +237,7 @@ checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
 
 [[package]]
 name = "xtask"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "proc-macro2",
  "serde_json",

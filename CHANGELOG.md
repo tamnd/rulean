@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ### Added
 
+- `scripts/lean-build.sh` makes the `lean` binary with rulean as its kernel on Linux too (spec 09.6.2). The Linux release of Lean uses libc++ and has no headers of libc++, so the script compiles the shell with `clang++ -stdlib=libc++` and links the static libc++ of the release. The CI job `lean-build` now runs on macOS and on Linux, and on the two systems the smoke test gives the same output with the `lean` of the release, the new `lean` and the dual-kernel build.
 - The dual-kernel build measures the heartbeats of the two kernels (spec 09.6.4). If the environment variable `RULEAN_DUAL_BEATS` gives a file name, each `addDecl` that the two kernels accept writes the count of rulean, the count of the C++ kernel and the name of the declaration to the file. The new function `Kernel::cpp_beats` of `rulean-ffi` finds the count of the C++ kernel with a binary search on the limit. The search sets the heartbeats of the thread to 0 before each try, so use the variable only to measure. On 322 tests of `tests/elab`, rulean counted 66% of the heartbeats of the C++ kernel for 12339 declarations, and no declaration had a count of rulean above the C++ count.
 
 ### Fixed

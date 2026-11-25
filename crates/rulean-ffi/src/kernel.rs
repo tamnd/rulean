@@ -257,6 +257,10 @@ pub struct Timing {
     pub rebuilds: u64,
     /// The checks that ran again. See `MirrorStats`.
     pub rechecks: u64,
+    /// The part of `rechecks` that ran again because a lookup found no constant for a name that was not known (`ErrorKind::Missed`).
+    pub missed: u64,
+    /// The part of `check_ns` in the checks that ran again.
+    pub recheck_ns: u64,
 }
 
 impl Timing {
@@ -264,7 +268,7 @@ impl Timing {
     pub fn report(&self) -> String {
         let ms = |ns: u64| ns as f64 / 1e6;
         let mut r = format!(
-            "rulean-ffi timing: {} declarations, declarations {:.1} ms, mirror {:.1} ms (conversion {:.1} ms, {} converted, {} reused, {} replaced, {} removed, {} rebuilds), check {:.1} ms ({} rechecks), results {:.1} ms, C++ kernel {:.1} ms",
+            "rulean-ffi timing: {} declarations, declarations {:.1} ms, mirror {:.1} ms (conversion {:.1} ms, {} converted, {} reused, {} replaced, {} removed, {} rebuilds), check {:.1} ms ({} rechecks, {} after a missed lookup, {:.1} ms in the checks that ran again), results {:.1} ms, C++ kernel {:.1} ms",
             self.decls,
             ms(self.decl_ns),
             ms(self.mirror_ns),
@@ -276,6 +280,8 @@ impl Timing {
             self.rebuilds,
             ms(self.check_ns),
             self.rechecks,
+            self.missed,
+            ms(self.recheck_ns),
             ms(self.result_ns),
             ms(self.cpp_ns)
         );
@@ -307,11 +313,14 @@ static T_REPLACED: AtomicU64 = AtomicU64::new(0);
 static T_REMOVED: AtomicU64 = AtomicU64::new(0);
 static T_REBUILDS: AtomicU64 = AtomicU64::new(0);
 static T_RECHECKS: AtomicU64 = AtomicU64::new(0);
+static T_MISSED: AtomicU64 = AtomicU64::new(0);
+static T_RECHECK: AtomicU64 = AtomicU64::new(0);
 
-/// Adds the time since `t` to the counter `c`.
-fn add_time(c: &AtomicU64, t: Instant) {
+/// Adds the time since `t` to the counter `c`, and gives the time in nanoseconds.
+fn add_time(c: &AtomicU64, t: Instant) -> u64 {
     let ns = u64::try_from(t.elapsed().as_nanos()).unwrap_or(u64::MAX);
     c.fetch_add(ns, Ordering::Relaxed);
+    ns
 }
 
 /// The times of the `add_decl` calls of all the threads since the start of the process.
@@ -331,6 +340,8 @@ pub fn timing() -> Timing {
         removed: get(&T_REMOVED),
         rebuilds: get(&T_REBUILDS),
         rechecks: get(&T_RECHECKS),
+        missed: get(&T_MISSED),
+        recheck_ns: get(&T_RECHECK),
     }
 }
 
@@ -478,7 +489,7 @@ impl<'a> Kernel<'a> {
                     }
                 },
             };
-            add_time(&T_CHECK, t);
+            let check_ns = add_time(&T_CHECK, t);
             chk.env.record_stop();
             let (looked, over) = chk.env.take_record();
             // A name of `looked` agrees with `env`, or the walk below makes it agree.
@@ -509,6 +520,10 @@ impl<'a> Kernel<'a> {
                 break (m, before, fault);
             }
             T_RECHECKS.fetch_add(1, Ordering::Relaxed);
+            T_RECHECK.fetch_add(check_ns, Ordering::Relaxed);
+            if missed {
+                T_MISSED.fetch_add(1, Ordering::Relaxed);
+            }
             self.stats.set(MirrorStats {
                 rechecks: self.stats.get().rechecks + 1,
                 ..self.stats.get()
@@ -2457,10 +2472,12 @@ mod tests {
             removed: 1,
             rebuilds: 0,
             rechecks: 4,
+            missed: 3,
+            recheck_ns: 2_000_000,
         };
         assert_eq!(
             t.report(),
-            "rulean-ffi timing: 3 declarations, declarations 1.0 ms, mirror 4.0 ms (conversion 3.0 ms, 5 converted, 9 reused, 2 replaced, 1 removed, 0 rebuilds), check 7.0 ms (4 rechecks), results 1.0 ms, C++ kernel 20.0 ms, conversion 10.0% of the C++ kernel, 15.0% with the walk, 30.0% with the mirror"
+            "rulean-ffi timing: 3 declarations, declarations 1.0 ms, mirror 4.0 ms (conversion 3.0 ms, 5 converted, 9 reused, 2 replaced, 1 removed, 0 rebuilds), check 7.0 ms (4 rechecks, 3 after a missed lookup, 2.0 ms in the checks that ran again), results 1.0 ms, C++ kernel 20.0 ms, conversion 10.0% of the C++ kernel, 15.0% with the walk, 30.0% with the mirror"
         );
         let t = Timing { cpp_ns: 0, ..t };
         assert!(!t.report().contains('%'));

@@ -344,6 +344,10 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: false
+      # The release of Lean uses libc++, and on Linux it has no headers of libc++.
+      - name: the headers of libc++
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y --no-install-recommends libc++-dev libc++abi-dev
       - name: the Lean v4.36.0 release
         run: |
           mkdir -p _tmp/lean

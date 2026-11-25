@@ -9,7 +9,7 @@
 #
 # With --dual, the script makes the dual-kernel build of spec 11.3. The static library of rulean-ffi then has the feature dual: each kernel symbol also calls the C++ function with the suffix _cpp and compares the two results. If they differ, the process writes the difference to the standard error and stops. The binary exports the _cpp functions, and rulean finds them when the program runs.
 #
-# The script works on macOS and on Linux. It needs git, a C++ compiler, cargo, llvm-objcopy and llvm-nm. Set CXX, OBJCOPY or NM to use a different tool.
+# The script works on macOS and on Linux. It needs git, a C++ compiler, cargo, llvm-objcopy and llvm-nm. Set CXX, OBJCOPY or NM to use a different tool. The release of Lean uses libc++ on the two systems. On Linux, the release has the static libraries of libc++ but not its headers, so the default compiler is clang++ with -stdlib=libc++, and the headers of libc++ must be installed (the Ubuntu package libc++-dev).
 
 set -euo pipefail
 
@@ -66,7 +66,13 @@ if [ ! -x "$llvm_nm" ]; then
   echo "lean-build: $llvm_nm is not found, set NM" >&2
   exit 1
 fi
-cxx="${CXX:-c++}"
+if [ "$os" = Darwin ]; then
+  cxx="${CXX:-c++}"
+  stdlib=()
+else
+  cxx="${CXX:-clang++}"
+  stdlib=(-stdlib=libc++)
+fi
 
 # The source files of the shell, at the commit of the release. The checkout has only the directories that the two files include.
 src="$out/src/lean4"
@@ -84,7 +90,7 @@ fi
 build="$out/build"
 mkdir -p "$build/gen" "$out/bin"
 printf '#define LEAN_GITHASH "%s"\n' "$githash" > "$build/gen/githash.h"
-flags=(-std=c++20 -O2 -DLEAN_MULTI_THREAD -DNDEBUG -I"$build/gen" -I"$src/src" -I"$toolchain/include" -I"$toolchain/include/lean")
+flags=(${stdlib[@]+"${stdlib[@]}"} -std=c++20 -O2 -DLEAN_MULTI_THREAD -DNDEBUG -I"$build/gen" -I"$src/src" -I"$toolchain/include" -I"$toolchain/include/lean")
 "$cxx" "${flags[@]}" -c -o "$build/shell.o" "$src/src/util/shell.cpp"
 "$cxx" "${flags[@]}" -c -o "$build/main.o" "$src/src/shell/lean.cpp"
 
@@ -140,7 +146,7 @@ else
   "$cxx" -o "$out/bin/lean" "$build/main.o" "$build/shell.o" \
     -Wl,--start-group "$build/libleancpp-rulean.a" "$lib/libLean.a" "$rulean" -Wl,--end-group "$lib/libStd.a" \
     -Wl,--start-group "$lib/libInit.a" "$lib/libleanrt.a" -Wl,--end-group "${libs[@]}" \
-    -rdynamic -lstdc++ -lpthread -ldl -lrt -lm
+    -nostdlib++ -L"$toolchain/lib" -Wl,-Bstatic -lc++ -lc++abi -Wl,-Bdynamic -rdynamic -lpthread -ldl -lrt -lm
 fi
 if [ "$features" = dual ]; then
   "$llvm_nm" -g --defined-only "$out/bin/lean" | awk '{print $3}' | sort -u > "$build/lean-defined.txt"

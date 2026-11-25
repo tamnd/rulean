@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.0.18] - 2026-11-25
+
 ### Changed
 
 - The mirrors of a pool share the names of the constants that made a check run again after a missed lookup (spec 09.6.3). Before, each new mirror missed the same constants, and its check ran again for each one. Now the walk of a mirror also starts from these names. On `tests/elab/vcgenSepLogic.lean`, 2 runs had 110 and 111 checks that ran again and a check of 769 ms and 733 ms. The build without this change had 203 and 209 checks that ran again and a check of 1197 ms and 1258 ms.
@@ -341,7 +343,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.17...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.18...HEAD
+[0.0.18]: https://github.com/tamnd/rulean/compare/v0.0.17...v0.0.18
 [0.0.17]: https://github.com/tamnd/rulean/compare/v0.0.16...v0.0.17
 [0.0.16]: https://github.com/tamnd/rulean/compare/v0.0.15...v0.0.16
 [0.0.15]: https://github.com/tamnd/rulean/compare/v0.0.14...v0.0.15

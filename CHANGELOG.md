@@ -4,6 +4,14 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- The workflow `mathlib` has the input `beats`. With it, each part sets `RULEAN_DUAL_BEATS`, so the dual-kernel build records the heartbeats of the two kernels for each declaration of Mathlib in `out/beats.txt`, and the summary of the part gives their sums (spec 09.6.4 and 11.3.1). The first run of the workflow, without the input, built Mathlib v4.36.0 in one part with no error, and the two kernels gave the same result for each of 622410 declarations.
+
+### Fixed
+
+- The dual-kernel build writes each line of the file of `RULEAN_DUAL_BEATS` in one write. Before, `writeln!` could write a line in more than one part, so the lines of two `lean` processes of a parallel build could mix in the file.
+
 ## [0.0.19] - 2026-11-25
 
 ### Changed

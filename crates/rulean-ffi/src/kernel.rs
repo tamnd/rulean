@@ -1373,9 +1373,11 @@ impl<'a> Kernel<'a> {
                 let theirs = unsafe { self.cpp_beats(env, &cpp, ours, max) };
                 if let Some(theirs) = theirs {
                     use std::io::Write;
+                    // The line goes to the file in one write. The file is open for append, so the lines of the processes of a parallel build do not mix.
+                    let line = format!("{ours} {theirs} {name}\n");
                     let mut f = file.lock().unwrap_or_else(|e| e.into_inner());
                     // An error is ignored, because the line is only a measurement.
-                    let _ = writeln!(f, "{ours} {theirs} {name}");
+                    let _ = f.write_all(line.as_bytes());
                 }
             }
             // SAFETY: the call owns the reference of `env` from above.

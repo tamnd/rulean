@@ -74,11 +74,34 @@ pub struct Converter<'a, H: Heap> {
 /// The handles of the persistent objects that the conversions of one store made (spec 09.6.3). A persistent object has the reference count 0, for example an object of the mapped region of an `.olean` file. The runtime does not free it or change it, so its address is the same term for the life of the process, and the store only grows, so its handle stays valid. Thus the next conversion into the same store can use the handle and does not read the object again. The mirror of `rulean-ffi` keeps the cache with its store, and `Converter::with_cache` uses it.
 ///
 /// The cache keeps only the conversions without a local context, so a handle does not depend on the free variables or the level metavariables of a call.
+///
+/// The cache also keeps the empty tables of the objects that are not persistent. A converter takes these tables at its start and gives them back empty at its end, so the next call does not make the tables and make them larger again. A table that is larger than `SPARE_MAX` entries goes away at the end of the call, so a large call does not keep its memory.
 #[derive(Debug, Default)]
 pub struct Cache {
     names: HashMap<u64, NameId>,
     levels: HashMap<u64, LevelId>,
     exprs: HashMap<u64, ExprId>,
+    spare: Spare,
+}
+
+/// The empty tables of the objects that are not persistent, for the next converter.
+#[derive(Debug, Default)]
+struct Spare {
+    names: HashMap<u64, NameId>,
+    levels: HashMap<u64, LevelId>,
+    exprs: HashMap<u64, ExprId>,
+}
+
+/// The largest capacity of a table that the cache keeps for the next call.
+const SPARE_MAX: usize = 1 << 16;
+
+/// Clears `t` and gives it back if its capacity is at most `SPARE_MAX`. If not, it gives a new empty table.
+fn spare<V>(mut t: HashMap<u64, V>) -> HashMap<u64, V> {
+    if t.capacity() > SPARE_MAX {
+        return HashMap::default();
+    }
+    t.clear();
+    t
 }
 
 impl Cache {
@@ -118,6 +141,10 @@ impl<'a, H: Heap> Converter<'a, H> {
             return Converter { c, cache: None };
         }
         c.cache = std::mem::take(cache);
+        let spare = std::mem::take(&mut c.cache.spare);
+        c.names = spare.names;
+        c.levels = spare.levels;
+        c.exprs = spare.exprs;
         c.keep = true;
         Converter {
             c,
@@ -202,6 +229,11 @@ impl<H: Heap> Drop for Converter<'_, H> {
     fn drop(&mut self) {
         if let Some(cache) = self.cache.take() {
             *cache = std::mem::take(&mut self.c.cache);
+            cache.spare = Spare {
+                names: spare(std::mem::take(&mut self.c.names)),
+                levels: spare(std::mem::take(&mut self.c.levels)),
+                exprs: spare(std::mem::take(&mut self.c.exprs)),
+            };
         }
     }
 }
@@ -1553,7 +1585,7 @@ impl<'a, H: Heap> Conv<'a, H> {
 mod tests {
     use std::hash::Hasher;
 
-    use super::AddrHasher;
+    use super::{AddrHasher, HashMap, SPARE_MAX, spare};
 
     #[test]
     fn aligned_addresses_use_all_the_low_bits_of_the_hash() {
@@ -1564,5 +1596,27 @@ mod tests {
             buckets.insert(h.finish() & 1023);
         }
         assert!(buckets.len() > 600, "{} buckets", buckets.len());
+    }
+
+    #[test]
+    fn a_spare_table_is_empty_and_keeps_its_capacity() {
+        let mut t: HashMap<u64, u32> = HashMap::default();
+        for i in 0..1000u64 {
+            t.insert(8 * i, i as u32);
+        }
+        let cap = t.capacity();
+        let t = spare(t);
+        assert!(t.is_empty());
+        assert_eq!(t.capacity(), cap);
+    }
+
+    #[test]
+    fn a_large_table_is_not_kept() {
+        let mut t: HashMap<u64, u32> = HashMap::default();
+        t.reserve(SPARE_MAX + 1);
+        t.insert(8, 1);
+        let t = spare(t);
+        assert!(t.is_empty());
+        assert_eq!(t.capacity(), 0);
     }
 }

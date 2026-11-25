@@ -172,11 +172,12 @@ jobs:
         run: RULEAN_ARENA="$PWD/_tmp/arena/tests" cargo test --locked --release -p rulean-format --test arena
       - name: the Init prelude on engine R
         run: cargo test --locked --release -p rulean-core --test arena
-      # The reference digests of primitive pinning (spec 05.8) must be the digests of the Lean v4.36.0 exports of the Arena.
+      # The reference digests of primitive pinning (spec 05.8) and the digests of the axiom form must be the digests of the Lean v4.36.0 exports of the Arena.
       - name: the pinning digests
         run: |
           a=_tmp/arena/tests/good
           python3 scripts/pin-digests.py "$a/init-prelude.ndjson" "$a/perf/gf3-matrix-product.ndjson" "$a/perf/short-circuit-and.ndjson" "$a/perf/grind-ring-5.ndjson" | diff - crates/rulean-core/src/pin_ref_v4_35.in
+          python3 scripts/pin-digests.py --axiom "$a/init-prelude.ndjson" "$a/perf/gf3-matrix-product.ndjson" "$a/perf/short-circuit-and.ndjson" "$a/perf/grind-ring-5.ndjson" | diff - crates/rulean-core/src/pin_axiom_v4_35.in
       - name: the verdicts of the Arena entry
         run: scripts/arena-check.sh _tmp/arena/tests
       - name: engine F and engine R on the Arena

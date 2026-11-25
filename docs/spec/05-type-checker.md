@@ -226,6 +226,8 @@ rulean therefore checks each primitive constant when it is added to the environm
 - If the declaration matches, the extension for that name is on.
 - If it does not match, the extension is off for that name, and the constant unfolds like any definition. This is deviation D1 (05.12). It can only change the verdict on exports that redefine core primitives. The official kernel itself "makes no guarantees" on them (A§1.7, `lake check` comment).
 
+An environment that imports a Lean module does not have the bodies that the module does not expose. Lean then gives such a definition as an axiom with the type of the definition. In Lean v4.36.0, `Nat.gcd`, `Nat.land`, `Nat.lor` and `Nat.xor` are axioms in a file that starts with `module`. The official kernel finds the extension by the name only, so it reduces these axioms on literals. Thus rulean also keeps a reference digest of the axiom form of each target definition. The digest covers the level parameters and the type. A safe axiom that matches this digest also keeps the extension on. `scripts/pin-digests.py --axiom` computes these digests. For the axiom form, T1 needs one more condition: no other axiom of the environment gives a property of the target that the reference definition does not have. The module that hides the body has the reference definition, so this is true for an environment that Lean makes.
+
 The bignum `rulean_nat::Nat` is specified in 04.6. Literal hashing uses all bits (lean4#16146).
 
 ## 05.9 Declarations

@@ -3,7 +3,7 @@
 #
 # Usage: scripts/lean-build.sh OUT [TOOLCHAIN]
 #
-# TOOLCHAIN is the directory of the Lean v4.36.0 release. The default is the prefix of the lean on PATH. The script makes OUT/bin/lean. OUT/lib and OUT/include are links to the directories of TOOLCHAIN, so the new lean finds the oleans of the release.
+# TOOLCHAIN is the directory of the Lean v4.36.0 release. The default is the prefix of the lean on PATH. The script makes OUT/bin/lean. OUT/lib and OUT/include are links to the directories of TOOLCHAIN, so the new lean finds the oleans of the release. OUT/bin/cadical is a link to the cadical of TOOLCHAIN.
 #
 # The release has the static libraries of Lean, and the C++ kernel is in libleancpp.a. The script makes a copy of libleancpp.a in which each kernel symbol has the suffix _cpp. Then it links the libraries of the release with the static library of rulean-ffi, which defines the kernel symbols. The functions of the C++ kernel stay in the binary with the new names, and no object refers to them. The release does not have the object of lean_main, so the script compiles src/util/shell.cpp and src/shell/lean.cpp of the Lean source at the commit of the release.
 #
@@ -115,5 +115,9 @@ done
   "$toolchain/lib/libgmp.a" "$toolchain/lib/libuv.a" "$toolchain/lib/libssl.a" "$toolchain/lib/libcrypto.a" \
   "$rulean" -Wl,-export_dynamic -lc++
 ln -sfn "$toolchain/lib" "$out/lib"
+# Lean runs the SAT solver cadical from the directory of the lean binary.
+if [ -x "$toolchain/bin/cadical" ]; then
+  ln -sfn "$toolchain/bin/cadical" "$out/bin/cadical"
+fi
 ln -sfn "$toolchain/include" "$out/include"
 echo "lean-build: $out/bin/lean has rulean as its kernel"

@@ -75,6 +75,11 @@ pub(crate) fn target_names(st: &mut Store) -> Vec<NameId> {
 /// The reference digests of the `v4.35` profile, from the exports of the Lean v4.36.0 prelude. `scripts/pin-digests.py` gives these values.
 pub const TARGET_REF: [[u8; 32]; TARGET_COUNT] = include!("pin_ref_v4_35.in");
 
+/// The reference digests of the axiom form of each target definition in the `v4.35` profile. The axiom has the level parameters and the type of the definition. A target inductive type has no axiom form, and its entry is zero. `scripts/pin-digests.py --axiom` gives these values.
+///
+/// An environment that imports a module does not have the bodies that the module does not expose. Lean then gives such a definition as an axiom, for example `Nat.land`, `Nat.lor`, `Nat.xor` and `Nat.gcd` in Lean v4.36.0. The official kernel finds the extension by the name only, so it reduces these axioms on literals. rulean accepts the axiom form of a target, so that it gives the same verdicts. The reduction is the reduction of the real definition, which the module has.
+pub const TARGET_AXIOM_REF: [[u8; 32]; TARGET_COUNT] = include!("pin_axiom_v4_35.in");
+
 /// The extension bit that a mismatch of target `i` turns off.
 pub fn target_bit(i: usize) -> u32 {
     if i == 0 {
@@ -322,7 +327,7 @@ impl Digest {
 }
 
 impl Checker {
-    /// The digest of the constant at slot `s` of the environment, or `None` if the constant cannot be a pinned primitive: an unsafe or partial constant, or a constant that is not a definition or an inductive type.
+    /// The digest of the constant at slot `s` of the environment, or `None` if the constant cannot be a pinned primitive: an unsafe or partial constant, or a constant that is not a definition, an axiom or an inductive type.
     fn pin_digest(&self, d: &mut Digest, s: u32) -> Option<[u8; 32]> {
         let c = self.env.at(s);
         if c.safety != Safety::Safe {
@@ -337,6 +342,12 @@ impl Checker {
                 push_bytes(&mut m, &t);
                 let v = d.expr(&self.st, *value);
                 push_bytes(&mut m, &v);
+            }
+            ConstKind::Axiom => {
+                m.push(0x22);
+                d.lparams(&self.st, &mut m, &c.lparams);
+                let t = d.expr(&self.st, c.ty);
+                push_bytes(&mut m, &t);
             }
             ConstKind::Induct(info) => {
                 m.push(0x21);
@@ -373,7 +384,7 @@ impl Checker {
                 self.pin_done |= 1 << i;
                 let mut d = Digest::new();
                 let ok = match self.pin_digest(&mut d, self.env.find(n)) {
-                    Some(h) => h == TARGET_REF[i],
+                    Some(h) => h == TARGET_REF[i] || h == TARGET_AXIOM_REF[i],
                     None => false,
                 };
                 if !ok {

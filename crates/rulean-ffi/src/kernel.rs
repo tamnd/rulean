@@ -88,12 +88,14 @@ enum Exc {
     ThmNotProp(NameId, ExprId),
     /// `declTypeMismatch`: the `Declaration` object of the call, which the call borrows, and the type of the value. The exception takes a new reference to the object.
     DeclType(u64, ExprId),
-    /// A kind with a local context: the tag, the name of the `let` for `letTypeMismatch`, the terms of the other fields, and the local context of the checker.
+    /// A kind with a local context: the tag, the name of the `let` for `letTypeMismatch`, the terms of the other fields, and the local context of the checker. For a term function, `base` is the `LocalContext` object of the call, which the call borrows, and the number of declarations of `locals` that come from it. The local context of the exception is then `base` with the other declarations of `locals`, so it keeps the declarations that the conversion skips.
     Lctx {
         tag: u8,
         name: Option<NameId>,
         terms: Vec<ExprId>,
         locals: Vec<Local>,
+        base: Option<(u64, usize)>,
+        lmvars: Vec<(NameId, u64)>,
     },
     Timeout,
     Memory,
@@ -641,10 +643,10 @@ impl<'a> Kernel<'a> {
                     .iter()
                     .map(|&t| c.expr(t))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok((locals, ids))
+                Ok((locals, ids, c.level_mvars()))
             })
         };
-        let (locals, ids) = match conv {
+        let (locals, ids, lmvars) = match conv {
             Ok(x) => x,
             // SAFETY: the caller gives `kenv`.
             Err(f) => return unsafe { self.error(kenv, &m.chk.st, Exc::Other(f.to_string())) },
@@ -689,7 +691,7 @@ impl<'a> Kernel<'a> {
         };
         if let Some(f) = chk.fault() {
             let known: Vec<NameId> = locals.iter().map(|l| l.fvar).collect();
-            let exc = term_exception(&mut chk, &start, f, &known);
+            let exc = term_exception(&mut chk, &start, f, &known, (lctx, &lmvars));
             // SAFETY: the caller gives `kenv`.
             return unsafe { self.error(kenv, &chk.st, exc) };
         }
@@ -699,7 +701,10 @@ impl<'a> Kernel<'a> {
                 let fvars = locals.iter().map(|l| l.fvar).collect();
                 // SAFETY: the encoder gives the maker only objects that it made.
                 let mut m = unsafe { LeanMake::new(self.rt) };
-                Encoder::new(&mut m, &chk.st).with_fvars(fvars).expr(e)
+                Encoder::new(&mut m, &chk.st)
+                    .with_fvars(fvars)
+                    .with_level_mvars(&lmvars)
+                    .expr(e)
             }
         };
         match v {
@@ -953,7 +958,9 @@ impl<'a> Kernel<'a> {
                 name,
                 terms,
                 locals,
-            } => match lctx_fields(&mut m, st, name, &terms, &locals) {
+                base,
+                lmvars,
+            } => match lctx_fields(&mut m, st, name, &terms, &locals, base, &lmvars) {
                 Ok(objs) => with_env(&mut m, tag, &objs),
                 Err(msg) => {
                     m.dec(env);
@@ -1093,12 +1100,18 @@ fn exception(chk: &mut Checker, d: &Decl, f: Fault, decl: u64) -> Exc {
         ErrorKind::Heartbeat => Exc::Timeout,
         ErrorKind::MemoryLimit => Exc::Memory,
         ErrorKind::DeepRecursion => Exc::DeepRecursion,
-        _ => lctx_exception(chk, f, &[]).unwrap_or_else(|| Exc::Other(message(kind))),
+        _ => lctx_exception(chk, f, &[], None, &[]).unwrap_or_else(|| Exc::Other(message(kind))),
     }
 }
 
 /// The exception of a term function that fails with the fault `f`. `terms` are the types and the values of the local context and the terms of the call. `known` is the `FVarId` of each free variable of the local context of the call.
-fn term_exception(chk: &mut Checker, terms: &[ExprId], f: Fault, known: &[NameId]) -> Exc {
+fn term_exception(
+    chk: &mut Checker,
+    terms: &[ExprId],
+    f: Fault,
+    known: &[NameId],
+    (lctx, lmvars): (u64, &[(NameId, u64)]),
+) -> Exc {
     let kind = f.kind;
     match kind {
         ErrorKind::UnknownConst => {
@@ -1112,12 +1125,19 @@ fn term_exception(chk: &mut Checker, terms: &[ExprId], f: Fault, known: &[NameId
         ErrorKind::Heartbeat => Exc::Timeout,
         ErrorKind::MemoryLimit => Exc::Memory,
         ErrorKind::DeepRecursion => Exc::DeepRecursion,
-        _ => lctx_exception(chk, f, known).unwrap_or_else(|| Exc::Other(message(kind))),
+        _ => lctx_exception(chk, f, known, Some(lctx), lmvars)
+            .unwrap_or_else(|| Exc::Other(message(kind))),
     }
 }
 
-/// The exception of a kind with a local context, as the C++ kernel gives it: `typeExpected`, `funExpected`, `appTypeMismatch`, `letTypeMismatch` or `invalidProj`. It is `None` for the other kinds, and if the fault does not have a term that the exception needs. `known` is the `FVarId` of each free variable of the local context of the call.
-fn lctx_exception(chk: &mut Checker, f: Fault, known: &[NameId]) -> Option<Exc> {
+/// The exception of a kind with a local context, as the C++ kernel gives it: `typeExpected`, `funExpected`, `appTypeMismatch`, `letTypeMismatch` or `invalidProj`. It is `None` for the other kinds, and if the fault does not have a term that the exception needs. `known` is the `FVarId` of each free variable of the local context of the call, and `lctx` is the `LocalContext` object of the call, if there is one. `lmvars` has the level metavariables of the call, as `Converter::level_mvars` gives them.
+fn lctx_exception(
+    chk: &mut Checker,
+    f: Fault,
+    known: &[NameId],
+    lctx: Option<u64>,
+    lmvars: &[(NameId, u64)],
+) -> Option<Exc> {
     let (tag, name, terms) = match f.kind {
         ErrorKind::TypeExpected => (TYPE_EXPECTED, None, vec![f.at]),
         ErrorKind::FunctionExpected => (FUN_EXPECTED, None, vec![f.at]),
@@ -1138,6 +1158,8 @@ fn lctx_exception(chk: &mut Checker, f: Fault, known: &[NameId]) -> Option<Exc> 
         name,
         terms,
         locals: local_context(chk, known),
+        base: lctx.map(|o| (o, known.len())),
+        lmvars: lmvars.to_vec(),
     })
 }
 
@@ -1163,16 +1185,19 @@ fn local_context(chk: &mut Checker, known: &[NameId]) -> Vec<Local> {
         .collect()
 }
 
-/// The fields after the environment of an exception with a local context: the `LocalContext` object, the name if there is one, and the terms. The result has new references. If a term cannot be encoded, the result is the message.
+/// The fields after the environment of an exception with a local context: the `LocalContext` object, the name if there is one, and the terms. The `LocalContext` object is `base` with the other declarations of `locals`, or the declarations of `locals` if there is no `base`. The result has new references. If a term cannot be encoded, the result is the message.
 fn lctx_fields(
     m: &mut LeanMake,
     st: &Store,
     name: Option<NameId>,
     terms: &[ExprId],
     locals: &[Local],
+    base: Option<(u64, usize)>,
+    lmvars: &[(NameId, u64)],
 ) -> Result<Vec<u64>, String> {
+    let skip = base.map_or(0, |(_, n)| n);
     let mut parts = Vec::new();
-    for l in locals {
+    for l in &locals[skip..] {
         parts.extend([Part::Name(l.id), Part::Name(l.user), Part::Term(l.ty)]);
         parts.extend(l.value.map(Part::Term));
     }
@@ -1182,7 +1207,9 @@ fn lctx_fields(
     let mut fault = None;
     {
         let fvars = locals.iter().map(|l| l.id).collect();
-        let mut enc = Encoder::new(m, st).with_fvars(fvars);
+        let mut enc = Encoder::new(m, st)
+            .with_fvars(fvars)
+            .with_level_mvars(lmvars);
         for p in parts {
             match p {
                 Part::Name(n) => objs.push(enc.name(n)),
@@ -1204,8 +1231,14 @@ fn lctx_fields(
     }
     let mut it = objs.into_iter();
     let mut next = || it.next().expect("an object for each part");
-    let mut lctx = m.local_ctx_empty();
-    for l in locals {
+    let mut lctx = match base {
+        Some((o, _)) => {
+            m.inc(o);
+            o
+        }
+        None => m.local_ctx_empty(),
+    };
+    for l in &locals[skip..] {
         let (id, user, ty) = (next(), next(), next());
         lctx = match l.value {
             Some(_) => {

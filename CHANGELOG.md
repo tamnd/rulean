@@ -8,6 +8,13 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 - `Kernel::elab_add_decl` and `Kernel::elab_add_decl_without_checking` of `rulean-ffi` and the exported symbols `lean_elab_add_decl` and `lean_elab_add_decl_without_checking` (spec 09.6.2). The elaborator of Lean v4.36.0 adds each declaration with `lean_elab_add_decl`, which is C++ code that calls the C++ kernel directly. The rulean functions take the kernel environment of the `Lean.Environment`, check the declaration with rulean, and give the new kernel environment to `lean_elab_environment_update_base_after_kernel_add`, as the C++ functions do. The test `dual` gives three declarations to the C++ functions and to rulean and requires the same verdicts, exceptions and constants.
 - The script `scripts/lean-build.sh` makes a `lean` binary of Lean v4.36.0 with rulean as its kernel, on macOS (spec 09.6.2). It renames the kernel symbols of `libleancpp.a` of the release with the suffix `_cpp`, and links the static libraries of the release with the static library of `rulean-ffi`. The CI job `lean-build` runs `tests/lean-build/smoke.lean` with the `lean` of the release and with the new `lean`, and requires the same output.
+- The script `scripts/lean-suite.sh` runs the tests of `tests/elab` and `tests/elab_fail` of the Lean source with the `lean` of the release and with the `lean` of `scripts/lean-build.sh`, and compares the output and the exit code of each test (spec 09.6.5).
+
+### Fixed
+
+- Primitive pinning accepts the axiom form of a target (spec 05.8). In a file with `module`, the elaborator adds `Nat.gcd`, `Nat.land`, `Nat.lor` and `Nat.xor` as axioms, because their bodies are not exposed. The C++ kernel reduces these constants by name, but rulean turned off the extension, and a proof such as `Nat.ne_of_beq_eq_false (Eq.refl false)` failed. The new table `pin_axiom_v4_35.in` has the digest of the axiom form of each target, and `scripts/pin-digests.py --axiom` makes it. The CI job checks the table.
+- The term functions of `rulean-ffi` accept a local context with metavariables (spec 09.6.4). The conversion skips a local declaration whose type or value has a metavariable, and a term that uses the local gets the fault of the conversion. A level metavariable in a term becomes the reserved universe parameter `_rulean_lmvar.N`, and the result has the original level metavariable. The local context of an exception starts from the `LocalContext` of the call, so it has the skipped locals.
+- `scripts/lean-build.sh` makes `OUT/bin/cadical` a link to the `cadical` of the release, because `bv_decide` runs the SAT solver from the directory of `lean`.
 
 ## [0.0.15] - 2026-11-25
 

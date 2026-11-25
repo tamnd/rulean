@@ -93,6 +93,11 @@ impl<'a, H: Heap> Converter<'a, H> {
         Ok(locals)
     }
 
+    /// The level metavariables of the local context and the terms. After `local_context`, the conversion gives a level parameter for each level metavariable, with the name `_rulean_lmvar.N`, and the same parameter for each `Level.mvar` object of one metavariable. The result has the parameter and the first `Level.mvar` object of the metavariable. The objects are borrowed. `Encoder::with_level_mvars` writes each parameter as its object again.
+    pub fn level_mvars(&self) -> Vec<(NameId, u64)> {
+        self.c.lmvars.values().copied().collect()
+    }
+
     /// Converts the `Expr` object at `e`. A free variable must be in the local context of `local_context`.
     pub fn expr(&mut self, e: u64) -> Result<ExprId, Fault> {
         let id = self.c.expr_at(e)?;
@@ -137,6 +142,10 @@ struct Conv<'a, H: Heap> {
     exprs: HashMap<u64, ExprId>,
     /// The free variables of a local context, by the name of their `FVarId`. `None` for a kernel declaration, which cannot have free variables.
     fvars: Option<HashMap<u32, ExprId>>,
+    /// The local declarations that `local_context` skips, by the name of their `FVarId`, with the fault of the declaration.
+    skipped: HashMap<u32, Fault>,
+    /// The level metavariables of a term, by the name of their `LMVarId`: the level parameter that stands for the metavariable and the first `Level.mvar` object. See `Converter::level_mvars`.
+    lmvars: HashMap<u32, (NameId, u64)>,
 }
 
 fn bad(at: u64, msg: impl Into<String>) -> Fault {
@@ -158,6 +167,9 @@ fn binder_info(at: u64, v: u8) -> Result<BinderInfo, Fault> {
     })
 }
 
+/// The first part of the name of the level parameter that stands for a level metavariable of a term. Lean does not give this name to a level parameter.
+const LMVAR_PREFIX: &[u8] = b"_rulean_lmvar";
+
 /// The largest depth of the tree of a `PersistentArray`. The tree has 32 children for each node, so this depth is more than the depth of any array that fits in memory.
 const MAX_PARRAY_DEPTH: u32 = 16;
 
@@ -170,6 +182,8 @@ impl<'a, H: Heap> Conv<'a, H> {
             levels: HashMap::new(),
             exprs: HashMap::new(),
             fvars: None,
+            skipped: HashMap::new(),
+            lmvars: HashMap::new(),
         }
     }
 
@@ -482,6 +496,24 @@ impl<'a, H: Heap> Conv<'a, H> {
             }
             let (t, _) = self.head(q)?;
             self.ctor(q, 0..=5, Self::level_objs(t), "level")?;
+            if t == 5 && self.fvars.is_some() {
+                // A term of a term function can have a level metavariable. The C++ kernel compares it as an atom, as a level parameter. The conversion gives a new level parameter for each metavariable.
+                let n = self.name(q, 0)?;
+                let k = self.lmvars.len() as u64;
+                let p = match self.lmvars.get(&n.0) {
+                    Some(&(p, _)) => p,
+                    None => {
+                        let anon = self.st.anon();
+                        let pre = self.st.name_str_bytes(anon, LMVAR_PREFIX);
+                        let p = self.st.name_num(pre, k);
+                        self.lmvars.insert(n.0, (p, q));
+                        p
+                    }
+                };
+                let id = self.st.level_param(p);
+                self.levels.insert(q, id);
+                continue;
+            }
             if t == 5 {
                 return Err(Fault::new(
                     FaultKind::MetaVar,
@@ -630,18 +662,30 @@ impl<'a, H: Heap> Conv<'a, H> {
             self.ctor(d, 0..=1, objs, "LocalDecl")?;
             let fvar = self.name(d, 1)?;
             let user_name = self.name(d, 2)?;
-            let ty = self.expr(d, 3)?;
-            let (info, value) = if t == 0 {
-                (binder_info(d, self.u8_at(d, 4, 0)?)?, None)
+            let info = if t == 0 {
+                binder_info(d, self.u8_at(d, 4, 0)?)?
             } else {
                 self.bool_at(d, 5, 0)?;
-                (BinderInfo::Default, Some(self.expr(d, 4)?))
+                BinderInfo::Default
+            };
+            // The C++ kernel reads a local declaration only when a term refers to it. The elaborator gives local declarations with metavariables, for example the auxiliary declaration of the definition that it elaborates. The conversion skips such a declaration and a declaration that refers to a skipped declaration. A term that refers to a skipped declaration gets the fault of the declaration.
+            let parts = self.expr(d, 3).and_then(|ty| {
+                let value = if t == 1 { Some(self.expr(d, 4)?) } else { None };
+                Ok((ty, value))
+            });
+            let (ty, value) = match parts {
+                Ok(x) => x,
+                Err(f) if matches!(f.kind, FaultKind::MetaVar | FaultKind::FreeVar) => {
+                    self.skipped.insert(fvar.0, f);
+                    continue;
+                }
+                Err(f) => return Err(f),
             };
             let level = u32::try_from(out.len())
                 .map_err(|_| decline(lctx, "a local context is too large"))?;
             let e = self.st.mk_fvar(level, ty);
             let map = self.fvars.get_or_insert_default();
-            if map.insert(fvar.0, e).is_some() {
+            if map.insert(fvar.0, e).is_some() || self.skipped.contains_key(&fvar.0) {
                 return Err(bad(d, "two local declarations have the same free variable"));
             }
             out.push(Local {
@@ -699,6 +743,9 @@ impl<'a, H: Heap> Conv<'a, H> {
                         continue;
                     }
                     Some(None) => {
+                        if let Some(f) = self.skipped.get(&n.0) {
+                            return Err(f.clone());
+                        }
                         return Err(Fault::new(FaultKind::FreeVar, q, "unknown free variable"));
                     }
                     None => {

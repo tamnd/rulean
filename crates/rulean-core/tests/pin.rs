@@ -1,10 +1,11 @@
 //! Tests of primitive pinning (spec 05.8, deviation D1).
 
+use rulean_core::env::{ConstInfo, ConstKind};
 use rulean_core::sha256::{Hasher, sha256};
 use rulean_core::tc::Checker;
 use rulean_format::{Axiom, Decl, Safety};
 use rulean_nat::Nat;
-use rulean_store::{ExprId, NameId, Store};
+use rulean_store::{BinderInfo, ExprId, NameId, Store};
 
 fn name(c: &mut Checker, s: &str) -> NameId {
     let mut n = c.st.anon();
@@ -29,7 +30,7 @@ fn bin(c: &mut Checker, op: &str, a: u64, b: u64) -> ExprId {
     c.st.mk_apps(f, &[x, y])
 }
 
-/// Adds the axiom `n : Type`. An axiom is never equal to a reference, so this is a mismatch for a target name.
+/// Adds the axiom `n : Type`. No target has this type, so this is a mismatch for a target name.
 fn add_type_axiom(c: &mut Checker, n: &str) {
     let name = name(c, n);
     let z = c.st.level_zero();
@@ -141,4 +142,53 @@ fn other_names_are_not_compared() {
     add_type_axiom(&mut c, "Nat.addx");
     add_type_axiom(&mut c, "Int");
     assert!(c.pin_mismatch.is_empty());
+}
+
+/// Puts the axiom `n : Nat → Nat → Nat`, or `n : Nat → Nat` if `binary` is false, in the environment and compares the targets. The axiom is not checked, because the environment has no `Nat`.
+fn put_nat_axiom(c: &mut Checker, n: &str, binary: bool) {
+    let nat = name(c, "Nat");
+    let target = name(c, n);
+    let ls = c.st.level_list_empty();
+    let t = c.st.mk_const(nat, ls);
+    let anon = c.st.anon();
+    let mut ty = c.st.mk_pi(anon, BinderInfo::Default, t, t);
+    if binary {
+        ty = c.st.mk_pi(anon, BinderInfo::Default, t, ty);
+    }
+    c.env.add(ConstInfo {
+        name: target,
+        lparams: Vec::new(),
+        ty,
+        safety: Safety::Safe,
+        kind: ConstKind::Axiom,
+    });
+    c.check_pins();
+}
+
+#[test]
+fn axiom_form_keeps_the_extension_on() {
+    let mut c = Checker::new(Store::new());
+    put_nat_axiom(&mut c, "Nat.land", true);
+    assert!(c.pin_mismatch.is_empty());
+    let land = bin(&mut c, "Nat.land", 12, 10);
+    let eight = lit(&mut c, 8);
+    assert_eq!(c.whnf(land), eight);
+}
+
+#[test]
+fn axiom_with_another_type_is_a_mismatch() {
+    let mut c = Checker::new(Store::new());
+    put_nat_axiom(&mut c, "Nat.land", false);
+    let n = name(&mut c, "Nat.land");
+    assert_eq!(c.pin_mismatch, vec![n]);
+    let land = bin(&mut c, "Nat.land", 12, 10);
+    assert_eq!(c.whnf(land), land);
+}
+
+#[test]
+fn inductive_target_has_no_axiom_form() {
+    let mut c = Checker::new(Store::new());
+    put_nat_axiom(&mut c, "Nat", true);
+    let n = name(&mut c, "Nat");
+    assert_eq!(c.pin_mismatch, vec![n]);
 }

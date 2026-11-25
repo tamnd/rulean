@@ -4,6 +4,14 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+### Added
+
+- The dual-kernel build measures the heartbeats of the two kernels (spec 09.6.4). If the environment variable `RULEAN_DUAL_BEATS` gives a file name, each `addDecl` that the two kernels accept writes the count of rulean, the count of the C++ kernel and the name of the declaration to the file. The new function `Kernel::cpp_beats` of `rulean-ffi` finds the count of the C++ kernel with a binary search on the limit. The search sets the heartbeats of the thread to 0 before each try, so use the variable only to measure. On 322 tests of `tests/elab`, rulean counted 66% of the heartbeats of the C++ kernel for 12339 declarations, and no declaration had a count of rulean above the C++ count.
+
+### Fixed
+
+- Engine R keys the caches of `infer_type`, `whnf_core` and `whnf` with terms that are equal up to binder names and binder info, as the C++ kernel does with `is_equal` (spec 05.5). Before, two terms that differed only in binder names had different keys, so engine R missed cache hits of the C++ kernel. The first calibration with `RULEAN_DUAL_BEATS` found 29 declarations where rulean counted more heartbeats than the C++ kernel, for example `Impl.size_balanceLErase` with 5346 heartbeats of rulean and 4675 of the C++ kernel. Such a declaration could time out with rulean and not with the C++ kernel, and that is not deviation D2. After the fix, the calibration found none.
+
 ## [0.0.18] - 2026-11-25
 
 ### Changed

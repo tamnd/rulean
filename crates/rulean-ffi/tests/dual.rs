@@ -320,6 +320,17 @@ impl Dual<'_> {
             ours <= cpp,
             "rulean counts {ours} heartbeats and the C++ kernel counts {cpp} for {d:?}"
         );
+        // The calibration of the dual-kernel build finds the same count, from the count of rulean and from other first values.
+        let add = self.add_decl;
+        let run = |e: u64, max: usize| {
+            // SAFETY: `e` and `o` are live objects, and the function consumes `e`.
+            unsafe { add(e, max, 512, o, boxed(0)) }
+        };
+        for first in [ours, 1, cpp + 7] {
+            // SAFETY: `env` is live, and the call gives `run` new references to it.
+            let found = unsafe { self.kernel.cpp_beats(self.env, &run, first, 0) };
+            assert_eq!(found, Some(cpp), "the calibration of {d:?} from {first}");
+        }
         (cpp, ours)
     }
 

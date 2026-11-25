@@ -906,6 +906,7 @@ fn the_two_kernels_give_the_same_verdicts() {
     ] {
         dual.same_constant(s);
     }
+    same_vars(&dual);
 
     same_with_mirror(&dual, base, &mut st, &cases);
 
@@ -989,12 +990,30 @@ fn the_two_kernels_give_the_same_verdicts() {
         ("whnf h", Q::Whnf(h), Want::Ok),
         ("check h", Q::Check(h), Want::Ok),
     ];
+    // The free variable `w` is not in the local context. The C++ kernel gives "unknown free variable" only when it infers the type of `w`, and rulean converts `w` to a far free variable.
+    let w_id = st.name_str_bytes(st.anon(), b"_fw");
+    terms.far.push(w_id);
+    let w = rulean_core::expr::far_fvar(&mut st, 0);
+    let mut t = T { st: &mut st };
+    let pred = t.c("pred");
+    let s = t.c("N.s");
+    let sw = t.app(s, &[w]);
+    let pred_sw = t.app(pred, &[sw]);
+    let ws: Vec<(&str, Q, Want)> = vec![
+        ("w = w", Q::DefEq(w, w), Want::Bool(true)),
+        ("pred (N.s w) = w", Q::DefEq(pred_sw, w), Want::Bool(true)),
+        ("whnf (pred (N.s w))", Q::Whnf(pred_sw), Want::Ok),
+        ("whnf w", Q::Whnf(w), Want::Ok),
+        ("w = x", Q::DefEq(w, x), Want::Err),
+        ("check w", Q::Check(w), Want::Err),
+        ("check (N.s w)", Q::Check(sw), Want::Err),
+    ];
     let mut same_tags = 0;
-    for (what, q, want) in qs.iter().chain(&hs) {
+    for (what, q, want) in qs.iter().chain(&hs).chain(&ws) {
         same_tags += terms.same(&dual, &st, elab, what, q, *want);
     }
-    // `check Missing` gives `unknownConstant`, the two checks with too many arguments and `check (fun n => n n)` give `funExpected`, and `check (N.s Prop)` gives `appTypeMismatch`.
-    assert_eq!(same_tags, 5);
+    // `check Missing` gives `unknownConstant`, the two checks with too many arguments and `check (fun n => n n)` give `funExpected`, `check (N.s Prop)` gives `appTypeMismatch`, and the three queries that infer the type of `w` give "unknown free variable".
+    assert_eq!(same_tags, 8);
 
     // The functions that the elaborator calls. `e1` is correct, the value of `e2` has the wrong type, and `e3` is `e2` without the check.
     let mut t = T { st: &mut st };
@@ -1159,6 +1178,163 @@ fn add_with(
 }
 
 /// The test of the mirror of `Kernel::add_decl` (spec 09.6.3). A new kernel checks the declarations of `cases` on its own environments from `base`, so each call can use the constants of the mirror. Then two environments get a constant `c` with different values, and a definition that uses `c` must have the verdict of the C++ kernel on each environment.
+/// Gives declarations with metavariables and free variables to the C++ kernel and to `Kernel::add_decl`. The conversion of rulean declines these terms, so the test makes the objects with the functions of the runtime. The two kernels must give the same exception, `declHasMVars` (3) or `declHasFVars` (4), with the same name and the same term. The C++ kernel checks the type of a constant before its value, and the type of an inductive type before the type of a constructor. If a term has a metavariable and a free variable, the exception is `declHasMVars`.
+fn same_vars(dual: &Dual) {
+    type Mk1 = unsafe extern "C" fn(u64) -> u64;
+    type Mk2 = unsafe extern "C" fn(u64, u64) -> u64;
+    type Mk4 = unsafe extern "C" fn(u64, u64, u64, u8) -> u64;
+    type Eq2 = unsafe extern "C" fn(u64, u64) -> u8;
+    let rt = dual.rt;
+    // SAFETY: these are the types of the Lean functions of v4.36.0. The `mk` functions consume their object arguments, and the two equalities borrow them.
+    let (mk_str, mk_string, mvar, lmvar, fvar, sort, zero, forall, name_eq, expr_eqv) = unsafe {
+        (
+            func::<Mk2>(rt, c"lean_name_mk_string"),
+            func::<unsafe extern "C" fn(*const std::ffi::c_char) -> u64>(rt, c"lean_mk_string"),
+            func::<Mk1>(rt, c"l_Lean_mkMVar"),
+            func::<Mk1>(rt, c"l_Lean_mkLevelMVar"),
+            func::<Mk1>(rt, c"lean_expr_mk_fvar"),
+            func::<Mk1>(rt, c"lean_expr_mk_sort"),
+            func::<unsafe extern "C" fn(u64) -> u64>(rt, c"lean_level_mk_zero"),
+            func::<Mk4>(rt, c"lean_expr_mk_forall"),
+            func::<Eq2>(rt, c"lean_name_eq"),
+            func::<Eq2>(rt, c"lean_expr_eqv"),
+        )
+    };
+    // SAFETY: the functions get new objects, and the test owns each result.
+    let name = |s: &CStr| unsafe { mk_str(boxed(0), mk_string(s.as_ptr())) };
+    // SAFETY: the test gives the maker only objects of the runtime.
+    let mut m = unsafe { LeanMake::new(rt) };
+    // SAFETY: as for `name`.
+    let prop = || unsafe { sort(zero(boxed(0))) };
+    // SAFETY: as for `name`.
+    let hole = |s: &CStr| unsafe { mvar(name(s)) };
+    // SAFETY: as for `name`.
+    let free = |s: &CStr| unsafe { fvar(name(s)) };
+    // SAFETY: as for `name`.
+    let sort_mvar = |s: &CStr| unsafe { sort(lmvar(name(s))) };
+    let cons = |m: &mut LeanMake, x: u64| m.ctor(1, &[x, boxed(0)], &[]);
+    // The `ConstantVal` of `n : ty` without universe parameters.
+    let cval = |m: &mut LeanMake, n: u64, ty: u64| m.ctor(0, &[n, boxed(0), ty], &[]);
+    let axiom = |m: &mut LeanMake, s: &CStr, ty: u64| {
+        let c = cval(m, name(s), ty);
+        let v = m.ctor(0, &[c], &[0]);
+        m.ctor(0, &[v], &[])
+    };
+    // A safe definition with the hints `opaque`. The safety `safe` is the scalar 1.
+    let defn = |m: &mut LeanMake, s: &CStr, ty: u64, value: u64| {
+        let c = cval(m, name(s), ty);
+        let all = cons(m, name(s));
+        let v = m.ctor(0, &[c, value, boxed(0), all], &[1]);
+        m.ctor(1, &[v], &[])
+    };
+    let thm = |m: &mut LeanMake, s: &CStr, ty: u64, value: u64| {
+        let c = cval(m, name(s), ty);
+        let all = cons(m, name(s));
+        let v = m.ctor(0, &[c, value, all], &[]);
+        m.ctor(2, &[v], &[])
+    };
+    // inductive `s : Prop` with one constructor `c : cty`.
+    let induct = |m: &mut LeanMake, s: &CStr, c: &CStr, cty: u64| {
+        let k = m.ctor(0, &[name(c), cty], &[]);
+        let ks = cons(m, k);
+        let it = m.ctor(0, &[name(s), prop(), ks], &[]);
+        let its = cons(m, it);
+        m.ctor(6, &[boxed(0), boxed(0), its], &[0])
+    };
+    // SAFETY: the binder name is a new object and the binder info `default` is 0.
+    let arrow = |a: u64, b: u64| unsafe { forall(name(c"_a"), a, b, 0) };
+    let cases: Vec<(&str, u64, u64, &CStr)> = vec![
+        (
+            "an axiom with ?m",
+            axiom(&mut m, c"vx_a1", hole(c"_m1")),
+            3,
+            c"vx_a1",
+        ),
+        (
+            "a value with ?m",
+            defn(&mut m, c"vx_d1", prop(), hole(c"_m2")),
+            3,
+            c"vx_d1",
+        ),
+        (
+            "a theorem with Sort ?u",
+            thm(&mut m, c"vx_t1", sort_mvar(c"_u1"), hole(c"_m3")),
+            3,
+            c"vx_t1",
+        ),
+        (
+            "an axiom with a free variable",
+            axiom(&mut m, c"vx_a2", free(c"_f1")),
+            4,
+            c"vx_a2",
+        ),
+        (
+            "an axiom with a free variable and ?m",
+            axiom(&mut m, c"vx_a3", arrow(free(c"_f2"), hole(c"_m4"))),
+            3,
+            c"vx_a3",
+        ),
+        (
+            "a type with a free variable and a value with ?m",
+            defn(&mut m, c"vx_d2", free(c"_f3"), hole(c"_m5")),
+            4,
+            c"vx_d2",
+        ),
+        (
+            "a constructor with ?m",
+            induct(&mut m, c"vx_I", c"vx_I.mk", hole(c"_m6")),
+            3,
+            c"vx_I.mk",
+        ),
+    ];
+    for (what, o, want, n) in cases {
+        // SAFETY: `env` and `o` are live objects. The functions consume the environment and borrow the declaration and the cancel token.
+        let (r, r2) = unsafe {
+            rt.inc(dual.env);
+            let r = (dual.add_decl)(dual.env, 0, 512, o, boxed(0));
+            rt.inc(dual.env);
+            let r2 = dual.kernel.add_decl(dual.env, 0, 512, o, boxed(0));
+            (r, r2)
+        };
+        assert_eq!(tag(&dual.h, r), 0, "the C++ kernel accepts {what}");
+        assert_eq!(tag(&dual.h, r2), 0, "add_decl accepts {what}");
+        let (x, x2) = (word(&dual.h, r + 8), word(&dual.h, r2 + 8));
+        assert_eq!(
+            exc_tag(&dual.h, x),
+            want,
+            "the exception of the C++ kernel on {what}"
+        );
+        assert_eq!(
+            exc_tag(&dual.h, x2),
+            want,
+            "the exception of add_decl on {what}"
+        );
+        let want_name = name(n);
+        // SAFETY: the fields are live, and the equalities borrow their arguments. The test owns `r`, `r2`, `o` and `want_name`.
+        unsafe {
+            assert_eq!(
+                name_eq(word(&dual.h, x + 16), want_name),
+                1,
+                "the name of the C++ exception on {what}"
+            );
+            assert_eq!(
+                name_eq(word(&dual.h, x2 + 16), want_name),
+                1,
+                "the name of the rulean exception on {what}"
+            );
+            assert_eq!(
+                expr_eqv(word(&dual.h, x + 24), word(&dual.h, x2 + 24)),
+                1,
+                "the terms of the exceptions differ on {what}"
+            );
+            rt.dec(want_name);
+            rt.dec(r);
+            rt.dec(r2);
+            rt.dec(o);
+        }
+    }
+}
+
 fn same_with_mirror(dual: &Dual, base: u64, st: &mut Store, cases: &[(&str, Decl, bool)]) {
     // SAFETY: the runtime is Lean v4.36.0.
     let k = unsafe { Kernel::new(dual.rt) }.expect("the kernel functions");
@@ -1325,6 +1501,8 @@ struct Terms<'a> {
     rt: &'a Runtime,
     /// The names of the `FVarId` of the local declarations, by level.
     fvars: Vec<NameId>,
+    /// The names of the `FVarId` of the far free variables, by number. These free variables are not in the local context.
+    far: Vec<NameId>,
     /// The `LocalContext` object. The test owns one reference.
     lctx: u64,
     is_def_eq: DefEqFn,
@@ -1368,6 +1546,7 @@ impl<'a> Terms<'a> {
             Terms {
                 rt,
                 fvars,
+                far: Vec::new(),
                 lctx,
                 is_def_eq: func::<DefEqFn>(rt, c"lean_kernel_is_def_eq"),
                 whnf: func::<TermFn>(rt, c"lean_kernel_whnf"),
@@ -1414,6 +1593,7 @@ impl<'a> Terms<'a> {
                 let mut m = unsafe { LeanMake::new(self.rt) };
                 Encoder::new(&mut m, st)
                     .with_fvars(self.fvars.clone())
+                    .with_far_fvars(self.far.clone())
                     .expr(e)
                     .expect("a term")
             })

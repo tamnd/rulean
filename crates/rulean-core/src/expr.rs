@@ -11,6 +11,16 @@ use rulean_store::{Expr, ExprId, Flags, LevelId, NameId, SATURATED, Store};
 use crate::level;
 use crate::memo::Memo;
 
+/// The first level of the far free variables. A far free variable is a free variable of a term that is not in the local context. The C++ kernel accepts such a term, and it gives "unknown free variable" only when it must read the declaration of the variable. The checker gives the fault `UnknownFVar` when it infers the type of a far free variable, and `whnf` keeps the variable. The local context of the checker cannot have this number of declarations.
+pub const FAR_FVAR: u32 = 1 << 31;
+
+/// The far free variable with the number `k`. Its level is `FAR_FVAR + k`, and its type is `Sort 0`. The type is only a placeholder, because the checker does not read the type of a far free variable.
+pub fn far_fvar(st: &mut Store, k: u32) -> ExprId {
+    let z = st.level_zero();
+    let t = st.mk_sort(z);
+    st.mk_fvar(FAR_FVAR.saturating_add(k), t)
+}
+
 /// The scratch maps of the expression operations. Each operation clears its own map when it starts.
 #[derive(Debug, Default)]
 pub struct Scratch {

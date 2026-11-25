@@ -6,7 +6,7 @@
 //!
 //! The kernel keeps the mirror between the calls of a thread (spec 09.6.3). Each constant of the mirror keeps a reference to its `ConstantInfo` object, so the runtime cannot free the object or change it in place, and an object at the same address is the same constant. Each call walks the constants that the check can use and finds each one in the Lean environment. A constant with the same object is not converted again. If a constant that the walk finds is in the mirror and is not the same constant in the Lean environment, or if only the mirror has the quotient, the call makes a new mirror. The checker of the mirror has no session, so the heartbeats of a declaration do not depend on the earlier calls.
 //!
-//! If rulean accepts the declaration, the call adds the new constants to the Lean environment with `lean_environment_add`. If rulean rejects it, the call gives the `Kernel.Exception` constructor of the C++ kernel (spec 09.6.4). The kinds `declHasMVars`, `declHasFVars` and `exprTypeMismatch` give `other` with a message, and so do the errors that the C++ kernel gives as `other`. An exception with a local context has the free variables of the checker. A free variable that the check makes gets the name `_kernel_fresh.N`.
+//! If rulean accepts the declaration, the call adds the new constants to the Lean environment with `lean_environment_add`. If rulean rejects it, the call gives the `Kernel.Exception` constructor of the C++ kernel (spec 09.6.4). A declaration with a metavariable or a free variable gives `declHasMVars` or `declHasFVars`. The kind `exprTypeMismatch` gives `other` with a message, and so do the errors that the C++ kernel gives as `other`. An exception with a local context has the free variables of the checker. A free variable that the check makes gets the name `_kernel_fresh.N`.
 //!
 //! `max_heartbeat` is the heartbeat limit of the checker (spec 09.6.4). The C++ kernel counts one heartbeat for each call of `infer_type_core`, `whnf_core` and `is_def_eq_core`, and the checker counts one at the same functions. The C++ count is for each thread and starts at 0 at the start of a task, but the count of rulean starts at 0 for each declaration. The term functions have no limit, because the C++ functions use the limit of the thread and Lean does not export it. The recursion limit has no effect yet.
 //!
@@ -37,6 +37,7 @@ use crate::heap::{Heap, boxed};
 use crate::live::LiveHeap;
 use crate::make::{Encoder, Make};
 use crate::rt::{LeanMake, Runtime};
+use crate::{Fault as ConvFault, FaultKind};
 
 type Find = unsafe extern "C" fn(u64, u64) -> u64;
 type Add = unsafe extern "C" fn(u64, u64) -> u64;
@@ -63,6 +64,8 @@ enum Out {
 const UNKNOWN_CONSTANT: u8 = 0;
 const ALREADY_DECLARED: u8 = 1;
 const DECL_TYPE_MISMATCH: u8 = 2;
+const DECL_HAS_MVARS: u8 = 3;
+const DECL_HAS_FVARS: u8 = 4;
 const FUN_EXPECTED: u8 = 5;
 const TYPE_EXPECTED: u8 = 6;
 const LET_TYPE_MISMATCH: u8 = 7;
@@ -81,6 +84,9 @@ const CHECK_STACK_BYTES: usize = 1 << 30;
 /// The interval at which the calling thread reads the cancel token during a check.
 const POLL: Duration = Duration::from_millis(1);
 
+/// The level metavariables of a term call, as `Converter::level_mvars` gives them, and the far free variables of the call, as `Converter::far_fvars` gives them.
+type TermVars = (Vec<(NameId, u64)>, Vec<NameId>);
+
 /// A rejection, before it is a `Kernel.Exception` object.
 enum Exc {
     Unknown(NameId),
@@ -88,6 +94,8 @@ enum Exc {
     ThmNotProp(NameId, ExprId),
     /// `declTypeMismatch`: the `Declaration` object of the call, which the call borrows, and the type of the value. The exception takes a new reference to the object.
     DeclType(u64, ExprId),
+    /// `declHasMVars` or `declHasFVars`: the tag, and the `Name` object and the `Expr` object of the part of the declaration, which the call borrows. The exception takes a new reference to each object.
+    DeclVars(u8, u64, u64),
     /// A kind with a local context: the tag, the name of the `let` for `letTypeMismatch`, the terms of the other fields, and the local context of the checker. For a term function, `base` is the `LocalContext` object of the call, which the call borrows, and the number of declarations of `locals` that come from it. The local context of the exception is then `base` with the other declarations of `locals`, so it keeps the declarations that the conversion skips.
     Lctx {
         tag: u8,
@@ -95,7 +103,8 @@ enum Exc {
         terms: Vec<ExprId>,
         locals: Vec<Local>,
         base: Option<(u64, usize)>,
-        lmvars: Vec<(NameId, u64)>,
+        /// The level metavariables and the far free variables of the call. The box keeps `Exc` small.
+        vars: Box<TermVars>,
     },
     Timeout,
     Memory,
@@ -247,9 +256,9 @@ impl<'a> Kernel<'a> {
         // SAFETY: the caller gives `env` and `decl`.
         let d = match unsafe { self.convert_and_mirror(env, &mut m, decl) } {
             Ok(d) => d,
-            Err(msg) => {
+            Err(x) => {
                 // SAFETY: the caller gives `env`.
-                let r = unsafe { self.error(env, &m.chk.st, Exc::Other(msg)) };
+                let r = unsafe { self.error(env, &m.chk.st, x) };
                 self.put(m);
                 return r;
             }
@@ -317,19 +326,15 @@ impl<'a> Kernel<'a> {
     /// # Safety
     ///
     /// `env` is a live `Kernel.Environment` object and `decl` is a live `Declaration` object. The call does not consume them.
-    unsafe fn convert_and_mirror(
-        &self,
-        env: u64,
-        m: &mut Mirror,
-        decl: u64,
-    ) -> Result<Decl, String> {
+    unsafe fn convert_and_mirror(&self, env: u64, m: &mut Mirror, decl: u64) -> Result<Decl, Exc> {
         for _ in 0..2 {
-            let d = conv::declaration(&self.h, &mut m.chk.st, decl).map_err(|f| f.to_string())?;
+            let d = conv::declaration(&self.h, &mut m.chk.st, decl)
+                .map_err(|f| self.conversion_exception(decl, f))?;
             let names = declared_names(&m.chk, &d);
             // SAFETY: the caller gives `env`.
             match unsafe { self.mirror_from(env, m, names, &decl_terms(&d)) } {
                 Ok(()) => return Ok(d),
-                Err(Miss::Fault(msg)) => return Err(msg),
+                Err(Miss::Fault(msg)) => return Err(Exc::Other(msg)),
                 Err(Miss::Stale) => {
                     self.stats.set(MirrorStats {
                         rebuilds: self.stats.get().rebuilds + 1,
@@ -342,7 +347,24 @@ impl<'a> Kernel<'a> {
             }
         }
         // A new mirror has no constant, so its mirror cannot be stale.
-        Err("rulean: the new mirror is stale".to_string())
+        Err(Exc::Other("rulean: the new mirror is stale".to_string()))
+    }
+
+    /// The exception for the fault `f` of the conversion of the `Declaration` object `decl`. The conversion stops at a metavariable or a free variable, and the C++ kernel gives `declHasMVars` or `declHasFVars` with the first part of the declaration that has one (`conv::decl_vars`). The other faults give `other` with the reason.
+    ///
+    /// The C++ kernel checks a part only after the checks of the parts before it, for example the type of a definition before its value. rulean gives the exception before these checks, so a declaration with two errors can get another exception than in the C++ kernel.
+    fn conversion_exception(&self, decl: u64, f: ConvFault) -> Exc {
+        if matches!(f.kind, FaultKind::MetaVar | FaultKind::FreeVar)
+            && let Ok(Some((kind, name, e))) = conv::decl_vars(&self.h, decl)
+        {
+            let tag = if kind == FaultKind::MetaVar {
+                DECL_HAS_MVARS
+            } else {
+                DECL_HAS_FVARS
+            };
+            return Exc::DeclVars(tag, name, e);
+        }
+        Exc::Other(f.to_string())
     }
 
     /// Adds the new constants of the checker, the slots after `before`, to `env`. The result is the new environment, or the `Except.error` object of the call.
@@ -643,10 +665,10 @@ impl<'a> Kernel<'a> {
                     .iter()
                     .map(|&t| c.expr(t))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok((locals, ids, c.level_mvars()))
+                Ok((locals, ids, c.level_mvars(), c.far_fvars()))
             })
         };
-        let (locals, ids, lmvars) = match conv {
+        let (locals, ids, lmvars, far) = match conv {
             Ok(x) => x,
             // SAFETY: the caller gives `kenv`.
             Err(f) => return unsafe { self.error(kenv, &m.chk.st, Exc::Other(f.to_string())) },
@@ -691,7 +713,7 @@ impl<'a> Kernel<'a> {
         };
         if let Some(f) = chk.fault() {
             let known: Vec<NameId> = locals.iter().map(|l| l.fvar).collect();
-            let exc = term_exception(&mut chk, &start, f, &known, (lctx, &lmvars));
+            let exc = term_exception(&mut chk, &start, f, &known, (lctx, &lmvars, &far));
             // SAFETY: the caller gives `kenv`.
             return unsafe { self.error(kenv, &chk.st, exc) };
         }
@@ -703,6 +725,7 @@ impl<'a> Kernel<'a> {
                 let mut m = unsafe { LeanMake::new(self.rt) };
                 Encoder::new(&mut m, &chk.st)
                     .with_fvars(fvars)
+                    .with_far_fvars(far)
                     .with_level_mvars(&lmvars)
                     .expr(e)
             }
@@ -953,14 +976,19 @@ impl<'a> Kernel<'a> {
                     }
                 }
             }
+            Exc::DeclVars(tag, name, e) => {
+                m.inc(name);
+                m.inc(e);
+                with_env(&mut m, tag, &[name, e])
+            }
             Exc::Lctx {
                 tag,
                 name,
                 terms,
                 locals,
                 base,
-                lmvars,
-            } => match lctx_fields(&mut m, st, name, &terms, &locals, base, &lmvars) {
+                vars,
+            } => match lctx_fields(&mut m, st, name, &terms, &locals, base, (&vars.0, &vars.1)) {
                 Ok(objs) => with_env(&mut m, tag, &objs),
                 Err(msg) => {
                     m.dec(env);
@@ -1100,7 +1128,8 @@ fn exception(chk: &mut Checker, d: &Decl, f: Fault, decl: u64) -> Exc {
         ErrorKind::Heartbeat => Exc::Timeout,
         ErrorKind::MemoryLimit => Exc::Memory,
         ErrorKind::DeepRecursion => Exc::DeepRecursion,
-        _ => lctx_exception(chk, f, &[], None, &[]).unwrap_or_else(|| Exc::Other(message(kind))),
+        _ => lctx_exception(chk, f, &[], None, (&[], &[]))
+            .unwrap_or_else(|| Exc::Other(message(kind))),
     }
 }
 
@@ -1110,7 +1139,7 @@ fn term_exception(
     terms: &[ExprId],
     f: Fault,
     known: &[NameId],
-    (lctx, lmvars): (u64, &[(NameId, u64)]),
+    (lctx, lmvars, far): (u64, &[(NameId, u64)], &[NameId]),
 ) -> Exc {
     let kind = f.kind;
     match kind {
@@ -1125,18 +1154,18 @@ fn term_exception(
         ErrorKind::Heartbeat => Exc::Timeout,
         ErrorKind::MemoryLimit => Exc::Memory,
         ErrorKind::DeepRecursion => Exc::DeepRecursion,
-        _ => lctx_exception(chk, f, known, Some(lctx), lmvars)
+        _ => lctx_exception(chk, f, known, Some(lctx), (lmvars, far))
             .unwrap_or_else(|| Exc::Other(message(kind))),
     }
 }
 
-/// The exception of a kind with a local context, as the C++ kernel gives it: `typeExpected`, `funExpected`, `appTypeMismatch`, `letTypeMismatch` or `invalidProj`. It is `None` for the other kinds, and if the fault does not have a term that the exception needs. `known` is the `FVarId` of each free variable of the local context of the call, and `lctx` is the `LocalContext` object of the call, if there is one. `lmvars` has the level metavariables of the call, as `Converter::level_mvars` gives them.
+/// The exception of a kind with a local context, as the C++ kernel gives it: `typeExpected`, `funExpected`, `appTypeMismatch`, `letTypeMismatch` or `invalidProj`. It is `None` for the other kinds, and if the fault does not have a term that the exception needs. `known` is the `FVarId` of each free variable of the local context of the call, and `lctx` is the `LocalContext` object of the call, if there is one. `lmvars` has the level metavariables of the call, as `Converter::level_mvars` gives them, and `far` has the far free variables of the call, as `Converter::far_fvars` gives them.
 fn lctx_exception(
     chk: &mut Checker,
     f: Fault,
     known: &[NameId],
     lctx: Option<u64>,
-    lmvars: &[(NameId, u64)],
+    (lmvars, far): (&[(NameId, u64)], &[NameId]),
 ) -> Option<Exc> {
     let (tag, name, terms) = match f.kind {
         ErrorKind::TypeExpected => (TYPE_EXPECTED, None, vec![f.at]),
@@ -1159,7 +1188,7 @@ fn lctx_exception(
         terms,
         locals: local_context(chk, known),
         base: lctx.map(|o| (o, known.len())),
-        lmvars: lmvars.to_vec(),
+        vars: Box::new((lmvars.to_vec(), far.to_vec())),
     })
 }
 
@@ -1185,7 +1214,7 @@ fn local_context(chk: &mut Checker, known: &[NameId]) -> Vec<Local> {
         .collect()
 }
 
-/// The fields after the environment of an exception with a local context: the `LocalContext` object, the name if there is one, and the terms. The `LocalContext` object is `base` with the other declarations of `locals`, or the declarations of `locals` if there is no `base`. The result has new references. If a term cannot be encoded, the result is the message.
+/// The fields after the environment of an exception with a local context: the `LocalContext` object, the name if there is one, and the terms. The `LocalContext` object is `base` with the other declarations of `locals`, or the declarations of `locals` if there is no `base`. The result has new references. `lmvars` and `far` are the level metavariables and the far free variables of the call. If a term cannot be encoded, the result is the message.
 fn lctx_fields(
     m: &mut LeanMake,
     st: &Store,
@@ -1193,7 +1222,7 @@ fn lctx_fields(
     terms: &[ExprId],
     locals: &[Local],
     base: Option<(u64, usize)>,
-    lmvars: &[(NameId, u64)],
+    (lmvars, far): (&[(NameId, u64)], &[NameId]),
 ) -> Result<Vec<u64>, String> {
     let skip = base.map_or(0, |(_, n)| n);
     let mut parts = Vec::new();
@@ -1209,6 +1238,7 @@ fn lctx_fields(
         let fvars = locals.iter().map(|l| l.id).collect();
         let mut enc = Encoder::new(m, st)
             .with_fvars(fvars)
+            .with_far_fvars(far.to_vec())
             .with_level_mvars(lmvars);
         for p in parts {
             match p {

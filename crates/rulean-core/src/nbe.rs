@@ -671,6 +671,8 @@ impl Checker {
                     self.st.mk_fvar(lvl, ty)
                 } else if lvl < k {
                     self.st.mk_bvar(k - 1 - lvl)
+                } else if lvl >= expr::FAR_FVAR {
+                    expr::far_fvar(&mut self.st, lvl - expr::FAR_FVAR)
                 } else {
                     self.fail(ErrorKind::UnknownFVar, self.dummy)
                 }

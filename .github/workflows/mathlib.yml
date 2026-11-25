@@ -3,8 +3,15 @@ name: mathlib
 # lake build of Mathlib v4.36.0 with the dual-kernel build of scripts/lean-build.sh --dual (spec 09.6 and 11.3.1). The dual-kernel build gives each declaration to rulean and to the C++ kernel, and it gives back the result of rulean. If the two results differ, the lean process writes "rulean dual:" and the difference to the standard error and stops. Thus a build with no error shows that Mathlib builds with rulean as its kernel and that the two kernels agree on each declaration. RULEAN_FFI_TIMING records the times of the conversion (09.6.3).
 #
 # The build of Mathlib from its source is longer than one job, so the workflow has a chain of parts. Each part builds for at most 300 minutes and keeps the state of the build as an artifact, and the next part continues from that state. A part runs only if the part before it stopped at its time limit.
+#
+# With the input beats, each lean process also writes the heartbeats of the two kernels for each declaration to out/beats.txt (RULEAN_DUAL_BEATS, 09.6.4). The C++ kernel then checks each declaration more than one time, so the build is longer.
 on:
   workflow_dispatch:
+    inputs:
+      beats:
+        description: Record the heartbeats of the two kernels (RULEAN_DUAL_BEATS)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -55,33 +62,39 @@ jobs:
     uses: ./.github/workflows/mathlib-part.yml # zizmor: ignore[self-repository]
     with:
       part: 1
+      beats: ${{ inputs.beats }}
   part-2:
     needs: part-1
     if: needs.part-1.outputs.status == 'timeout'
     uses: ./.github/workflows/mathlib-part.yml # zizmor: ignore[self-repository]
     with:
       part: 2
+      beats: ${{ inputs.beats }}
   part-3:
     needs: part-2
     if: needs.part-2.outputs.status == 'timeout'
     uses: ./.github/workflows/mathlib-part.yml # zizmor: ignore[self-repository]
     with:
       part: 3
+      beats: ${{ inputs.beats }}
   part-4:
     needs: part-3
     if: needs.part-3.outputs.status == 'timeout'
     uses: ./.github/workflows/mathlib-part.yml # zizmor: ignore[self-repository]
     with:
       part: 4
+      beats: ${{ inputs.beats }}
   part-5:
     needs: part-4
     if: needs.part-4.outputs.status == 'timeout'
     uses: ./.github/workflows/mathlib-part.yml # zizmor: ignore[self-repository]
     with:
       part: 5
+      beats: ${{ inputs.beats }}
   part-6:
     needs: part-5
     if: needs.part-5.outputs.status == 'timeout'
     uses: ./.github/workflows/mathlib-part.yml # zizmor: ignore[self-repository]
     with:
       part: 6
+      beats: ${{ inputs.beats }}

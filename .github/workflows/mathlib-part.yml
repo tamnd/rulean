@@ -8,6 +8,10 @@ on:
         description: The number of the part, from 1
         type: number
         required: true
+      beats:
+        description: Record the heartbeats of the two kernels in out/beats.txt
+        type: boolean
+        default: false
     outputs:
       status:
         description: done, timeout or failed (scripts/mathlib-build.sh)
@@ -77,6 +81,7 @@ jobs:
         name: lake build Mathlib
         env:
           RULEAN_FFI_TIMING: ${{ env.WORK }}/out/timing.txt
+          RULEAN_DUAL_BEATS: ${{ inputs.beats && format('{0}/out/beats.txt', env.WORK) || '' }}
         run: |
           status=0
           scripts/mathlib-build.sh "$WORK" "$WORK/lean/lean-$LEAN-linux" 300 || status=$?
@@ -87,6 +92,9 @@ jobs:
             echo "- oleans: $(cat "$WORK/out/built")"
             echo "- errors: $(grep -c '^error' "$WORK/out/lake.log" || true)"
             echo "- differences of the two kernels: $(grep -c 'rulean dual:' "$WORK/out/lake.log" || true)"
+            if [ -f "$WORK/out/beats.txt" ]; then
+              awk '{ n++; r += $1; c += $2; if ($1 > $2) a++ } END { printf "- heartbeats: %d declarations, rulean %.0f, C++ kernel %.0f, %d declarations with more heartbeats in rulean\n", n, r, c, a }' "$WORK/out/beats.txt"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
           tail -n 50 "$WORK/out/lake.log"
           exit "$status"

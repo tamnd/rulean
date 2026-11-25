@@ -1478,9 +1478,9 @@ fn same_with_mirror(dual: &Dual, base: u64, st: &mut Store, cases: &[(&str, Decl
     let st = &*t.st;
     let a = add_with(dual, &k, false, env, st, &c_a, 0).expect("c in a");
     let b = add_with(dual, &k, false, env, st, &c_b, 0).expect("c in b");
-    // The mirror has `c` of `a`, and the environment `b` has a different `c`.
-    let rebuilds = k.mirror_stats().rebuilds;
-    assert_eq!(rebuilds, 1);
+    // The mirror has `c` of `a`, and the environment `env` of `b` does not have `c`, so the mirror removes it.
+    let first = k.mirror_stats();
+    assert_eq!((first.rebuilds, first.removed, first.replaced), (0, 1, 0));
     for (e, want) in [(b, true), (a, false), (b, true), (b, true), (a, false)] {
         let cpp = add_with(dual, &k, true, e, st, &use_c, 0);
         let ours = add_with(dual, &k, false, e, st, &use_c, 0);
@@ -1493,8 +1493,10 @@ fn same_with_mirror(dual: &Dual, base: u64, st: &mut Store, cases: &[(&str, Decl
     }
     let stats = k.mirror_stats();
     eprintln!("mirror after the two environments: {stats:?}");
-    // Each change between `a` and `b` makes a new mirror. After `t` is accepted on `b`, the mirror has the `t` of the new environment, and `b` does not have it. Thus the second check of `t` on `b` makes a new mirror too.
-    assert_eq!(stats.rebuilds, rebuilds + 4);
+    // Each change between `a` and `b` replaces `c` in the mirror: on `a`, on `b` and on `a` again. After `t` is accepted on `b`, the mirror has the `t` of the new environment, and `a` and `b` do not have it. Thus each check after an accepted check removes `t`: the first check on `a`, the third check on `b` and the second check on `a`. The checks on `a` are rejected, and a rejection removes the new constants of the check, so the second check on `b` removes nothing. No change makes a new mirror.
+    assert_eq!(stats.rebuilds, 0);
+    assert_eq!(stats.replaced, 3);
+    assert_eq!(stats.removed, first.removed + 3);
     // SAFETY: the test owns the environments.
     unsafe {
         dual.rt.dec(a);

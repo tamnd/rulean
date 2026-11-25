@@ -291,6 +291,28 @@ impl Env {
         }
     }
 
+    /// Removes the constant with the name, and gives true if the environment had it. The last constant moves to the slot of the removed constant, so the order of the constants changes. A locked environment or an environment with a cut is not changed, because the order of its constants is the order of the add stage. The mirror of `rulean-ffi` uses this for a constant that the Lean environment does not have.
+    pub fn remove(&mut self, n: NameId) -> bool {
+        let s = self.find_any(n);
+        if s == 0 || self.locked || self.cut != u32::MAX {
+            return false;
+        }
+        let k = (s - 1) as usize;
+        self.slot[n.0 as usize] = 0;
+        let last = self.consts.pop();
+        if let Some(c) = last
+            && k < self.consts.len()
+        {
+            self.slot[c.name.0 as usize] = s;
+            self.consts[k] = c;
+        }
+        let len = self.consts.len() as u32;
+        if self.quot_len > len {
+            self.quot_len = len;
+        }
+        true
+    }
+
     /// True if the quotient constants were added before the cut (`is_quot_initialized`).
     pub fn quot_initialized(&self) -> bool {
         self.quot_init && self.quot_len as usize <= self.len()

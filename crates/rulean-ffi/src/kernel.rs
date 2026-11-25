@@ -190,8 +190,12 @@ pub struct MirrorStats {
     pub converted: u64,
     /// The constants that the mirror had already, with the same object.
     pub reused: u64,
-    /// The times that the kernel made a new mirror, because a constant of the mirror was not the constant of the Lean environment.
+    /// The times that the kernel made a new mirror, because a constant that the checker knows by name was not the constant of the Lean environment, or because only the mirror had the quotient.
     pub rebuilds: u64,
+    /// The constants of the mirror that the Lean environment had with a different object, and that the mirror converted again.
+    pub replaced: u64,
+    /// The constants of the mirror that the Lean environment did not have, and that the mirror removed.
+    pub removed: u64,
 }
 
 /// The times of the `add_decl` calls of all the threads since the start of the process, in nanoseconds (spec 09.6.3). The kernel always measures them, because the cost of a clock read is small in comparison with a call.
@@ -214,6 +218,10 @@ pub struct Timing {
     /// The constants that the walks of the mirror converted, and the constants that they found in the mirror with the same object.
     pub converted: u64,
     pub reused: u64,
+    /// The constants that the walks of the mirror replaced or removed, and the new mirrors after a stale constant. See `MirrorStats`.
+    pub replaced: u64,
+    pub removed: u64,
+    pub rebuilds: u64,
 }
 
 impl Timing {
@@ -221,13 +229,16 @@ impl Timing {
     pub fn report(&self) -> String {
         let ms = |ns: u64| ns as f64 / 1e6;
         let mut r = format!(
-            "rulean-ffi timing: {} declarations, declarations {:.1} ms, mirror {:.1} ms (conversion {:.1} ms, {} converted, {} reused), check {:.1} ms, results {:.1} ms, C++ kernel {:.1} ms",
+            "rulean-ffi timing: {} declarations, declarations {:.1} ms, mirror {:.1} ms (conversion {:.1} ms, {} converted, {} reused, {} replaced, {} removed, {} rebuilds), check {:.1} ms, results {:.1} ms, C++ kernel {:.1} ms",
             self.decls,
             ms(self.decl_ns),
             ms(self.mirror_ns),
             ms(self.import_ns),
             self.converted,
             self.reused,
+            self.replaced,
+            self.removed,
+            self.rebuilds,
             ms(self.check_ns),
             ms(self.result_ns),
             ms(self.cpp_ns)
@@ -256,6 +267,9 @@ static T_RESULT: AtomicU64 = AtomicU64::new(0);
 static T_CPP: AtomicU64 = AtomicU64::new(0);
 static T_CONVERTED: AtomicU64 = AtomicU64::new(0);
 static T_REUSED: AtomicU64 = AtomicU64::new(0);
+static T_REPLACED: AtomicU64 = AtomicU64::new(0);
+static T_REMOVED: AtomicU64 = AtomicU64::new(0);
+static T_REBUILDS: AtomicU64 = AtomicU64::new(0);
 
 /// Adds the time since `t` to the counter `c`.
 fn add_time(c: &AtomicU64, t: Instant) {
@@ -276,6 +290,9 @@ pub fn timing() -> Timing {
         cpp_ns: get(&T_CPP),
         converted: get(&T_CONVERTED),
         reused: get(&T_REUSED),
+        replaced: get(&T_REPLACED),
+        removed: get(&T_REMOVED),
+        rebuilds: get(&T_REBUILDS),
     }
 }
 
@@ -541,7 +558,7 @@ impl<'a> Kernel<'a> {
             let d = conv::declaration(&self.h, &mut m.chk.st, decl);
             add_time(&T_DECL, t);
             let d = d.map_err(|f| self.conversion_exception(decl, f))?;
-            let names = declared_names(&m.chk, &d);
+            let names = walk_names(&mut m.chk, &d);
             let t = Instant::now();
             // SAFETY: the caller gives `env`.
             let mirrored = unsafe { self.mirror_from(env, m, names, &decl_terms(&d)) };
@@ -550,6 +567,7 @@ impl<'a> Kernel<'a> {
                 Ok(()) => return Ok(d),
                 Err(Miss::Fault(msg)) => return Err(Exc::Other(msg)),
                 Err(Miss::Stale) => {
+                    T_REBUILDS.fetch_add(1, Ordering::Relaxed);
                     self.stats.set(MirrorStats {
                         rebuilds: self.stats.get().rebuilds + 1,
                         ..self.stats.get()
@@ -1233,7 +1251,7 @@ impl<'a> Kernel<'a> {
         u64::from_le_bytes(b)
     }
 
-    /// Adds to the mirror each constant of `env` that a check can use when it starts with the constants `names` and the terms `terms`, without a check. A constant that the mirror has with the same object is not converted again. The result is `Miss::Stale` if a constant that the check can use is in the mirror and is not the same constant in `env`, or if only the mirror has the quotient.
+    /// Adds to the mirror each constant of `env` that a check can use when it starts with the constants `names` and the terms `terms`, without a check. A constant that the mirror has with the same object is not converted again. If the mirror has a constant with a different object, the walk converts the object of `env` and replaces the constant. If only the mirror has a constant, the walk removes it. The result is `Miss::Stale` if one of these constants is a constant that the checker knows by name, if the environment of the checker has a constant without an origin, or if only the mirror has the quotient.
     ///
     /// The walk finds each constant that the check can use, so a constant of the mirror that the walk does not find has no effect on the check.
     ///
@@ -1250,6 +1268,7 @@ impl<'a> Kernel<'a> {
         let Mirror { chk, origin } = m;
         let mut queue = names;
         const_refs(&chk.st, terms, &mut HashSet::default(), &mut queue);
+        let first = queue.len();
         let b = &chk.b;
         queue.extend([
             b.nat,
@@ -1277,73 +1296,99 @@ impl<'a> Kernel<'a> {
         queue.extend(b.pin_names.iter().copied());
         let ops = b.nat_ops.clone();
         const_refs(&chk.st, &ops, &mut HashSet::default(), &mut queue);
+        // The constants that the checker knows by name. The checker reads some of them only one time, for example a pin, so the mirror does not replace or remove them.
+        let fixed: HashSet<u32> = queue[first..].iter().map(|n| n.0).collect();
         let mut stats = self.stats.get();
         let start = stats;
         let mut seen = HashSet::default();
-        // One converter for the walk, so that the constants share the tables of the conversion. The objects of the tables stay alive while the converter exists, because each converted constant keeps its reference in `origin`, and an error ends the walk.
+        // The `ConstantInfo` objects of the entries that the walk replaced or removed. The walk gives back their references after the converter is dropped, so that no object of the tables of the converter is freed while the converter exists.
+        let mut old = Vec::new();
+        // One converter for the walk, so that the constants share the tables of the conversion. The objects of the tables stay alive while the converter exists, because each constant that the walk converts keeps its reference in `origin`, and the walk keeps the references of `old`.
         let mut conv = Converter::new(&self.h, &mut chk.st);
-        while let Some(n) = queue.pop() {
-            if !seen.insert(n.0) {
-                continue;
-            }
-            let e = origin.get(&n.0);
-            // SAFETY: the caller gives `env`. The `ConstantInfo` object of an entry is live, because the entry keeps a reference to it. Its first field is the value of the constant, and the first field of the value is its `ConstantVal`, with the `Name` object of the constant. The call gives `find` a new reference to the name. This lookup does not make a new `Name` object, so it costs less than `lookup`.
-            let ci = unsafe {
-                match e {
-                    Some(e) => {
-                        let name = self.field(self.field(self.field(e.ci, 0), 0), 0);
-                        self.rt.inc(name);
-                        self.find(env, name)
-                    }
-                    None => self.lookup(env, conv.store(), n),
+        let walk = 'walk: {
+            while let Some(n) = queue.pop() {
+                if !seen.insert(n.0) {
+                    continue;
                 }
-            };
-            match (ci, e) {
-                (None, None) => {
-                    if chk.env.contains(n) {
-                        return Err(Miss::Stale);
+                let e = origin.get(&n.0);
+                // SAFETY: the caller gives `env`. The `ConstantInfo` object of an entry is live, because the entry keeps a reference to it. Its first field is the value of the constant, and the first field of the value is its `ConstantVal`, with the `Name` object of the constant. The call gives `find` a new reference to the name. This lookup does not make a new `Name` object, so it costs less than `lookup`.
+                let ci = unsafe {
+                    match e {
+                        Some(e) => {
+                            let name = self.field(self.field(self.field(e.ci, 0), 0), 0);
+                            self.rt.inc(name);
+                            self.find(env, name)
+                        }
+                        None => self.lookup(env, conv.store(), n),
                     }
-                }
-                (None, Some(_)) => return Err(Miss::Stale),
-                (Some(ci), Some(e)) => {
-                    let same = e.ci == ci;
-                    // SAFETY: the call owns `ci`.
-                    unsafe { self.rt.dec(ci) };
-                    if !same {
-                        return Err(Miss::Stale);
+                };
+                match (ci, e) {
+                    (None, None) => {
+                        if chk.env.contains(n) {
+                            break 'walk Err(Miss::Stale);
+                        }
                     }
-                    queue.extend_from_slice(&e.refs);
-                    stats.reused += 1;
-                }
-                (Some(ci), None) => {
-                    if chk.env.contains(n) {
-                        // SAFETY: the call owns `ci`.
+                    (None, Some(_)) => {
+                        // Only the mirror has the constant, for example a constant of another branch of the elaborator. The check must not find it.
+                        if fixed.contains(&n.0) || !chk.env.remove(n) {
+                            break 'walk Err(Miss::Stale);
+                        }
+                        if let Some(e) = origin.remove(&n.0) {
+                            old.push(e.ci);
+                        }
+                        stats.removed += 1;
+                    }
+                    (Some(ci), Some(e)) if e.ci == ci => {
+                        // SAFETY: the call owns `ci`, and the entry keeps a reference to the same object.
                         unsafe { self.rt.dec(ci) };
-                        return Err(Miss::Stale);
+                        queue.extend_from_slice(&e.refs);
+                        stats.reused += 1;
                     }
-                    let t = Instant::now();
-                    let k = conv.constant(ci);
-                    add_time(&T_IMPORT, t);
-                    let k = match k {
-                        Ok(k) => k,
-                        Err(f) => {
+                    (Some(ci), e) => {
+                        // A constant of the mirror with a different object is replaced. `Env::add` replaces the constant with the same name.
+                        let replace = e.is_some();
+                        if (replace && fixed.contains(&n.0)) || (!replace && chk.env.contains(n)) {
                             // SAFETY: the call owns `ci`.
                             unsafe { self.rt.dec(ci) };
-                            return Err(Miss::Fault(f.to_string()));
+                            break 'walk Err(Miss::Stale);
                         }
-                    };
-                    let refs = direct_refs(conv.store(), &k);
-                    queue.extend_from_slice(&refs);
-                    chk.env.add(k);
-                    // The entry keeps the reference of `ci`.
-                    origin.insert(n.0, Entry { ci, refs });
-                    stats.converted += 1;
+                        let t = Instant::now();
+                        let k = conv.constant(ci);
+                        add_time(&T_IMPORT, t);
+                        let k = match k {
+                            Ok(k) => k,
+                            Err(f) => {
+                                // SAFETY: the call owns `ci`.
+                                unsafe { self.rt.dec(ci) };
+                                break 'walk Err(Miss::Fault(f.to_string()));
+                            }
+                        };
+                        let refs = direct_refs(conv.store(), &k);
+                        queue.extend_from_slice(&refs);
+                        chk.env.add(k);
+                        // The entry keeps the reference of `ci`.
+                        if let Some(e) = origin.insert(n.0, Entry { ci, refs }) {
+                            old.push(e.ci);
+                            stats.replaced += 1;
+                        } else {
+                            stats.converted += 1;
+                        }
+                    }
                 }
             }
+            Ok(())
+        };
+        drop(conv);
+        for ci in old {
+            // SAFETY: the walk owns the reference of a replaced or removed entry.
+            unsafe { self.rt.dec(ci) };
         }
+        walk?;
         self.stats.set(stats);
         T_CONVERTED.fetch_add(stats.converted - start.converted, Ordering::Relaxed);
         T_REUSED.fetch_add(stats.reused - start.reused, Ordering::Relaxed);
+        T_REPLACED.fetch_add(stats.replaced - start.replaced, Ordering::Relaxed);
+        T_REMOVED.fetch_add(stats.removed - start.removed, Ordering::Relaxed);
         // SAFETY: `quot_init` consumes the environment, so the call gives it a new reference.
         let init = unsafe {
             self.rt.inc(env);
@@ -1867,6 +1912,29 @@ fn declared_names(chk: &Checker, d: &Decl) -> Vec<NameId> {
     }
 }
 
+/// The names at the start of the walk of the mirror for `d`: the names of `declared_names`, and for an inductive block, the names of the recursors that the check makes. These are `I.rec` for each type `I`, and `main.rec_1`, `main.rec_2` and so on for the auxiliary types of a nested block, while the mirror has them. Thus the walk replaces or removes a recursor of the mirror that the Lean environment does not have, and the check does not find it as an earlier constant.
+fn walk_names(chk: &mut Checker, d: &Decl) -> Vec<NameId> {
+    let mut names = declared_names(chk, d);
+    if let Decl::Induct(b) = d {
+        for t in &b.types {
+            names.push(rulean_core::names::rec_name(&mut chk.st, t.name));
+        }
+        if let Some(t) = b.types.first() {
+            let main = rulean_core::names::rec_name(&mut chk.st, t.name);
+            let mut i = 1;
+            loop {
+                let n = rulean_core::names::append_index(&mut chk.st, main, i);
+                if !chk.env.contains(n) {
+                    break;
+                }
+                names.push(n);
+                i += 1;
+            }
+        }
+    }
+    names
+}
+
 /// The names of the constants of `d`, without the names that the check makes. The quotient gives no names.
 fn decl_names(d: &Decl) -> Vec<NameId> {
     match d {
@@ -2000,10 +2068,13 @@ mod tests {
             cpp_ns: 20_000_000,
             converted: 5,
             reused: 9,
+            replaced: 2,
+            removed: 1,
+            rebuilds: 0,
         };
         assert_eq!(
             t.report(),
-            "rulean-ffi timing: 3 declarations, declarations 1.0 ms, mirror 4.0 ms (conversion 3.0 ms, 5 converted, 9 reused), check 7.0 ms, results 1.0 ms, C++ kernel 20.0 ms, conversion 10.0% of the C++ kernel, 15.0% with the walk, 30.0% with the mirror"
+            "rulean-ffi timing: 3 declarations, declarations 1.0 ms, mirror 4.0 ms (conversion 3.0 ms, 5 converted, 9 reused, 2 replaced, 1 removed, 0 rebuilds), check 7.0 ms, results 1.0 ms, C++ kernel 20.0 ms, conversion 10.0% of the C++ kernel, 15.0% with the walk, 30.0% with the mirror"
         );
         let t = Timing { cpp_ns: 0, ..t };
         assert!(!t.report().contains('%'));

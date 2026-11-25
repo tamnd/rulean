@@ -6,9 +6,9 @@
 //!
 //! The kernel keeps the mirror between the calls of a thread (spec 09.6.3). Each constant of the mirror keeps a reference to its `ConstantInfo` object, so the runtime cannot free the object or change it in place, and an object at the same address is the same constant. Each call walks the constants that the check can use and finds each one in the Lean environment. A constant with the same object is not converted again. If a constant that the walk finds is in the mirror and is not the same constant in the Lean environment, or if only the mirror has the quotient, the call makes a new mirror. The checker of the mirror has no session, so the heartbeats of a declaration do not depend on the earlier calls.
 //!
-//! If rulean accepts the declaration, the call adds the new constants to the Lean environment with `lean_environment_add`. If rulean rejects it, the call gives the `Kernel.Exception` constructor of the C++ kernel (spec 09.6.4). A declaration with a metavariable or a free variable gives `declHasMVars` or `declHasFVars`. The kind `exprTypeMismatch` gives `other` with a message, and so do the errors that the C++ kernel gives as `other`. An exception with a local context has the free variables of the checker. A free variable that the check makes gets the name `_kernel_fresh.N`.
+//! If rulean accepts the declaration, the call adds the new constants to the Lean environment with `lean_environment_add`. If rulean rejects it, the call gives the `Kernel.Exception` constructor of the C++ kernel (spec 09.6.4). A declaration with a metavariable or a free variable gives `declHasMVars` or `declHasFVars`. The kind `exprTypeMismatch` gives `other` with a message, and so do the errors that the C++ kernel gives as `other`. An exception with a local context has the free variables in scope at the fault. A free variable that the check makes gets the name `_kernel_fresh.N`.
 //!
-//! `max_heartbeat` is the heartbeat limit of the checker (spec 09.6.4). The C++ kernel counts one heartbeat for each call of `infer_type_core`, `whnf_core` and `is_def_eq_core`, and the checker counts one at the same functions. The C++ count is for each thread and starts at 0 at the start of a task, but the count of rulean starts at 0 for each declaration. The term functions have no limit, because the C++ functions use the limit of the thread and Lean does not export it. The recursion limit has no effect yet.
+//! `max_heartbeat` is the heartbeat limit of the checker (spec 09.6.4). The C++ kernel counts one heartbeat for each call of `infer_type_core`, `whnf_core` and `is_def_eq_core`, and the checker counts one at the same functions. The C++ count is for each thread and starts at 0 at the start of a task, but the count of rulean starts at 0 for each declaration. `max_rec_depth` is the `maxRecDepth` of the call. The checker stops with `deepRecursion` if the depth of the three functions is above 16 times this value, as `scope_rec_depth` of the C++ kernel does. The term functions have no heartbeat limit and no depth limit, because the C++ functions use the limits of the thread and Lean does not export them.
 //!
 //! With a cancel token, the check runs on a new thread, and the calling thread reads the token each millisecond (spec 09.6.4). If the token is set, the call gives `interrupted` at once. The check continues on its thread until it stops, and its result is discarded. The C++ kernel reads the token at each heartbeat, so it can stop in the middle of a check, but the checker of rulean has no point at which it can stop. Without a token, the check runs on the calling thread.
 //!
@@ -352,7 +352,7 @@ impl<'a> Kernel<'a> {
         &self,
         env: u64,
         max_heartbeat: usize,
-        _max_rec_depth: usize,
+        max_rec_depth: usize,
         decl: u64,
         cancel: u64,
     ) -> u64 {
@@ -375,6 +375,7 @@ impl<'a> Kernel<'a> {
         };
         // `convert_and_mirror` can make a new mirror with the default limit, so the call sets the limit after it.
         m.chk.max_heartbeat = max_heartbeat as u64;
+        m.chk.max_rec_depth = max_rec_depth as u64;
         // SAFETY: the caller gives `env`.
         let diag = unsafe { self.diag_of(env) };
         m.chk.diag_on = diag.is_some();

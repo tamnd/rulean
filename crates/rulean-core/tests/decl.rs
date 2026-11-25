@@ -863,3 +863,39 @@ fn heartbeat_limit_stops_the_check() {
     let d = Decl::Defn(t.defn("a", nat, zero, Safety::Safe));
     assert_eq!(t.add(&d), Some(ErrorKind::Heartbeat));
 }
+
+#[test]
+fn recursion_depth_limit_stops_the_check() {
+    // `Nat.succ (Nat.succ ... Nat.zero)` with `n` applications.
+    fn deep(t: &mut T, nat: ExprId, zero: ExprId, n: usize) -> ExprId {
+        let pi = t.pi("n", nat, nat);
+        let d = t.axiom("Nat.succ", &[], pi, Safety::Safe);
+        assert_eq!(t.add(&d), None);
+        let succ = t.k("Nat.succ");
+        let mut e = zero;
+        for _ in 0..n {
+            e = t.app(succ, &[e]);
+        }
+        e
+    }
+    // Without a limit, the check accepts the term.
+    let mut t = T::new();
+    let (nat, zero) = t.nat();
+    let e = deep(&mut t, nat, zero, 200);
+    assert_eq!(t.c.max_rec_depth, 0);
+    let d = Decl::Defn(t.defn("a", nat, e, Safety::Safe));
+    assert_eq!(t.add(&d), None);
+    // The limit is 16 times `max_rec_depth`, as in the C++ kernel. A limit of 160 is not sufficient for 200 applications, and a limit of 320 is sufficient.
+    let mut t = T::new();
+    let (nat, zero) = t.nat();
+    let e = deep(&mut t, nat, zero, 200);
+    t.c.max_rec_depth = 10;
+    let d = Decl::Defn(t.defn("a", nat, e, Safety::Safe));
+    assert_eq!(t.add(&d), Some(ErrorKind::DeepRecursion));
+    let mut t = T::new();
+    let (nat, zero) = t.nat();
+    let e = deep(&mut t, nat, zero, 200);
+    t.c.max_rec_depth = 20;
+    let d = Decl::Defn(t.defn("a", nat, e, Safety::Safe));
+    assert_eq!(t.add(&d), None);
+}

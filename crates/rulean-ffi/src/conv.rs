@@ -18,7 +18,7 @@
 //!
 //! A `ConstantInfo` is a constructor with one object field, the value of the constant. The tags are `axiomInfo` 0, `defnInfo` 1, `thmInfo` 2, `opaqueInfo` 3, `quotInfo` 4, `inductInfo` 5, `ctorInfo` 6 and `recInfo` 7. The layouts of the values are the same as in a `.olean` file (spec 07.3).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rulean_core::env::{ConstInfo, ConstKind, CtorInfo, InductInfo, RecInfo, RuleInfo};
 use rulean_format::ndjson::MAX_NAT_BITS;
@@ -46,6 +46,22 @@ const MAX_SMALL_NAT: u64 = u64::MAX >> 1;
 /// An inductive declaration gives a block with the types and the constructors only. The counts that the checker computes are zero, and the block has no recursors, so the checker must have `kernel_api` set (see `rulean_core::tc::Checker`). A quotient declaration gives the constant `Quot` of the kind `Type`, and the checker adds the four reference constants.
 pub fn declaration<H: Heap>(h: &H, st: &mut Store, decl: u64) -> Result<Decl, Fault> {
     Converter::new(h, st).declaration(decl)
+}
+
+/// The first part of the `Declaration` object at `decl` that has a metavariable or a free variable, in the order in which the C++ kernel checks the parts. The result has `FaultKind::MetaVar` or `FaultKind::FreeVar`, the `Name` object of the constant and the `Expr` object of the part. The two objects are borrowed. The C++ kernel gives `declHasMVars` if the term has a metavariable of a term or of a level, and else `declHasFVars` if the term has a free variable.
+///
+/// The C++ kernel checks the type of each constant of the declaration before it checks a value. For an inductive declaration, it checks the type of each inductive type before the type of a constructor. A declaration without such a part gives `None`.
+pub fn decl_vars<H: Heap>(h: &H, decl: u64) -> Result<Option<(FaultKind, u64, u64)>, Fault> {
+    let mut st = Store::new();
+    let c = Conv::new(h, &mut st);
+    for (name, e) in c.decl_parts(decl)? {
+        match c.scan_vars(e)? {
+            (true, _) => return Ok(Some((FaultKind::MetaVar, name, e))),
+            (false, true) => return Ok(Some((FaultKind::FreeVar, name, e))),
+            (false, false) => {}
+        }
+    }
+    Ok(None)
 }
 
 /// A conversion of several objects. The objects share names, levels and expressions, so the converter keeps its tables from address to handle between the calls. The objects must stay alive while the converter exists, because the runtime can give the address of a freed object to a new object.
@@ -1098,6 +1114,131 @@ impl<'a, H: Heap> Conv<'a, H> {
         } else {
             Ok(Field::Object(d))
         }
+    }
+
+    /// The word of a field: the boxed scalar or the address.
+    fn word_of(f: Field) -> u64 {
+        match f {
+            Field::Scalar(v) => (v << 1) | 1,
+            Field::Object(o) => o,
+        }
+    }
+
+    /// The `Name` word and the type of the `ConstantVal` in field 0 of `v`.
+    fn cval_part(&self, v: u64) -> Result<(u64, u64), Fault> {
+        let c = self.object(v, 0)?;
+        self.ctor(c, 0..=0, 3, "ConstantVal")?;
+        Ok((Self::word_of(self.field(c, 0)?), self.object(c, 2)?))
+    }
+
+    /// The name and the term of each part of the declaration at `d`, in the order of the checks of the C++ kernel. See `decl_vars`.
+    fn decl_parts(&self, d: u64) -> Result<Vec<(u64, u64)>, Fault> {
+        let Field::Object(p) = self.field_of_root(d)? else {
+            return Ok(Vec::new());
+        };
+        let (t, _) = self.head(p)?;
+        let mut types = Vec::new();
+        let mut values = Vec::new();
+        match t {
+            0..=3 => {
+                let v = self.object(p, 0)?;
+                let (name, ty) = self.cval_part(v)?;
+                types.push((name, ty));
+                if t != 0 {
+                    values.push((name, self.object(v, 1)?));
+                }
+            }
+            5 => {
+                for v in self.list_objects(p, 0)? {
+                    let (name, ty) = self.cval_part(v)?;
+                    types.push((name, ty));
+                    values.push((name, self.object(v, 1)?));
+                }
+            }
+            6 => {
+                for q in self.list_objects(p, 2)? {
+                    self.ctor(q, 0..=0, 3, "InductiveType")?;
+                    types.push((Self::word_of(self.field(q, 0)?), self.object(q, 1)?));
+                    for c in self.list_objects(q, 2)? {
+                        self.ctor(c, 0..=0, 2, "Constructor")?;
+                        values.push((Self::word_of(self.field(c, 0)?), self.object(c, 1)?));
+                    }
+                }
+            }
+            _ => return Err(bad(p, format!("a declaration has the tag {t}"))),
+        }
+        types.extend(values);
+        Ok(types)
+    }
+
+    /// If the term at `root` has a metavariable, and if it has a free variable. The scan stops at the first metavariable.
+    fn scan_vars(&self, root: u64) -> Result<(bool, bool), Fault> {
+        let mut seen = HashSet::new();
+        let mut levels = HashSet::new();
+        let mut stack = vec![root];
+        let mut free = false;
+        while let Some(q) = stack.pop() {
+            if !seen.insert(q) {
+                continue;
+            }
+            let (t, _) = self.head(q)?;
+            if t > 11 {
+                return Err(bad(q, format!("the object is not an expression: tag {t}")));
+            }
+            let (objs, kids) = Self::expr_shape(t);
+            self.ctor(q, t..=t, objs, "expression")?;
+            let level_mvar = match t {
+                1 => {
+                    free = true;
+                    false
+                }
+                2 => true,
+                3 => self.level_has_mvar(self.field(q, 0)?, &mut levels)?,
+                4 => {
+                    let mut any = false;
+                    for f in self.list(q, 1)? {
+                        any = any || self.level_has_mvar(f, &mut levels)?;
+                    }
+                    any
+                }
+                _ => false,
+            };
+            if level_mvar {
+                return Ok((true, free));
+            }
+            for &k in kids {
+                stack.push(self.object(q, k)?);
+            }
+        }
+        Ok((false, free))
+    }
+
+    /// If the level of the field `f` has a level metavariable. `seen` has the levels without one.
+    fn level_has_mvar(&self, f: Field, seen: &mut HashSet<u64>) -> Result<bool, Fault> {
+        let mut stack = vec![f];
+        while let Some(f) = stack.pop() {
+            let Some(q) = self.level_object(0, f)? else {
+                continue;
+            };
+            if !seen.insert(q) {
+                continue;
+            }
+            let (t, _) = self.head(q)?;
+            if t > 5 {
+                return Err(bad(q, format!("the object is not a level: tag {t}")));
+            }
+            self.ctor(q, t..=t, Self::level_objs(t), "level")?;
+            match t {
+                5 => return Ok(true),
+                1 => stack.push(self.field(q, 0)?),
+                2 | 3 => {
+                    stack.push(self.field(q, 0)?);
+                    stack.push(self.field(q, 1)?);
+                }
+                _ => {}
+            }
+        }
+        Ok(false)
     }
 
     /// `quotDecl`. The checker adds the four reference constants, so the type is only the position of a fault.

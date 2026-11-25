@@ -30,7 +30,7 @@ use rulean_core::env::ConstInfo;
 use rulean_core::tc::Checker;
 use rulean_ffi::conv::{self, Converter, FAR_PROJ, Far};
 use rulean_ffi::heap::{Heap, boxed};
-use rulean_ffi::kernel::Kernel;
+use rulean_ffi::kernel::{Kernel, MirrorPool};
 use rulean_ffi::live::LiveHeap;
 use rulean_ffi::make::{Encoder, Make};
 use rulean_ffi::rt::{LeanMake, Runtime};
@@ -934,6 +934,7 @@ fn the_two_kernels_give_the_same_verdicts() {
     same_vars(&dual);
 
     same_with_mirror(&dual, base, &mut st, &cases);
+    shared_mirrors(&dual, base, &st, &cases);
 
     // The term functions. The elaborator environment has the final kernel environment of the C++ kernel.
     // SAFETY: `updateBaseAfterKernelAdd` consumes its arguments, so the test gives it a new reference to the kernel environment.
@@ -1503,6 +1504,36 @@ fn same_with_mirror(dual: &Dual, base: u64, st: &mut Store, cases: &[(&str, Decl
         dual.rt.dec(b);
         dual.rt.dec(env);
     }
+}
+
+fn shared_mirrors(dual: &Dual, base: u64, st: &Store, cases: &[(&str, Decl, bool)]) {
+    // Two kernels with one pool take turns. The calls do not run at the same time, so each call takes the mirror of the call before it.
+    let pool = MirrorPool::new();
+    // SAFETY: the runtime is Lean v4.36.0.
+    let mut ks = [(); 2].map(|_| unsafe { Kernel::new(dual.rt) }.expect("the kernel functions"));
+    for k in &mut ks {
+        k.share_mirrors(&pool);
+    }
+    let mut env = base;
+    for (i, (what, d, want)) in cases.iter().enumerate() {
+        match add_with(dual, &ks[i % 2], false, env, st, d, 0) {
+            Ok(e) => {
+                assert!(*want, "the kernel with the pool accepts {what}");
+                // SAFETY: the test owns `env`.
+                unsafe { dual.rt.dec(env) };
+                env = e;
+            }
+            Err(x) => assert!(!*want, "the kernel with the pool rejects {what} with {x}"),
+        }
+    }
+    let (a, b) = (ks[0].mirror_stats(), ks[1].mirror_stats());
+    eprintln!("mirrors of the pool: {a:?} {b:?}");
+    // Each constant of the Lean environment comes from a check of one of the two kernels, and the other kernel uses the same mirror. Without the pool, the second kernel converts the constants of the checks of the first kernel.
+    assert_eq!((a.converted, b.converted), (0, 0));
+    assert_eq!((a.rebuilds, b.rebuilds), (0, 0));
+    assert!(b.reused > 0);
+    // SAFETY: the test owns `env`.
+    unsafe { dual.rt.dec(env) };
 }
 
 /// An `Option IO.CancelToken` object: `some` of a token with the flag `set`. `IO.CancelToken` has the fields `promise` and `setRef`. The kernels read only `setRef`, so the promise is the boxed scalar 0.

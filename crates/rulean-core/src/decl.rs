@@ -574,6 +574,7 @@ impl Checker {
     pub fn add_decl(&mut self, d: &Decl) -> Option<Fault> {
         self.sess_start();
         self.heartbeats = 0;
+        self.rec_depth = 0;
         let r0 = match d {
             Decl::Axiom(a) => {
                 self.st.set_scratch(true);

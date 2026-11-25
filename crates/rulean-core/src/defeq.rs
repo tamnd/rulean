@@ -645,7 +645,7 @@ impl Checker {
             return false;
         }
         let r = self.is_def_eq_core_body(t, s);
-        self.leave();
+        self.leave_beat();
         r && !self.bad()
     }
 

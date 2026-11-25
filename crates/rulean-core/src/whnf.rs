@@ -570,7 +570,7 @@ impl Checker {
             return self.dummy;
         }
         let (r, cache) = self.whnf_core_node(e, cheap_rec, cheap_proj);
-        self.leave();
+        self.leave_beat();
         if cache && !cheap_rec && !cheap_proj && !self.bad() {
             self.c_whnf_core.put(e.0, 0, r.0);
             if key {

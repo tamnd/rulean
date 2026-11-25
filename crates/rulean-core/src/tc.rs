@@ -30,6 +30,9 @@ pub const NAT_MAX_BYTES: u64 = 128 * 1024 * 1024;
 /// The default bound of the call depth: 4 times 16 times the default `maxRecDepth` of 512 (spec 05.5 and 05.11).
 pub const MAX_DEPTH: u32 = 4 * 16 * 512;
 
+/// The C++ kernel stops at a depth of `maxRecDepth` times this factor (`g_kernel_rec_depth_factor`), because the kernel recurses deeper than the elaborator for the same term.
+pub const REC_DEPTH_FACTOR: u64 = 16;
+
 /// The number of calls of `enter` between two memory checks. A check adds about 30 sizes, so the cost is small.
 const MEMORY_TICKS: u32 = 4096;
 
@@ -405,6 +408,10 @@ pub struct Checker {
     pub max_heartbeat: u64,
     /// The heartbeats since the start of the declaration. The C++ kernel counts one heartbeat for each call of `infer_type_core`, `whnf_core` and `is_def_eq_core` (`check_system`), and the checker counts one at the same functions.
     pub(crate) heartbeats: u64,
+    /// The `maxRecDepth` of a declaration (spec 09.6.4). The C++ kernel stops with `deepRecursion` if the depth of `infer_type_core`, `whnf_core` and `is_def_eq_core` is above `REC_DEPTH_FACTOR` times this value. 0 is no limit, and this is the default.
+    pub max_rec_depth: u64,
+    /// The depth of `infer_type_core`, `whnf_core` and `is_def_eq_core` (`scope_rec_depth` of the C++ kernel). `depth` also counts the other recursive functions of the checker.
+    pub(crate) rec_depth: u64,
     /// The memory of the other checkers of the run in bytes, as the driver last saw it. With `--threads`, the checkers share one budget, and the driver sets this value before each job. The core has no shared state, so the driver keeps the total.
     pub mem_others: usize,
     /// The memory of this checker that the driver last added to the total of the run.
@@ -478,6 +485,8 @@ impl Checker {
             steps: 0,
             max_heartbeat: 0,
             heartbeats: 0,
+            max_rec_depth: 0,
+            rec_depth: 0,
             mem_others: 0,
             mem_published: 0,
             fault: None,
@@ -509,6 +518,7 @@ impl Checker {
         self.eq_depth = 0;
         self.eager = false;
         self.depth = 0;
+        self.rec_depth = 0;
         self.fault = None;
     }
 
@@ -635,18 +645,32 @@ impl Checker {
                 || self.memory().saturating_add(self.mem_others) > self.max_memory)
     }
 
-    /// `enter`, then one heartbeat (`check_system` of the C++ kernel). It gives false and records a fault if the heartbeats are above `max_heartbeat`.
+    /// `enter`, then one level of `scope_rec_depth` and one heartbeat (`check_system` of the C++ kernel). It gives false and records a fault if the depth is above the limit of `max_rec_depth`, or if the heartbeats are above `max_heartbeat`. The caller calls `leave_beat` at the end.
     pub(crate) fn enter_beat(&mut self, at: ExprId) -> bool {
         if !self.enter(at) {
             return false;
         }
+        if self.max_rec_depth != 0
+            && self.rec_depth >= self.max_rec_depth.saturating_mul(REC_DEPTH_FACTOR)
+        {
+            self.leave();
+            self.fail(ErrorKind::DeepRecursion, at);
+            return false;
+        }
+        self.rec_depth += 1;
         self.heartbeats = self.heartbeats.saturating_add(1);
         if self.max_heartbeat != 0 && self.heartbeats > self.max_heartbeat {
-            self.leave();
+            self.leave_beat();
             self.fail(ErrorKind::Heartbeat, at);
             return false;
         }
         true
+    }
+
+    /// The end of a call level of `enter_beat`.
+    pub(crate) fn leave_beat(&mut self) {
+        self.rec_depth = self.rec_depth.saturating_sub(1);
+        self.leave();
     }
 
     /// The heartbeats since the start of the declaration, or since `reset_heartbeats`.
@@ -1364,7 +1388,7 @@ impl Checker {
                 }
             }
         };
-        self.leave();
+        self.leave_beat();
         r
     }
 

@@ -67,6 +67,30 @@ pub fn decl_vars<H: Heap>(h: &H, decl: u64) -> Result<Option<(FaultKind, u64, u6
 /// A conversion of several objects. The objects share names, levels and expressions, so the converter keeps its tables from address to handle between the calls. The objects must stay alive while the converter exists, because the runtime can give the address of a freed object to a new object.
 pub struct Converter<'a, H: Heap> {
     c: Conv<'a, H>,
+    /// The cache of `with_cache`. The tables of `c` have its entries while the converter exists.
+    cache: Option<&'a mut Cache>,
+}
+
+/// The handles of the persistent objects that the conversions of one store made (spec 09.6.3). A persistent object has the reference count 0, for example an object of the mapped region of an `.olean` file. The runtime does not free it or change it, so its address is the same term for the life of the process, and the store only grows, so its handle stays valid. Thus the next conversion into the same store can use the handle and does not read the object again. The mirror of `rulean-ffi` keeps the cache with its store, and `Converter::with_cache` uses it.
+///
+/// The cache keeps only the conversions without a local context, so a handle does not depend on the free variables or the level metavariables of a call.
+#[derive(Debug, Default)]
+pub struct Cache {
+    names: HashMap<u64, NameId>,
+    levels: HashMap<u64, LevelId>,
+    exprs: HashMap<u64, ExprId>,
+}
+
+impl Cache {
+    /// The number of names, levels and expressions in the cache.
+    pub fn len(&self) -> usize {
+        self.names.len() + self.levels.len() + self.exprs.len()
+    }
+
+    /// True if the cache has no entry.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 impl<H: Heap> core::fmt::Debug for Converter<'_, H> {
@@ -83,6 +107,21 @@ impl<'a, H: Heap> Converter<'a, H> {
     pub fn new(h: &'a H, st: &'a mut Store) -> Converter<'a, H> {
         Converter {
             c: Conv::new(h, st),
+            cache: None,
+        }
+    }
+
+    /// A converter that uses and fills the cache `cache` of the store `st`. The converter uses the cache only if the heap has exact reference counts and the store puts new nodes in the frozen tier, because a scratch handle is not valid after the check. The converter puts the persistent objects in the tables of the cache and the other objects in its own tables, and its end gives the tables of the cache back. After `local_context`, the converter does not use the cache, and the cache does not change.
+    pub fn with_cache(h: &'a H, st: &'a mut Store, cache: &'a mut Cache) -> Converter<'a, H> {
+        let mut c = Conv::new(h, st);
+        if !h.exact_counts() || c.st.uses_scratch() {
+            return Converter { c, cache: None };
+        }
+        c.cache = std::mem::take(cache);
+        c.keep = true;
+        Converter {
+            c,
+            cache: Some(cache),
         }
     }
 
@@ -104,6 +143,7 @@ impl<'a, H: Heap> Converter<'a, H> {
     ///
     /// The conversion reads the field `decls`, a `PersistentArray (Option LocalDecl)`, and skips the entries `none`. The C++ kernel finds a declaration in the field `fvarIdToDecl`, a map with the same declarations, so the conversion does not read the map.
     pub fn local_context(&mut self, lctx: u64) -> Result<Vec<Local>, Fault> {
+        self.c.keep = false;
         let locals = self.c.local_context(lctx)?;
         self.full(lctx)?;
         Ok(locals)
@@ -155,6 +195,14 @@ impl<'a, H: Heap> Converter<'a, H> {
             ));
         }
         Ok(())
+    }
+}
+
+impl<H: Heap> Drop for Converter<'_, H> {
+    fn drop(&mut self) {
+        if let Some(cache) = self.cache.take() {
+            *cache = std::mem::take(&mut self.c.cache);
+        }
     }
 }
 
@@ -222,6 +270,10 @@ struct Conv<'a, H: Heap> {
     far: Option<Vec<NameId>>,
     /// The far projection indices of the terms, by their number. See `Converter::far`.
     far_projs: Vec<Nat>,
+    /// True if the persistent objects go in `cache` (`Converter::with_cache`).
+    keep: bool,
+    /// The tables of the persistent objects. Without `keep`, the conversion does not use them.
+    cache: Cache,
 }
 
 /// The first far projection index. A structure has fewer fields than this number, so a projection with a far index is always invalid.
@@ -274,7 +326,52 @@ impl<'a, H: Heap> Conv<'a, H> {
             lmvars: HashMap::default(),
             far: None,
             far_projs: Vec::new(),
+            keep: false,
+            cache: Cache::default(),
         }
+    }
+
+    /// True if the object at `q` goes in `cache`: the conversion keeps the cache, and the object is persistent. The low 32 bits of the header are the reference count, and a persistent object has the count 0.
+    fn kept(&self, q: u64) -> Result<bool, Fault> {
+        Ok(self.keep && self.word(q)? as u32 == 0)
+    }
+
+    fn name_get(&self, q: u64) -> Result<Option<NameId>, Fault> {
+        let t = if self.kept(q)? {
+            &self.cache.names
+        } else {
+            &self.names
+        };
+        Ok(t.get(&q).copied())
+    }
+
+    fn name_put(&mut self, q: u64, id: NameId) -> Result<(), Fault> {
+        let t = if self.kept(q)? {
+            &mut self.cache.names
+        } else {
+            &mut self.names
+        };
+        t.insert(q, id);
+        Ok(())
+    }
+
+    fn level_get(&self, q: u64) -> Result<Option<LevelId>, Fault> {
+        let t = if self.kept(q)? {
+            &self.cache.levels
+        } else {
+            &self.levels
+        };
+        Ok(t.get(&q).copied())
+    }
+
+    fn level_put(&mut self, q: u64, id: LevelId) -> Result<(), Fault> {
+        let t = if self.kept(q)? {
+            &mut self.cache.levels
+        } else {
+            &mut self.levels
+        };
+        t.insert(q, id);
+        Ok(())
     }
 
     // The words and the bytes of objects.
@@ -535,7 +632,7 @@ impl<'a, H: Heap> Conv<'a, H> {
         let mut chain = Vec::new();
         let mut id = self.st.anon();
         loop {
-            if let Some(&k) = self.names.get(&cur) {
+            if let Some(k) = self.name_get(cur)? {
                 id = k;
                 break;
             }
@@ -564,7 +661,7 @@ impl<'a, H: Heap> Conv<'a, H> {
                     None => return Err(decline(q, "a number in a name does not fit in 64 bits")),
                 }
             };
-            self.names.insert(q, id);
+            self.name_put(q, id)?;
         }
         Ok(id)
     }
@@ -604,7 +701,7 @@ impl<'a, H: Heap> Conv<'a, H> {
         };
         let mut stack = vec![(root, false)];
         while let Some((q, ready)) = stack.pop() {
-            if self.levels.contains_key(&q) {
+            if self.level_get(q)?.is_some() {
                 continue;
             }
             let (t, _) = self.head(q)?;
@@ -624,7 +721,7 @@ impl<'a, H: Heap> Conv<'a, H> {
                     }
                 };
                 let id = self.st.level_param(p);
-                self.levels.insert(q, id);
+                self.level_put(q, id)?;
                 continue;
             }
             if t == 5 {
@@ -644,7 +741,7 @@ impl<'a, H: Heap> Conv<'a, H> {
                 for k in 0..kids {
                     let fk = self.field(q, k)?;
                     if let Some(c) = self.level_object(q, fk)?
-                        && !self.levels.contains_key(&c)
+                        && self.level_get(c)?.is_none()
                     {
                         stack.push((c, false));
                     }
@@ -671,10 +768,10 @@ impl<'a, H: Heap> Conv<'a, H> {
                     self.st.level_param(n)
                 }
             };
-            self.levels.insert(q, id);
+            self.level_put(q, id)?;
         }
-        match self.levels.get(&root) {
-            Some(&id) => Ok(id),
+        match self.level_get(root)? {
+            Some(id) => Ok(id),
             None => Err(bad(root, "a level is not converted")),
         }
     }
@@ -683,8 +780,8 @@ impl<'a, H: Heap> Conv<'a, H> {
         let f = self.field(q, i)?;
         match self.level_object(q, f)? {
             None => Ok(self.st.level_zero()),
-            Some(c) => match self.levels.get(&c) {
-                Some(&id) => Ok(id),
+            Some(c) => match self.level_get(c)? {
+                Some(id) => Ok(id),
                 None => Err(bad(c, "a level is not converted")),
             },
         }
@@ -834,93 +931,127 @@ impl<'a, H: Heap> Conv<'a, H> {
         self.expr_at(root)
     }
 
-    /// The expression at the address `root`.
+    /// The expression at the address `root`. The walk is in post order: a node goes on the stack `vals` after the expressions of its fields, so the node takes their handles from the top of the stack. The table `exprs` records only the objects that other fields can point to. If the heap has exact reference counts, an object with the count 1 has only one field that points to it, so the walk comes to it only one time.
     fn expr_at(&mut self, root: u64) -> Result<ExprId, Fault> {
-        let mut stack = vec![(root, false)];
+        let exact = self.h.exact_counts();
+        // `Some(t)` is a node with tag `t` whose fields are on `vals`. `None` is an object that the walk did not read yet.
+        let mut stack: Vec<(u64, Option<u8>)> = vec![(root, None)];
+        let mut vals: Vec<ExprId> = Vec::new();
         while let Some((q, ready)) = stack.pop() {
-            if self.exprs.contains_key(&q) {
-                continue;
-            }
-            let (t, _) = self.head(q)?;
-            if t > 11 {
-                return Err(bad(q, format!("the object is not an expression: tag {t}")));
-            }
-            let (objs, kids) = Self::expr_shape(t);
-            self.ctor(q, t..=t, objs, "expression")?;
-            if t == 1 {
-                // `Expr.fvar` has the `FVarId` in field 0, and an `FVarId` is its name.
-                let n = self.name(q, 0)?;
-                let found = self.fvars.as_ref().map(|m| m.get(&n.0).copied());
-                match found {
-                    Some(Some(id)) => {
-                        self.exprs.insert(q, id);
+            let t = match ready {
+                Some(t) => t,
+                None => {
+                    let w = self.word(q)?;
+                    let kept = self.keep && w as u32 == 0;
+                    let t = if kept { &self.cache.exprs } else { &self.exprs };
+                    if let Some(&id) = t.get(&q) {
+                        vals.push(id);
                         continue;
                     }
-                    Some(None) => {
-                        if let Some(f) = self.skipped.get(&n.0) {
-                            return Err(f.clone());
-                        }
-                        // A free variable of a term that is not in the local context is a far free variable. The C++ kernel gives "unknown free variable" only when it reads the declaration of the variable.
-                        let Some(far) = self.far.as_mut() else {
-                            return Err(Fault::new(FaultKind::FreeVar, q, "unknown free variable"));
-                        };
-                        let k = u32::try_from(far.len())
-                            .ok()
-                            .filter(|&k| k < u32::MAX - rulean_core::expr::FAR_FVAR)
-                            .ok_or_else(|| {
-                                decline(q, "a term has too many unknown free variables")
-                            })?;
-                        far.push(n);
-                        let id = rulean_core::expr::far_fvar(self.st, k);
-                        self.fvars.get_or_insert_default().insert(n.0, id);
-                        self.exprs.insert(q, id);
-                        continue;
+                    let t = (w >> 56) as u8;
+                    if t > 11 {
+                        return Err(bad(q, format!("the object is not an expression: tag {t}")));
                     }
-                    None => {
-                        return Err(Fault::new(
-                            FaultKind::FreeVar,
+                    let (objs, kids) = Self::expr_shape(t);
+                    let other = (w >> 48) as u8;
+                    if other != objs {
+                        return Err(bad(
                             q,
-                            "a free variable cannot be in a kernel declaration",
+                            format!("an expression has {other} object fields, not {objs}"),
                         ));
                     }
+                    if t == 1 {
+                        let id = self.fvar(q)?;
+                        vals.push(id);
+                        continue;
+                    }
+                    if t == 2 {
+                        return Err(Fault::new(
+                            FaultKind::MetaVar,
+                            q,
+                            "a metavariable cannot be in a kernel declaration",
+                        ));
+                    }
+                    if !kids.is_empty() {
+                        stack.push((q, Some(t)));
+                        // The last field goes on the stack first, so the walk converts the fields in order and their handles are on `vals` in order.
+                        for &k in kids.iter().rev() {
+                            let c = self.object(q, k)?;
+                            stack.push((c, None));
+                        }
+                        continue;
+                    }
+                    t
+                }
+            };
+            let n = Self::expr_shape(t).1.len();
+            let Some(at) = vals.len().checked_sub(n) else {
+                return Err(bad(q, "an expression is not converted"));
+            };
+            let id = self.expr_node(q, t, &vals[at..])?;
+            vals.truncate(at);
+            // The low 32 bits of the header are the reference count.
+            if !exact {
+                self.exprs.insert(q, id);
+            } else {
+                let rc = self.word(q)? as u32;
+                if self.keep && rc == 0 {
+                    self.cache.exprs.insert(q, id);
+                } else if rc != 1 {
+                    self.exprs.insert(q, id);
                 }
             }
-            if t == 2 {
+            vals.push(id);
+        }
+        match (vals.pop(), vals.is_empty()) {
+            (Some(id), true) => Ok(id),
+            _ => Err(bad(root, "an expression is not converted")),
+        }
+    }
+
+    /// The expression of the free variable at `q`, an `Expr.fvar` object. The table `exprs` records it.
+    fn fvar(&mut self, q: u64) -> Result<ExprId, Fault> {
+        // `Expr.fvar` has the `FVarId` in field 0, and an `FVarId` is its name.
+        let n = self.name(q, 0)?;
+        let found = self.fvars.as_ref().map(|m| m.get(&n.0).copied());
+        let id = match found {
+            Some(Some(id)) => id,
+            Some(None) => {
+                if let Some(f) = self.skipped.get(&n.0) {
+                    return Err(f.clone());
+                }
+                // A free variable of a term that is not in the local context is a far free variable. The C++ kernel gives "unknown free variable" only when it reads the declaration of the variable.
+                let Some(far) = self.far.as_mut() else {
+                    return Err(Fault::new(FaultKind::FreeVar, q, "unknown free variable"));
+                };
+                let k = u32::try_from(far.len())
+                    .ok()
+                    .filter(|&k| k < u32::MAX - rulean_core::expr::FAR_FVAR)
+                    .ok_or_else(|| decline(q, "a term has too many unknown free variables"))?;
+                far.push(n);
+                let id = rulean_core::expr::far_fvar(self.st, k);
+                self.fvars.get_or_insert_default().insert(n.0, id);
+                id
+            }
+            None => {
                 return Err(Fault::new(
-                    FaultKind::MetaVar,
+                    FaultKind::FreeVar,
                     q,
-                    "a metavariable cannot be in a kernel declaration",
+                    "a free variable cannot be in a kernel declaration",
                 ));
             }
-            if !ready {
-                stack.push((q, true));
-                for &k in kids {
-                    let c = self.object(q, k)?;
-                    if !self.exprs.contains_key(&c) {
-                        stack.push((c, false));
-                    }
-                }
-                continue;
-            }
-            let id = self.expr_node(q, t)?;
-            self.exprs.insert(q, id);
-        }
-        match self.exprs.get(&root) {
-            Some(&id) => Ok(id),
-            None => Err(bad(root, "an expression is not converted")),
-        }
+        };
+        let t = if self.kept(q)? {
+            &mut self.cache.exprs
+        } else {
+            &mut self.exprs
+        };
+        t.insert(q, id);
+        Ok(id)
     }
 
-    fn done_expr(&self, q: u64, i: u64) -> Result<ExprId, Fault> {
-        let c = self.object(q, i)?;
-        match self.exprs.get(&c) {
-            Some(&id) => Ok(id),
-            None => Err(bad(c, "an expression is not converted")),
-        }
-    }
-
-    /// Makes the node of the expression at `q` with tag `t`. The expressions of its fields are converted.
-    fn expr_node(&mut self, q: u64, t: u8) -> Result<ExprId, Fault> {
+    /// Makes the node of the expression at `q` with tag `t`. `kids` has the handles of the expressions of its fields, in the order of `expr_shape`.
+    fn expr_node(&mut self, q: u64, t: u8, kids: &[ExprId]) -> Result<ExprId, Fault> {
         Ok(match t {
             0 => {
                 let i = self.small(q, 0)?;
@@ -937,14 +1068,12 @@ impl<'a, H: Heap> Conv<'a, H> {
                 self.st.mk_const(n, ls)
             }
             5 => {
-                let f = self.done_expr(q, 0)?;
-                let a = self.done_expr(q, 1)?;
+                let (f, a) = (kids[0], kids[1]);
                 self.st.mk_app(f, a)
             }
             6 | 7 => {
                 let n = self.name(q, 0)?;
-                let dom = self.done_expr(q, 1)?;
-                let body = self.done_expr(q, 2)?;
+                let (dom, body) = (kids[0], kids[1]);
                 // The scalar area starts with `Expr.Data` (8 bytes), and `binderInfo` follows it.
                 let info = binder_info(q, self.u8_at(q, 3, 8)?)?;
                 if t == 6 {
@@ -955,9 +1084,7 @@ impl<'a, H: Heap> Conv<'a, H> {
             }
             8 => {
                 let n = self.name(q, 0)?;
-                let ty = self.done_expr(q, 1)?;
-                let v = self.done_expr(q, 2)?;
-                let body = self.done_expr(q, 3)?;
+                let (ty, v, body) = (kids[0], kids[1], kids[2]);
                 // `nonDep` has no effect on checking (spec 07.1.2), but it must be a boolean.
                 self.bool_at(q, 4, 8)?;
                 self.st.mk_let(n, ty, v, body)
@@ -980,12 +1107,12 @@ impl<'a, H: Heap> Conv<'a, H> {
             10 => {
                 // `mdata`: the kernel ignores the data, so the conversion checks only that the field is a valid word, and takes the inner expression. `KVMap` is a structure with one field, so its value is the list of entries, and the empty list is the boxed scalar 0.
                 self.field(q, 0)?;
-                self.done_expr(q, 1)?
+                kids[0]
             }
             _ => {
                 let n = self.name(q, 0)?;
                 let i = self.proj_index(q)?;
-                let e = self.done_expr(q, 2)?;
+                let e = kids[0];
                 self.st.mk_proj(n, i, e)
             }
         })

@@ -178,6 +178,8 @@ struct Mirror {
     fixed: HashSet<u32>,
     /// The count of the names of `MirrorPool::missed` that a walk of this mirror had in its queue.
     hot: usize,
+    /// The handles of the persistent objects that the conversions into the store of the checker made (spec 09.6.3).
+    cache: conv::Cache,
 }
 
 impl Mirror {
@@ -191,6 +193,7 @@ impl Mirror {
             origin: BTreeMap::new(),
             fixed: HashSet::default(),
             hot: 0,
+            cache: conv::Cache::default(),
         }
     }
 }
@@ -524,6 +527,7 @@ impl<'a> Kernel<'a> {
                 origin,
                 fixed,
                 hot,
+                cache,
             } = m;
             let t = Instant::now();
             // SAFETY: the caller gives `cancel`, and the call borrows it.
@@ -562,6 +566,7 @@ impl<'a> Kernel<'a> {
                 origin,
                 fixed,
                 hot,
+                cache,
             };
             let t = Instant::now();
             // SAFETY: the caller gives `env`.
@@ -687,6 +692,7 @@ impl<'a> Kernel<'a> {
             origin,
             fixed,
             hot,
+            cache,
         } = m;
         let t = Instant::now();
         // SAFETY: the caller gives `env` and `decl`, and the call owns `diag`.
@@ -695,7 +701,7 @@ impl<'a> Kernel<'a> {
                 env,
                 chk,
                 origin,
-                (fixed, hot),
+                (fixed, hot, cache),
                 (d, fault),
                 (before, decl, diag),
             )
@@ -714,7 +720,7 @@ impl<'a> Kernel<'a> {
         env: u64,
         mut chk: Checker,
         origin: BTreeMap<u32, Entry>,
-        (fixed, hot): (HashSet<u32>, usize),
+        (fixed, hot, cache): (HashSet<u32>, usize, conv::Cache),
         (d, fault): (Decl, Option<Fault>),
         (before, decl, diag): (usize, u64, Option<u64>),
     ) -> u64 {
@@ -732,6 +738,7 @@ impl<'a> Kernel<'a> {
                 origin,
                 fixed,
                 hot,
+                cache,
             });
             return r;
         }
@@ -742,6 +749,7 @@ impl<'a> Kernel<'a> {
             origin,
             fixed,
             hot,
+            cache,
         };
         match r {
             Ok(e) => {
@@ -840,7 +848,7 @@ impl<'a> Kernel<'a> {
     unsafe fn convert_and_mirror(&self, env: u64, m: &mut Mirror, decl: u64) -> Result<Decl, Exc> {
         for _ in 0..2 {
             let t = Instant::now();
-            let d = conv::declaration(&self.h, &mut m.chk.st, decl);
+            let d = Converter::with_cache(&self.h, &mut m.chk.st, &mut m.cache).declaration(decl);
             add_time(&T_DECL, t);
             let d = d.map_err(|f| self.conversion_exception(decl, f))?;
             let names = walk_names(&mut m.chk, &d);
@@ -1077,7 +1085,7 @@ impl<'a> Kernel<'a> {
             v
         };
         // The list keeps the names alive while the converter exists.
-        let mut conv = Converter::new(&self.h, &mut m.chk.st);
+        let mut conv = Converter::with_cache(&self.h, &mut m.chk.st, &mut m.cache);
         for o in names {
             let n = conv.name(o).map_err(|f| Miss::Fault(f.to_string()))?;
             queue.push(n);
@@ -1770,7 +1778,11 @@ impl<'a> Kernel<'a> {
         lazy: bool,
     ) -> Result<(), Miss> {
         let Mirror {
-            chk, origin, fixed, ..
+            chk,
+            origin,
+            fixed,
+            cache,
+            ..
         } = m;
         let mut stats = self.stats.get();
         let start = stats;
@@ -1784,7 +1796,7 @@ impl<'a> Kernel<'a> {
         // The `ConstantInfo` objects of the entries that the walk replaced or removed. The walk gives back their references after the converter is dropped, so that no object of the tables of the converter is freed while the converter exists.
         let mut old = Vec::new();
         // One converter for the walk, so that the constants share the tables of the conversion. The objects of the tables stay alive while the converter exists, because each constant that the walk converts keeps its reference in `origin`, and the walk keeps the references of `old`.
-        let mut conv = Converter::new(&self.h, &mut chk.st);
+        let mut conv = Converter::with_cache(&self.h, &mut chk.st, cache);
         let walk = 'walk: {
             while let Some(n) = queue.pop() {
                 if !seen.insert(n.0) {

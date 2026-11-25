@@ -32,7 +32,7 @@ use rulean_ffi::conv::{self, Converter};
 use rulean_ffi::heap::{Heap, boxed};
 use rulean_ffi::kernel::Kernel;
 use rulean_ffi::live::LiveHeap;
-use rulean_ffi::make::Encoder;
+use rulean_ffi::make::{Encoder, Make};
 use rulean_ffi::rt::{LeanMake, Runtime};
 use rulean_format::{
     Axiom, Ctor, Decl, Defn, Hints, Induct, InductType, Quot, QuotKind, Safety, Thm,
@@ -86,6 +86,9 @@ type Reset = unsafe extern "C" fn();
 /// The tag of `Kernel.Exception.deterministicTimeout`.
 const TIMEOUT: u64 = 13;
 
+/// The tag of `Kernel.Exception.interrupted`.
+const INTERRUPTED: u64 = 16;
+
 /// The two kernels and their environments.
 struct Dual<'a> {
     rt: &'a Runtime,
@@ -98,6 +101,8 @@ struct Dual<'a> {
     reset: Reset,
     /// The in-process kernel of rulean on the Lean runtime.
     kernel: Kernel<'a>,
+    /// Two `Option IO.CancelToken` objects: `some` of a set token and `some` of a token that is not set. The test owns one reference to each.
+    cancel: (u64, u64),
     /// The C++ kernel environment. The test owns one reference.
     env: u64,
     chk: Checker,
@@ -115,6 +120,8 @@ struct Verdicts {
     tags: Option<(u64, u64)>,
     /// For an accepted declaration, the heartbeats of the C++ kernel and of `Kernel::add_decl`.
     beats: Option<(u64, u64)>,
+    /// For an accepted declaration, true if the C++ kernel gives `interrupted` with a set cancel token.
+    cancel: Option<bool>,
 }
 
 /// The tag of a `Kernel.Exception`. A constructor without fields is a boxed scalar.
@@ -163,6 +170,7 @@ impl Dual<'_> {
         #[cfg(feature = "export")]
         self.same_as_export(d, o, r2, before);
         let beats = (cpp && kernel).then(|| self.same_heartbeats(d, o));
+        let cancel = (cpp && kernel).then(|| self.same_cancel(d, o));
         if cpp {
             // SAFETY: `new_cpp` is a field of `r`, which the test owns. The test takes a reference to it and gives back the old environment.
             unsafe {
@@ -183,6 +191,66 @@ impl Dual<'_> {
             kernel,
             tags,
             beats,
+            cancel,
+        }
+    }
+
+    /// Gives the accepted declaration `o` to the C++ kernel and to `Kernel::add_decl` with each cancel token. With the token that is not set, the two kernels must accept. With the set token, `Kernel::add_decl` must give `interrupted`, and the result tells if the C++ kernel gives it too. The C++ kernel reads the token only at a heartbeat, so a declaration that it checks without a heartbeat is accepted.
+    fn same_cancel(&mut self, d: &Decl, o: u64) -> bool {
+        let (set, unset) = self.cancel;
+        // The result of a kernel and a token: `None` if the kernel accepts, or the tag of the exception.
+        let run = |cpp: bool, tk: u64| -> Option<u64> {
+            // SAFETY: `env`, `o` and `tk` are live objects. The functions consume the environment, so the test gives each call a new reference. They borrow the declaration and the token.
+            let r = unsafe {
+                self.rt.inc(self.env);
+                if cpp {
+                    (self.add_decl)(self.env, 0, 512, o, tk)
+                } else {
+                    self.kernel.add_decl(self.env, 0, 512, o, tk)
+                }
+            };
+            let x = (tag(&self.h, r) == 0).then(|| exc_tag(&self.h, word(&self.h, r + 8)));
+            // SAFETY: the test owns `r`.
+            unsafe { self.rt.dec(r) };
+            x
+        };
+        assert_eq!(
+            run(true, unset),
+            None,
+            "the C++ kernel with a token that is not set rejects {d:?}"
+        );
+        assert_eq!(
+            run(false, unset),
+            None,
+            "add_decl with a token that is not set rejects {d:?}"
+        );
+        assert_eq!(
+            run(false, set),
+            Some(INTERRUPTED),
+            "add_decl with a set token on {d:?}"
+        );
+        #[cfg(feature = "export")]
+        {
+            // SAFETY: as for `run`. The symbol consumes the environment and borrows the declaration and the token.
+            let r = unsafe {
+                self.rt.inc(self.env);
+                rulean_ffi::export::lean_add_decl(self.env, 0, 512, o, set)
+            };
+            assert_eq!(
+                tag(&self.h, r),
+                0,
+                "the exported symbol with a set token accepts {d:?}"
+            );
+            assert_eq!(exc_tag(&self.h, word(&self.h, r + 8)), INTERRUPTED);
+            // SAFETY: the test owns `r`.
+            unsafe { self.rt.dec(r) };
+        }
+        match run(true, set) {
+            None => false,
+            Some(x) => {
+                assert_eq!(x, INTERRUPTED, "the C++ kernel with a set token on {d:?}");
+                true
+            }
         }
     }
 
@@ -539,6 +607,8 @@ fn the_two_kernels_give_the_same_verdicts() {
         find,
         reset,
         kernel,
+        // SAFETY: the runtime is Lean v4.36.0.
+        cancel: unsafe { (cancel_token(&rt, true), cancel_token(&rt, false)) },
         env,
         chk,
     };
@@ -712,11 +782,15 @@ fn the_two_kernels_give_the_same_verdicts() {
 
     let mut same_tags = 0;
     let mut beats = Vec::new();
+    let mut interrupted = Vec::new();
     for (what, d, want) in &cases {
         let v = dual.add(&st, d);
         if let Some((cpp, ours)) = v.beats {
             eprintln!("heartbeats of {what}: C++ {cpp}, rulean {ours}");
             beats.push((cpp, ours));
+        }
+        if let Some(c) = v.cancel {
+            interrupted.push((*what, c));
         }
         assert_eq!(v.cpp, *want, "the C++ kernel on {what}");
         assert_eq!(v.ours, v.cpp, "rulean and the C++ kernel differ on {what}");
@@ -738,6 +812,10 @@ fn the_two_kernels_give_the_same_verdicts() {
     assert_eq!(beats.len(), 8);
     assert!(beats.iter().all(|&(cpp, ours)| ours <= cpp));
     assert!(beats.iter().filter(|&&(_, ours)| ours > 1).count() >= 6);
+    // With a set cancel token, the C++ kernel gives `interrupted` at its first heartbeat. The check of the quotient has no heartbeat, so the C++ kernel accepts it. The search of the heartbeats starts at 1, so the count of the quotient is 1. `Kernel::add_decl` gives `interrupted` for all eight.
+    eprintln!("interrupted by the C++ kernel: {interrupted:?}");
+    assert_eq!(interrupted.len(), 8);
+    assert!(interrupted.iter().all(|&(what, c)| c == (what != "Quot")));
 
     for s in [
         "N",
@@ -829,7 +907,25 @@ fn the_two_kernels_give_the_same_verdicts() {
         rt.dec(terms.lctx);
         rt.dec(elab);
         rt.dec(dual.env);
+        rt.dec(dual.cancel.0);
+        rt.dec(dual.cancel.1);
     }
+}
+
+/// An `Option IO.CancelToken` object: `some` of a token with the flag `set`. `IO.CancelToken` has the fields `promise` and `setRef`. The kernels read only `setRef`, so the promise is the boxed scalar 0.
+///
+/// # Safety
+///
+/// `rt` is the runtime of Lean v4.36.0.
+unsafe fn cancel_token(rt: &Runtime, set: bool) -> u64 {
+    // SAFETY: `lean_st_mk_ref` consumes its argument and gives a new `IO.Ref`. The `ST` state has no object, so the result is the reference.
+    let mk_ref = unsafe { func::<unsafe extern "C" fn(u64) -> u64>(rt, c"lean_st_mk_ref") };
+    // SAFETY: a `Bool` is a boxed scalar.
+    let r = unsafe { mk_ref(boxed(u64::from(set))) };
+    // SAFETY: the maker gives the objects to the token, and the token to the option.
+    let mut m = unsafe { LeanMake::new(rt) };
+    let tk = m.ctor(0, &[boxed(0), r], &[]);
+    m.ctor(1, &[tk], &[])
 }
 
 /// A query of a term function.

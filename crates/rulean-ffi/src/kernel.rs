@@ -4,9 +4,11 @@
 //!
 //! The call makes a new checker. It mirrors the constants that the check can use from the Lean environment (`lean_environment_find`): the constants that the declaration refers to, the constants that their types and values refer to, the families of the inductive types, and the constants that the checker knows by name. A partial mirror is not sound, because a check can accept a declaration when a constant that it needs is not there. For example, a positivity check cannot see an occurrence behind a definition that it cannot unfold. The mirror is not kept between calls yet (spec 09.6.3 asks for a cache).
 //!
-//! If rulean accepts the declaration, the call adds the new constants to the Lean environment with `lean_environment_add`. If rulean rejects it, the call gives a `Kernel.Exception`. The kinds `unknownConstant`, `alreadyDeclared`, `thmTypeIsNotProp`, `deterministicTimeout`, `excessiveMemory` and `deepRecursion` have the constructors of the C++ kernel. The other kinds give `other` with a message.
+//! If rulean accepts the declaration, the call adds the new constants to the Lean environment with `lean_environment_add`. If rulean rejects it, the call gives a `Kernel.Exception`. The kinds `unknownConstant`, `alreadyDeclared`, `thmTypeIsNotProp`, `deterministicTimeout`, `excessiveMemory`, `deepRecursion` and `interrupted` have the constructors of the C++ kernel. The other kinds give `other` with a message.
 //!
-//! `max_heartbeat` is the heartbeat limit of the checker (spec 09.6.4). The C++ kernel counts one heartbeat for each call of `infer_type_core`, `whnf_core` and `is_def_eq_core`, and the checker counts one at the same functions. The C++ count is for each thread and starts at 0 at the start of a task, but the count of rulean starts at 0 for each declaration. The term functions have no limit, because the C++ functions use the limit of the thread and Lean does not export it. The recursion limit and the cancel token have no effect yet.
+//! `max_heartbeat` is the heartbeat limit of the checker (spec 09.6.4). The C++ kernel counts one heartbeat for each call of `infer_type_core`, `whnf_core` and `is_def_eq_core`, and the checker counts one at the same functions. The C++ count is for each thread and starts at 0 at the start of a task, but the count of rulean starts at 0 for each declaration. The term functions have no limit, because the C++ functions use the limit of the thread and Lean does not export it. The recursion limit has no effect yet.
+//!
+//! With a cancel token, the check runs on a new thread, and the calling thread reads the token each millisecond (spec 09.6.4). If the token is set, the call gives `interrupted` at once. The check continues on its thread until it stops, and its result is discarded. The C++ kernel reads the token at each heartbeat, so it can stop in the middle of a check, but the checker of rulean has no point at which it can stop. Without a token, the check runs on the calling thread.
 //!
 //! `Kernel::is_def_eq`, `Kernel::whnf` and `Kernel::check` have the contracts of `lean_kernel_is_def_eq`, `lean_kernel_whnf` and `lean_kernel_check`. They take a `Lean.Environment`, a `LocalContext` and terms. The call converts the local context and the terms, mirrors the constants that they refer to, and runs the checker in the local context. A result term goes back to Lean with the `FVarId` of each free variable.
 //!
@@ -16,9 +18,12 @@
 
 use std::collections::BTreeSet;
 use std::ffi::CStr;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::time::Duration;
 
 use rulean_core::env::{ConstInfo, ConstKind};
-use rulean_core::tc::{Checker, ErrorKind};
+use rulean_core::tc::{Checker, ErrorKind, Fault};
 use rulean_format::{Decl, Safety};
 use rulean_store::{Expr, ExprId, NameId, Store};
 
@@ -56,6 +61,13 @@ const OTHER: u8 = 12;
 const DETERMINISTIC_TIMEOUT: u64 = 13;
 const EXCESSIVE_MEMORY: u64 = 14;
 const DEEP_RECURSION: u64 = 15;
+const INTERRUPTED: u64 = 16;
+
+/// The stack size of the thread of a check with a cancel token. A check of a large term goes deep, and the command line tool gives its threads the same size.
+const CHECK_STACK_BYTES: usize = 1 << 30;
+
+/// The interval at which the calling thread reads the cancel token during a check.
+const POLL: Duration = Duration::from_millis(1);
 
 /// A rejection, before it is a `Kernel.Exception` object.
 enum Exc {
@@ -65,6 +77,7 @@ enum Exc {
     Timeout,
     Memory,
     DeepRecursion,
+    Interrupted,
     Other(String),
 }
 
@@ -126,7 +139,7 @@ impl<'a> Kernel<'a> {
         max_heartbeat: usize,
         _max_rec_depth: usize,
         decl: u64,
-        _cancel: u64,
+        cancel: u64,
     ) -> u64 {
         let mut chk = Checker::new(Store::new());
         chk.kernel_api = true;
@@ -142,7 +155,20 @@ impl<'a> Kernel<'a> {
             return unsafe { self.error(env, &chk.st, Exc::Other(msg)) };
         }
         let before = chk.env.len();
-        if let Some(f) = chk.add_decl(&d) {
+        // SAFETY: the caller gives `cancel`, and the call borrows it.
+        let (chk, d, fault) = match unsafe { token(cancel) } {
+            None => {
+                let f = chk.add_decl(&d);
+                (chk, d, f)
+            }
+            // SAFETY: the caller gives `env` and `cancel`.
+            Some(tk) => match unsafe { check_with_token(chk, d, tk) } {
+                Ok(r) => r,
+                // SAFETY: the caller gives `env`. The exception has no `Store` objects, so an empty `Store` is sufficient.
+                Err(x) => return unsafe { self.error(env, &Store::new(), x) },
+            },
+        };
+        if let Some(f) = fault {
             let exc = exception(&chk, &d, f.kind);
             // SAFETY: the caller gives `env`.
             return unsafe { self.error(env, &chk.st, exc) };
@@ -569,10 +595,11 @@ impl<'a> Kernel<'a> {
                     }
                 }
             }
-            Exc::Timeout | Exc::Memory | Exc::DeepRecursion | Exc::Other(_) => {
+            Exc::Timeout | Exc::Memory | Exc::DeepRecursion | Exc::Interrupted | Exc::Other(_) => {
                 m.dec(env);
                 match x {
                     Exc::Timeout => boxed(DETERMINISTIC_TIMEOUT),
+                    Exc::Interrupted => boxed(INTERRUPTED),
                     Exc::Memory => boxed(EXCESSIVE_MEMORY),
                     Exc::DeepRecursion => boxed(DEEP_RECURSION),
                     Exc::Other(msg) => {
@@ -584,6 +611,87 @@ impl<'a> Kernel<'a> {
             }
         };
         m.ctor(0, &[o], &[])
+    }
+}
+
+/// The `IO.CancelToken` object of `cancel`, an `Option IO.CancelToken` object, or `None` for `none`.
+///
+/// # Safety
+///
+/// `cancel` is a live `Option IO.CancelToken` object.
+unsafe fn token(cancel: u64) -> Option<u64> {
+    if cancel & 1 == 1 {
+        return None;
+    }
+    // SAFETY: `some` has one object field, at the offset 8.
+    Some(unsafe { read_word(cancel + 8) })
+}
+
+/// Reads the word at `addr`. Another thread can write the word, so the read is atomic.
+///
+/// # Safety
+///
+/// `addr` is the address of an aligned word of a live Lean object.
+unsafe fn read_word(addr: u64) -> u64 {
+    let p = core::ptr::with_exposed_provenance_mut::<u64>(addr as usize);
+    // SAFETY: the contract of the function. Lean writes the word with a store of one word, so an atomic read sees the old or the new value.
+    unsafe { AtomicU64::from_ptr(p) }.load(Ordering::Acquire)
+}
+
+/// Tells if the cancel token `tk` is set. The C++ kernel reads the flag in the same way: `IO.CancelToken` has the fields `promise` and `setRef`, and `setRef` is an `IO.Ref Bool` with the value at the offset 8.
+///
+/// # Safety
+///
+/// `tk` is a live `IO.CancelToken` object.
+unsafe fn is_set(tk: u64) -> bool {
+    // SAFETY: the field `setRef` is at the offset 16, and the value of a reference is at the offset 8.
+    let v = unsafe { read_word(read_word(tk + 16) + 8) };
+    // A `Bool` is a boxed scalar: `false` is 1 and `true` is 3.
+    v >> 1 != 0
+}
+
+/// Checks `d` on a new thread and reads the cancel token `tk` on the calling thread until the check stops. The result is `Exc::Interrupted` if the token is set first. The check then continues on its thread until it stops, and the call discards its result. The check uses no Lean object, so it is safe after the call returns.
+///
+/// If the process cannot make a thread, the result is `Exc::Other` with the reason.
+///
+/// # Safety
+///
+/// `tk` is a live `IO.CancelToken` object during the call.
+unsafe fn check_with_token(
+    mut chk: Checker,
+    d: Decl,
+    tk: u64,
+) -> Result<(Checker, Decl, Option<Fault>), Exc> {
+    // SAFETY: the contract of the function.
+    if unsafe { is_set(tk) } {
+        return Err(Exc::Interrupted);
+    }
+    let (tx, rx) = mpsc::channel();
+    let job = std::thread::Builder::new()
+        .name("rulean-check".to_string())
+        .stack_size(CHECK_STACK_BYTES)
+        .spawn(move || {
+            let f = chk.add_decl(&d);
+            // The receiver is gone if the token was set. The result is then not necessary.
+            let _ = tx.send((chk, d, f));
+        });
+    if let Err(e) = job {
+        return Err(Exc::Other(format!(
+            "cannot make the thread of the check: {e}"
+        )));
+    }
+    loop {
+        match rx.recv_timeout(POLL) {
+            Ok(r) => return Ok(r),
+            Err(RecvTimeoutError::Timeout) => {
+                // SAFETY: the contract of the function.
+                if unsafe { is_set(tk) } {
+                    return Err(Exc::Interrupted);
+                }
+            }
+            // The thread stopped without a result, because the check panicked. The call stops in the same way.
+            Err(RecvTimeoutError::Disconnected) => panic!("the check of the declaration panicked"),
+        }
     }
 }
 

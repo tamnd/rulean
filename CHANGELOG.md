@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.0.14] - 2026-11-25
+
 ### Added
 
 - `Kernel::add_decl_without_checking` of `rulean-ffi` and the exported symbol `lean_add_decl_without_checking` (spec 09.6.2). They do what the C++ kernel of Lean v4.36.0 does when `check` is false. An axiom, a definition, a theorem and an opaque constant get no check. A mutual block must not be empty and must be unsafe or partial. An inductive block and the quotient get the full check, as in the C++ kernel. The test `dual` gives each declaration to the C++ function and to rulean and requires the same verdicts and the same declared constants. The CI job `ffi-runtime` checks that the static library exports the symbol.
@@ -278,7 +280,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.13...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.14...HEAD
+[0.0.14]: https://github.com/tamnd/rulean/compare/v0.0.13...v0.0.14
 [0.0.13]: https://github.com/tamnd/rulean/compare/v0.0.12...v0.0.13
 [0.0.12]: https://github.com/tamnd/rulean/compare/v0.0.11...v0.0.12
 [0.0.11]: https://github.com/tamnd/rulean/compare/v0.0.10...v0.0.11

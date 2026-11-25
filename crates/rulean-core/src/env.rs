@@ -158,6 +158,29 @@ pub struct Env {
     cut: u32,
     /// True for the environment of a worker.
     locked: bool,
+    /// The record of the lookups of `find`.
+    rec: Record,
+}
+
+/// The names that `find` looked up since `record_start` (spec 09.6.3). The mirror of `rulean-ffi` compares these names with the Lean environment after a check.
+///
+/// A lookup of the name `n` sets `mark[n]` to `epoch` and `block[n / 64]` to `epoch`, so `take_record` reads only the blocks with a lookup. A name that is not below `mark.len()` sets `over`. A name is known if `known[n]` is `known_epoch`. A lookup that finds no constant for a name that is not known sets `missed`. A copy of the environment gets an empty record.
+#[derive(Debug, Default)]
+struct Record {
+    on: bool,
+    over: bool,
+    missed: bool,
+    epoch: u32,
+    mark: Vec<u32>,
+    block: Vec<u32>,
+    known_epoch: u32,
+    known: Vec<u32>,
+}
+
+impl Clone for Record {
+    fn clone(&self) -> Record {
+        Record::default()
+    }
 }
 
 /// An empty environment with no cut, as `Env::new`.
@@ -177,6 +200,7 @@ impl Env {
             quot_len: 0,
             cut: u32::MAX,
             locked: false,
+            rec: Record::default(),
         }
     }
 
@@ -202,11 +226,111 @@ impl Env {
         self.consts.len()
     }
 
-    /// The slot of the constant with the name, or 0 if there is none or if the constant is after the cut (`find`).
-    pub fn find(&self, n: NameId) -> u32 {
+    /// The slot of the constant with the name, or 0 if there is none or if the constant is after the cut (`find`). The record gets the name if it is on.
+    pub fn find(&mut self, n: NameId) -> u32 {
+        let s = self.peek(n);
+        if self.rec.on {
+            self.note(n, s == 0);
+        }
+        s
+    }
+
+    /// The slot of the constant with the name, as `find`, but the record does not get the name. The checker does not use this.
+    pub fn peek(&self, n: NameId) -> u32 {
         let i = n.0 as usize;
         let s = if i < self.slot.len() { self.slot[i] } else { 0 };
         if s > self.cut { 0 } else { s }
+    }
+
+    /// Adds the name to the record. `miss` is true if the lookup found no constant.
+    fn note(&mut self, n: NameId, miss: bool) {
+        let r = &mut self.rec;
+        let i = n.0 as usize;
+        if i < r.mark.len() {
+            r.mark[i] = r.epoch;
+            r.block[i / 64] = r.epoch;
+        } else {
+            r.over = true;
+        }
+        if miss && !(i < r.known.len() && r.known[i] == r.known_epoch) {
+            r.missed = true;
+        }
+    }
+
+    /// True if a lookup since `record_start` found no constant for a name that is not known. The checker then stops with the fault `Missed`.
+    pub fn missed(&self) -> bool {
+        self.rec.missed
+    }
+
+    /// Makes all the names not known.
+    pub fn known_reset(&mut self) {
+        let r = &mut self.rec;
+        r.known_epoch = r.known_epoch.wrapping_add(1);
+        if r.known_epoch == 0 {
+            r.known.clear();
+            r.known_epoch = 1;
+        }
+    }
+
+    /// Makes the name known, so a lookup of the name that finds no constant does not set the flag of `missed`. The mirror of `rulean-ffi` marks the names for which it has the constant of the Lean environment, or for which the Lean environment has no constant.
+    pub fn mark_known(&mut self, n: NameId) {
+        let r = &mut self.rec;
+        let i = n.0 as usize;
+        if r.known_epoch == 0 {
+            r.known_epoch = 1;
+        }
+        while r.known.len() <= i {
+            r.known.push(0);
+        }
+        r.known[i] = r.known_epoch;
+    }
+
+    /// Starts a new record of the lookups of `find`. The record is empty, and it can hold the names below `names`. A lookup of another name sets the flag that `take_record` gives.
+    pub fn record_start(&mut self, names: usize) {
+        let r = &mut self.rec;
+        r.epoch = r.epoch.wrapping_add(1);
+        if r.epoch == 0 {
+            r.mark.clear();
+            r.block.clear();
+            r.epoch = 1;
+        }
+        while r.mark.len() < names {
+            r.mark.push(0);
+        }
+        while r.block.len() * 64 < r.mark.len() {
+            r.block.push(0);
+        }
+        r.over = false;
+        r.missed = false;
+        r.on = true;
+    }
+
+    /// Stops the record. `find` does not record its lookups until the next `record_start`.
+    pub fn record_stop(&mut self) {
+        self.rec.on = false;
+    }
+
+    /// The names of the lookups since `record_start` or the last `take_record`, in the order of their handles, and true if a lookup had a name that the record cannot hold. The record becomes empty, and it continues to record if it is not stopped.
+    pub fn take_record(&mut self) -> (Vec<NameId>, bool) {
+        let r = &mut self.rec;
+        let mut names = Vec::new();
+        let e = r.epoch;
+        for (b, blk) in r.block.iter_mut().enumerate() {
+            if *blk != e {
+                continue;
+            }
+            *blk = 0;
+            let end = core::cmp::min(b * 64 + 64, r.mark.len());
+            for (i, m) in r.mark[b * 64..end].iter_mut().enumerate() {
+                if *m == e {
+                    *m = 0;
+                    names.push(NameId((b * 64 + i) as u32));
+                }
+            }
+        }
+        let over = r.over;
+        r.over = false;
+        (names, over)
     }
 
     /// The slot of the constant with the name, also after the cut, or 0 if there is none.
@@ -231,7 +355,7 @@ impl Env {
     }
 
     /// True if the environment has a constant with the name.
-    pub fn contains(&self, n: NameId) -> bool {
+    pub fn contains(&mut self, n: NameId) -> bool {
         self.find(n) != 0
     }
 
@@ -288,6 +412,11 @@ impl Env {
             let k = self.consts[i].name.0 as usize;
             self.slot[k] = 0;
             self.consts.pop();
+        }
+        // The quotient constants were added after the first `n` constants, so the environment did not have them.
+        if self.quot_init && self.quot_len as usize > n {
+            self.quot_init = false;
+            self.quot_len = 0;
         }
     }
 

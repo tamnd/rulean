@@ -213,7 +213,7 @@ impl Checker {
     }
 
     /// `never_proof` for an application of the local `l`. It uses the type of the local in the local context, as `const_never_proof` uses the type of a constant. A local whose type ends in a free variable `α` is never a proof if the type of `α` is a sort with a level that is never zero. This is the case of `f : α → α` with `α : Type`. Without this case, proof irrelevance reads back each argument of `f (f (... x))`, and the time is quadratic in the depth.
-    fn fvar_never_proof(&self, l: u32) -> bool {
+    fn fvar_never_proof(&mut self, l: u32) -> bool {
         let i = l as usize;
         if i >= self.lctx_ty.len() {
             return false;
@@ -223,7 +223,7 @@ impl Checker {
     }
 
     /// True if a term with the type `t` is never a proof, where `t` is the codomain of a type after its Pi binders. A sort is a type of types. An application of an inductive type whose sort is never zero, and a free variable whose type is such a sort, are types that are not propositions.
-    fn codomain_never_prop(&self, t: ExprId) -> bool {
+    fn codomain_never_prop(&mut self, t: ExprId) -> bool {
         match self.st.node(t) {
             Expr::Sort(_) => true,
             Expr::FVar(_, ty) => match self.st.node(ty) {
@@ -252,7 +252,7 @@ impl Checker {
     }
 
     /// True if the type `ty` of a constant ends in a bound variable `α` of its own Pi binders, maybe applied, and the type of `α` ends in a sort with a level that is never zero. This is the case of a projection function such as `HAdd.hAdd : {α β γ : Type} → [HAdd α β γ] → α → β → γ`. The type of `α` can be `outParam (Type u)` or another application of a definition whose value is `fun x => x`, and then the step uses the argument.
-    fn bvar_codomain_never_prop(&self, ty: ExprId) -> bool {
+    fn bvar_codomain_never_prop(&mut self, ty: ExprId) -> bool {
         let mut n: u32 = 0;
         let mut cur = ty;
         let mut walking = true;
@@ -299,7 +299,7 @@ impl Checker {
     }
 
     /// `t` without an application `f x` of a definition `f` whose value is `fun y => y`, such as `outParam` and `semiOutParam`. Other terms do not change.
-    fn strip_identity_def(&self, t: ExprId) -> ExprId {
+    fn strip_identity_def(&mut self, t: ExprId) -> ExprId {
         if let Expr::App(f, x) = self.st.node(t) {
             if let Expr::Const(c, _) = self.st.node(f) {
                 let slot = self.env.find(c);
@@ -331,7 +331,7 @@ impl Checker {
     }
 
     /// True if `t` is an application of an inductive type whose own type ends in a sort with a level that is never zero.
-    pub(crate) fn induct_type_not_prop(&self, t: ExprId) -> bool {
+    pub(crate) fn induct_type_not_prop(&mut self, t: ExprId) -> bool {
         let h = expr::app_fn(&self.st, t);
         match self.st.node(h) {
             Expr::Const(i, _) => {
@@ -409,7 +409,7 @@ impl Checker {
     }
 
     /// The glued head of a value: the constant, its levels, the spine and the hint.
-    fn glued_head(&self, v: ValueId) -> Option<(NameId, LevelListId, SpineId, Hints)> {
+    fn glued_head(&mut self, v: ValueId) -> Option<(NameId, LevelListId, SpineId, Hints)> {
         match self.va.get(v) {
             Value::Glued(c, us, sp, _) => {
                 let slot = self.env.find(c);

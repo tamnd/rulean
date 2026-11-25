@@ -334,6 +334,7 @@ impl Checker {
             return None;
         }
         let mut m: Vec<u8> = Vec::new();
+        let mut missing = false;
         match &c.kind {
             ConstKind::Defn { value, .. } => {
                 m.push(0x20);
@@ -358,18 +359,24 @@ impl Checker {
                 push_u64(&mut m, info.nindices as u64);
                 push_u64(&mut m, info.ctors.len() as u64);
                 let mut i = 0;
-                while i < info.ctors.len() {
+                while i < info.ctors.len() && !missing {
                     let cn = d.name(&self.st, info.ctors[i]);
                     push_bytes(&mut m, &cn);
-                    let ct = self.env.at(self.env.find(info.ctors[i])).ty;
-                    let x = d.expr(&self.st, ct);
-                    push_bytes(&mut m, &x);
+                    let cs = self.env.peek(info.ctors[i]);
+                    if cs == 0 {
+                        missing = true;
+                    } else {
+                        let ct = self.env.at(cs).ty;
+                        let x = d.expr(&self.st, ct);
+                        push_bytes(&mut m, &x);
+                    }
                     i += 1;
                 }
             }
             _ => return None,
         }
-        if d.deep {
+        // A constructor that the environment does not have gives no digest.
+        if d.deep || missing {
             return None;
         }
         Some(sha256(&m))
@@ -383,7 +390,7 @@ impl Checker {
             if self.pin_done & (1 << i) == 0 && self.env.contains(n) {
                 self.pin_done |= 1 << i;
                 let mut d = Digest::new();
-                let ok = match self.pin_digest(&mut d, self.env.find(n)) {
+                let ok = match self.pin_digest(&mut d, self.env.peek(n)) {
                     Some(h) => h == TARGET_REF[i] || h == TARGET_AXIOM_REF[i],
                     None => false,
                 };

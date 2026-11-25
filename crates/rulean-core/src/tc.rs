@@ -69,6 +69,8 @@ pub enum ErrorKind {
     CountTooLarge,
     /// The call depth is above the bound. This is a resource failure and not a verdict (spec 05.11).
     DeepRecursion,
+    /// A lookup of the check found no constant for a name that the mirror of `rulean-ffi` does not know (spec 09.6.3). The mirror converts the constant if the Lean environment has it, and checks the declaration again, so this is never a verdict.
+    Missed,
     /// The value arena of engine F is full (spec 04.5). This is a resource failure and not a verdict.
     ArenaFull,
     /// The checker uses more memory than `--max-memory` allows (spec 12.3). This is a resource failure and not a verdict.
@@ -662,6 +664,11 @@ impl Checker {
         if self.max_heartbeat != 0 && self.heartbeats > self.max_heartbeat {
             self.leave_beat();
             self.fail(ErrorKind::Heartbeat, at);
+            return false;
+        }
+        if self.env.missed() {
+            self.leave_beat();
+            self.fail(ErrorKind::Missed, at);
             return false;
         }
         true

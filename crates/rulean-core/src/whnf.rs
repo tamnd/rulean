@@ -146,7 +146,7 @@ impl Checker {
     }
 
     /// The induct, the number of parameters and the number of fields of a constructor. A name that is not a constructor gives `None`.
-    pub(crate) fn ctor_shape(&self, n: NameId) -> Option<(NameId, u32, u32)> {
+    pub(crate) fn ctor_shape(&mut self, n: NameId) -> Option<(NameId, u32, u32)> {
         let s = self.env.find(n);
         if s == 0 {
             return None;
@@ -158,7 +158,7 @@ impl Checker {
     }
 
     /// `is_constructor_app`.
-    fn is_constructor_app(&self, e: ExprId) -> bool {
+    fn is_constructor_app(&mut self, e: ExprId) -> bool {
         let f = expr::app_fn(&self.st, e);
         match self.st.node(f) {
             Expr::Const(n, _) => self.ctor_shape(n).is_some(),
@@ -283,17 +283,18 @@ impl Checker {
     }
 
     /// True if the recursor of the slot has the same number of universe parameters as the first type of its group, so its motive is in `Prop` only. A missing type gives true, so the caller does no eta.
-    fn rec_into_prop_only(&self, rec_slot: u32) -> bool {
+    fn rec_into_prop_only(&mut self, rec_slot: u32) -> bool {
         let c = self.env.at(rec_slot);
         let first = match &c.kind {
             ConstKind::Rec(r) => r.all.first().copied(),
             _ => None,
         };
+        let params = c.lparams.len();
         let s = match first {
             Some(n) => self.env.find(n),
             None => 0,
         };
-        s == 0 || c.lparams.len() == self.env.at(s).lparams.len()
+        s == 0 || params == self.env.at(s).lparams.len()
     }
 
     /// `recursor_val::get_major_induct`: the head of the domain of the major premise in the type of the recursor.
@@ -637,7 +638,7 @@ impl Checker {
     // Delta reduction.
 
     /// `is_delta`: the slot of the definition or theorem at the head of `e`, if its number of levels is right, or 0.
-    pub(crate) fn is_delta(&self, e: ExprId) -> u32 {
+    pub(crate) fn is_delta(&mut self, e: ExprId) -> u32 {
         let f = expr::app_fn(&self.st, e);
         match self.st.node(f) {
             Expr::Const(n, ls) => self.is_delta_const(n, ls),
@@ -646,7 +647,7 @@ impl Checker {
     }
 
     /// `is_delta` for the constant `n` with the levels `ls`.
-    pub(crate) fn is_delta_const(&self, n: NameId, ls: LevelListId) -> u32 {
+    pub(crate) fn is_delta_const(&mut self, n: NameId, ls: LevelListId) -> u32 {
         let s = self.env.find(n);
         if s == 0 {
             return 0;

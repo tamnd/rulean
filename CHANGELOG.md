@@ -15,6 +15,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ### Changed
 
+- The mirror of `rulean-ffi` replaces a constant that the Lean environment has with a different object, and removes a constant that the Lean environment does not have (spec 09.6.3). Before, each of these constants made a new mirror, which converted all the imported constants again. The new function `Env::remove` of `rulean-core` removes a constant. `MirrorStats` and `Timing` have the new counts `replaced` and `removed`, and `Timing` also has `rebuilds`. On the smoke test of the CI job `lean-build`, 3 runs made no new mirror after a stale constant. Two runs before this change made 16 and 18.
 - The mirror of `rulean-ffi` converts the imported constants in less time (spec 09.6.3). The tables of the conversion and the sets of the walk use a multiplicative hash in place of SipHash, one walk uses one converter, and the lookup of a constant of the mirror uses the `Name` object of its `ConstantInfo`. On the smoke test of the CI job `lean-build`, the mirror used 8410 ms before and between 1576 ms and 3767 ms after, on a machine with other work.
 
 ### Fixed

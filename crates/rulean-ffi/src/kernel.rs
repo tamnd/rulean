@@ -45,6 +45,10 @@ type QuotInit = unsafe extern "C" fn(u64) -> u8;
 type MarkQuot = unsafe extern "C" fn(u64) -> u64;
 type ToKernel = unsafe extern "C" fn(u64) -> u64;
 type UpdateBase = unsafe extern "C" fn(u64, u64) -> u64;
+type GetDiag = unsafe extern "C" fn(u64) -> u64;
+type DiagEnabled = unsafe extern "C" fn(u64) -> u8;
+type RecordUnfold = unsafe extern "C" fn(u64, u64) -> u64;
+type SetDiag = unsafe extern "C" fn(u64, u64) -> u64;
 
 /// The operation of a term function.
 #[derive(Clone, Copy)]
@@ -198,6 +202,10 @@ pub struct Kernel<'a> {
     mark_quot: MarkQuot,
     to_kernel: ToKernel,
     update_base: UpdateBase,
+    get_diag: GetDiag,
+    diag_enabled: DiagEnabled,
+    record_unfold: RecordUnfold,
+    set_diag: SetDiag,
     /// The mirror of `add_decl`. A call takes it and puts it back.
     cache: RefCell<Option<Mirror>>,
     stats: Cell<MirrorStats>,
@@ -235,6 +243,10 @@ impl<'a> Kernel<'a> {
                 mark_quot: func(rt, c"lean_environment_mark_quot_init")?,
                 to_kernel: func(rt, c"lean_elab_environment_to_kernel_env")?,
                 update_base: func(rt, c"lean_elab_environment_update_base_after_kernel_add")?,
+                get_diag: func(rt, c"lean_kernel_get_diag")?,
+                diag_enabled: func(rt, c"lean_kernel_diag_is_enabled")?,
+                record_unfold: func(rt, c"lean_kernel_record_unfold")?,
+                set_diag: func(rt, c"lean_kernel_set_diag")?,
                 cache: RefCell::new(None),
                 stats: Cell::new(MirrorStats::default()),
             })
@@ -274,6 +286,10 @@ impl<'a> Kernel<'a> {
         };
         // `convert_and_mirror` can make a new mirror with the default limit, so the call sets the limit after it.
         m.chk.max_heartbeat = max_heartbeat as u64;
+        // SAFETY: the caller gives `env`.
+        let diag = unsafe { self.diag_of(env) };
+        m.chk.diag_on = diag.is_some();
+        m.chk.clear_diag();
         let Mirror { chk, mut origin } = m;
         let before = chk.env.len();
         // SAFETY: the caller gives `cancel`, and the call borrows it.
@@ -288,8 +304,11 @@ impl<'a> Kernel<'a> {
                 Ok(r) => r,
                 Err(x) => {
                     // The checker of the mirror is on the thread of the check, so the call drops the mirror.
-                    // SAFETY: the mirror owns the references of `origin`.
-                    unsafe { self.release_origin(&mut origin) };
+                    // SAFETY: the mirror owns the references of `origin`, and the call owns `diag`.
+                    unsafe {
+                        self.release_origin(&mut origin);
+                        self.drop_diag(diag);
+                    }
                     // SAFETY: the caller gives `env`. The exception has no `Store` objects, so an empty `Store` is sufficient.
                     return unsafe { self.error(env, &Store::new(), x) };
                 }
@@ -297,8 +316,11 @@ impl<'a> Kernel<'a> {
         };
         if let Some(f) = fault {
             let exc = exception(&mut chk, &d, f, decl);
-            // SAFETY: the caller gives `env`.
-            let r = unsafe { self.error(env, &chk.st, exc) };
+            // SAFETY: the caller gives `env`, and the call owns `diag`.
+            let r = unsafe {
+                self.drop_diag(diag);
+                self.error(env, &chk.st, exc)
+            };
             // A failed check adds no constant to the Lean environment, so the mirror must not keep one.
             chk.env.truncate(before);
             self.put(Mirror { chk, origin });
@@ -312,6 +334,11 @@ impl<'a> Kernel<'a> {
                 let mut m = m;
                 // SAFETY: `e` is the new environment, and the call owns it. The mirror then has the origin of each new constant.
                 let ok = unsafe { self.record_new(e, &mut m, before) };
+                let e = match diag {
+                    // SAFETY: the call owns `e` and `diag`.
+                    Some(g) => unsafe { self.with_diag(e, &m.chk, g) },
+                    None => e,
+                };
                 if ok {
                     self.put(m);
                 } else {
@@ -323,10 +350,71 @@ impl<'a> Kernel<'a> {
             }
             Err(r) => {
                 // The Lean environment does not have the new constants, so the call drops the mirror.
-                // SAFETY: the mirror owns its references.
-                unsafe { self.release(m) };
+                // SAFETY: the mirror owns its references, and the call owns `diag`.
+                unsafe {
+                    self.release(m);
+                    self.drop_diag(diag);
+                }
                 r
             }
+        }
+    }
+
+    /// The kernel diagnostics of `env`, if they are enabled (`scoped_diagnostics`). The result is an owned `Kernel.Diagnostics` object.
+    ///
+    /// # Safety
+    ///
+    /// `env` is a live `Kernel.Environment` object. The call does not consume it.
+    unsafe fn diag_of(&self, env: u64) -> Option<u64> {
+        // SAFETY: the exported functions consume their arguments, so the call gives them new references.
+        unsafe {
+            self.rt.inc(env);
+            let d = (self.get_diag)(env);
+            self.rt.inc(d);
+            if (self.diag_enabled)(d) != 0 {
+                Some(d)
+            } else {
+                self.rt.dec(d);
+                None
+            }
+        }
+    }
+
+    /// Records the unfolds of the checker in the diagnostics `diag` and puts them into the environment `e` (`scoped_diagnostics::update`). The call consumes `e` and `diag`, and gives the new environment.
+    ///
+    /// # Safety
+    ///
+    /// `e` is a live `Kernel.Environment` object and `diag` is a live `Kernel.Diagnostics` object. The call owns both.
+    unsafe fn with_diag(&self, e: u64, chk: &Checker, diag: u64) -> u64 {
+        let mut d = diag;
+        for &(n, k) in &chk.diag {
+            let name = {
+                // SAFETY: the encoder gives the maker only objects that it made.
+                let mut m = unsafe { LeanMake::new(self.rt) };
+                Encoder::new(&mut m, &chk.st).name(n)
+            };
+            // SAFETY: `recordUnfold` consumes the diagnostics and the name, and gives new diagnostics. The call owns `name` and gives back its reference at the end.
+            unsafe {
+                for _ in 0..k {
+                    self.rt.inc(name);
+                    d = (self.record_unfold)(d, name);
+                }
+                self.rt.dec(name);
+            }
+        }
+        // SAFETY: `setDiagnostics` consumes the environment and the diagnostics.
+        unsafe { (self.set_diag)(e, d) }
+    }
+
+    /// Gives back the reference to the diagnostics `diag`, if there is one.
+    ///
+    /// # Safety
+    ///
+    /// The call owns `diag`.
+    unsafe fn drop_diag(&self, diag: Option<u64>) {
+        if let Some(d) = diag {
+            // SAFETY: the contract of the function.
+            unsafe { self.rt.dec(d) };
         }
     }
 

@@ -57,3 +57,8 @@ run_cmd liftTermElabM do
   let r ← ofExceptKernelException (Kernel.whnf env {} two)
   let b ← ofExceptKernelException (Kernel.isDefEq env {} two (mkNatLit 2))
   logInfo m!"whnf: {r}, isDefEq: {b}"
+
+-- The kernel diagnostics: the two kernels must count the same unfolds.
+set_option diagnostics true in
+set_option diagnostics.threshold 0 in
+theorem ack_val : ack 2 1 = 5 := by simp [ack]

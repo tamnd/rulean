@@ -9,7 +9,7 @@
 use alloc::vec::Vec;
 use rulean_format::Safety;
 use rulean_nat::Nat;
-use rulean_store::ids::raw;
+use rulean_store::ids::{low, raw};
 use rulean_store::{BinderInfo, Expr, ExprId, LevelId, Literal, NameId, Store};
 
 use crate::conv::{Engine, FStats};
@@ -356,6 +356,12 @@ pub struct Checker {
     pub trace_on: bool,
     /// The rule trace, when `trace_on` is true.
     pub trace: Trace,
+    /// Count the unfolds of the kernel diagnostics into `diag` (spec 09.6.4).
+    pub diag_on: bool,
+    /// The kernel diagnostics, when `diag_on` is true: each unfolded constant and its number of unfolds, in the order of the first unfold. The C++ kernel records an unfold when it unfolds a definition or a theorem (`unfold_definition_core`), and when a recursor or a quotient constant steps (`whnf_core`). The checker counts at the same steps. Use `clear_diag` to start again.
+    pub diag: Vec<(NameId, u64)>,
+    /// The index in `diag` of each constant, plus 1, at key (name, 0).
+    pub(crate) diag_at: Memo,
     /// The level parameters of the declaration (`m_lparams`). They are checked only if `check_lparams` is true.
     pub(crate) lparams: Vec<NameId>,
     pub(crate) check_lparams: bool,
@@ -440,6 +446,9 @@ impl Checker {
             eq_depth: 0,
             trace_on: false,
             trace: Trace::new(),
+            diag_on: false,
+            diag: Vec::new(),
+            diag_at: Memo::new(),
             lparams: Vec::new(),
             check_lparams: false,
             safety: Safety::Safe,
@@ -511,6 +520,20 @@ impl Checker {
         self.c_conv_success.clear();
         self.c_force.clear();
         self.c_never_proof.clear();
+    }
+
+    /// Removes the counts of the kernel diagnostics.
+    pub fn clear_diag(&mut self) {
+        self.diag.clear();
+        self.diag_at.clear();
+    }
+
+    /// The number of unfolds of the constant `n` in the kernel diagnostics.
+    pub fn diag_count(&self, n: NameId) -> u64 {
+        match self.diag_at.get(raw(n.0), 0) {
+            Some(i) => self.diag[low(i) as usize - 1].1,
+            None => 0,
+        }
     }
 
     /// The first error since `begin`, if any.

@@ -114,7 +114,12 @@ impl<'a, H: Heap> Converter<'a, H> {
         self.c.lmvars.values().copied().collect()
     }
 
-    /// Converts the `Expr` object at `e`. A free variable must be in the local context of `local_context`.
+    /// The `FVarId` name of each far free variable of the terms, by its number. After `local_context`, `expr` converts a free variable that is not in the local context to the far free variable `rulean_core::expr::far_fvar(st, k)`, where `k` is the index of its name in the result. `Encoder::with_far_fvars` writes each far free variable as its `Expr.fvar` again.
+    pub fn far_fvars(&self) -> Vec<NameId> {
+        self.c.far.clone().unwrap_or_default()
+    }
+
+    /// Converts the `Expr` object at `e`. After `local_context`, a free variable that is not in the local context is a far free variable, see `far_fvars`. Without `local_context`, a free variable is a fault.
     pub fn expr(&mut self, e: u64) -> Result<ExprId, Fault> {
         let id = self.c.expr_at(e)?;
         self.full(e)?;
@@ -162,6 +167,8 @@ struct Conv<'a, H: Heap> {
     skipped: HashMap<u32, Fault>,
     /// The level metavariables of a term, by the name of their `LMVarId`: the level parameter that stands for the metavariable and the first `Level.mvar` object. See `Converter::level_mvars`.
     lmvars: HashMap<u32, (NameId, u64)>,
+    /// The `FVarId` name of each far free variable of the terms, by its number. `None` before the end of `local_context`. See `Converter::far_fvars`.
+    far: Option<Vec<NameId>>,
 }
 
 fn bad(at: u64, msg: impl Into<String>) -> Fault {
@@ -200,6 +207,7 @@ impl<'a, H: Heap> Conv<'a, H> {
             fvars: None,
             skipped: HashMap::new(),
             lmvars: HashMap::new(),
+            far: None,
         }
     }
 
@@ -713,6 +721,7 @@ impl<'a, H: Heap> Conv<'a, H> {
                 e,
             });
         }
+        self.far = Some(Vec::new());
         Ok(out)
     }
 
@@ -762,7 +771,21 @@ impl<'a, H: Heap> Conv<'a, H> {
                         if let Some(f) = self.skipped.get(&n.0) {
                             return Err(f.clone());
                         }
-                        return Err(Fault::new(FaultKind::FreeVar, q, "unknown free variable"));
+                        // A free variable of a term that is not in the local context is a far free variable. The C++ kernel gives "unknown free variable" only when it reads the declaration of the variable.
+                        let Some(far) = self.far.as_mut() else {
+                            return Err(Fault::new(FaultKind::FreeVar, q, "unknown free variable"));
+                        };
+                        let k = u32::try_from(far.len())
+                            .ok()
+                            .filter(|&k| k < u32::MAX - rulean_core::expr::FAR_FVAR)
+                            .ok_or_else(|| {
+                                decline(q, "a term has too many unknown free variables")
+                            })?;
+                        far.push(n);
+                        let id = rulean_core::expr::far_fvar(self.st, k);
+                        self.fvars.get_or_insert_default().insert(n.0, id);
+                        self.exprs.insert(q, id);
+                        continue;
                     }
                     None => {
                         return Err(Fault::new(

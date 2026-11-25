@@ -84,6 +84,9 @@ const CHECK_STACK_BYTES: usize = 1 << 30;
 /// The interval at which the calling thread reads the cancel token during a check.
 const POLL: Duration = Duration::from_millis(1);
 
+/// The level metavariables of a term call, as `Converter::level_mvars` gives them, and the far free variables of the call, as `Converter::far_fvars` gives them.
+type TermVars = (Vec<(NameId, u64)>, Vec<NameId>);
+
 /// A rejection, before it is a `Kernel.Exception` object.
 enum Exc {
     Unknown(NameId),
@@ -100,7 +103,8 @@ enum Exc {
         terms: Vec<ExprId>,
         locals: Vec<Local>,
         base: Option<(u64, usize)>,
-        lmvars: Vec<(NameId, u64)>,
+        /// The level metavariables and the far free variables of the call. The box keeps `Exc` small.
+        vars: Box<TermVars>,
     },
     Timeout,
     Memory,
@@ -661,10 +665,10 @@ impl<'a> Kernel<'a> {
                     .iter()
                     .map(|&t| c.expr(t))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok((locals, ids, c.level_mvars()))
+                Ok((locals, ids, c.level_mvars(), c.far_fvars()))
             })
         };
-        let (locals, ids, lmvars) = match conv {
+        let (locals, ids, lmvars, far) = match conv {
             Ok(x) => x,
             // SAFETY: the caller gives `kenv`.
             Err(f) => return unsafe { self.error(kenv, &m.chk.st, Exc::Other(f.to_string())) },
@@ -709,7 +713,7 @@ impl<'a> Kernel<'a> {
         };
         if let Some(f) = chk.fault() {
             let known: Vec<NameId> = locals.iter().map(|l| l.fvar).collect();
-            let exc = term_exception(&mut chk, &start, f, &known, (lctx, &lmvars));
+            let exc = term_exception(&mut chk, &start, f, &known, (lctx, &lmvars, &far));
             // SAFETY: the caller gives `kenv`.
             return unsafe { self.error(kenv, &chk.st, exc) };
         }
@@ -721,6 +725,7 @@ impl<'a> Kernel<'a> {
                 let mut m = unsafe { LeanMake::new(self.rt) };
                 Encoder::new(&mut m, &chk.st)
                     .with_fvars(fvars)
+                    .with_far_fvars(far)
                     .with_level_mvars(&lmvars)
                     .expr(e)
             }
@@ -982,8 +987,8 @@ impl<'a> Kernel<'a> {
                 terms,
                 locals,
                 base,
-                lmvars,
-            } => match lctx_fields(&mut m, st, name, &terms, &locals, base, &lmvars) {
+                vars,
+            } => match lctx_fields(&mut m, st, name, &terms, &locals, base, (&vars.0, &vars.1)) {
                 Ok(objs) => with_env(&mut m, tag, &objs),
                 Err(msg) => {
                     m.dec(env);
@@ -1123,7 +1128,8 @@ fn exception(chk: &mut Checker, d: &Decl, f: Fault, decl: u64) -> Exc {
         ErrorKind::Heartbeat => Exc::Timeout,
         ErrorKind::MemoryLimit => Exc::Memory,
         ErrorKind::DeepRecursion => Exc::DeepRecursion,
-        _ => lctx_exception(chk, f, &[], None, &[]).unwrap_or_else(|| Exc::Other(message(kind))),
+        _ => lctx_exception(chk, f, &[], None, (&[], &[]))
+            .unwrap_or_else(|| Exc::Other(message(kind))),
     }
 }
 
@@ -1133,7 +1139,7 @@ fn term_exception(
     terms: &[ExprId],
     f: Fault,
     known: &[NameId],
-    (lctx, lmvars): (u64, &[(NameId, u64)]),
+    (lctx, lmvars, far): (u64, &[(NameId, u64)], &[NameId]),
 ) -> Exc {
     let kind = f.kind;
     match kind {
@@ -1148,18 +1154,18 @@ fn term_exception(
         ErrorKind::Heartbeat => Exc::Timeout,
         ErrorKind::MemoryLimit => Exc::Memory,
         ErrorKind::DeepRecursion => Exc::DeepRecursion,
-        _ => lctx_exception(chk, f, known, Some(lctx), lmvars)
+        _ => lctx_exception(chk, f, known, Some(lctx), (lmvars, far))
             .unwrap_or_else(|| Exc::Other(message(kind))),
     }
 }
 
-/// The exception of a kind with a local context, as the C++ kernel gives it: `typeExpected`, `funExpected`, `appTypeMismatch`, `letTypeMismatch` or `invalidProj`. It is `None` for the other kinds, and if the fault does not have a term that the exception needs. `known` is the `FVarId` of each free variable of the local context of the call, and `lctx` is the `LocalContext` object of the call, if there is one. `lmvars` has the level metavariables of the call, as `Converter::level_mvars` gives them.
+/// The exception of a kind with a local context, as the C++ kernel gives it: `typeExpected`, `funExpected`, `appTypeMismatch`, `letTypeMismatch` or `invalidProj`. It is `None` for the other kinds, and if the fault does not have a term that the exception needs. `known` is the `FVarId` of each free variable of the local context of the call, and `lctx` is the `LocalContext` object of the call, if there is one. `lmvars` has the level metavariables of the call, as `Converter::level_mvars` gives them, and `far` has the far free variables of the call, as `Converter::far_fvars` gives them.
 fn lctx_exception(
     chk: &mut Checker,
     f: Fault,
     known: &[NameId],
     lctx: Option<u64>,
-    lmvars: &[(NameId, u64)],
+    (lmvars, far): (&[(NameId, u64)], &[NameId]),
 ) -> Option<Exc> {
     let (tag, name, terms) = match f.kind {
         ErrorKind::TypeExpected => (TYPE_EXPECTED, None, vec![f.at]),
@@ -1182,7 +1188,7 @@ fn lctx_exception(
         terms,
         locals: local_context(chk, known),
         base: lctx.map(|o| (o, known.len())),
-        lmvars: lmvars.to_vec(),
+        vars: Box::new((lmvars.to_vec(), far.to_vec())),
     })
 }
 
@@ -1208,7 +1214,7 @@ fn local_context(chk: &mut Checker, known: &[NameId]) -> Vec<Local> {
         .collect()
 }
 
-/// The fields after the environment of an exception with a local context: the `LocalContext` object, the name if there is one, and the terms. The `LocalContext` object is `base` with the other declarations of `locals`, or the declarations of `locals` if there is no `base`. The result has new references. If a term cannot be encoded, the result is the message.
+/// The fields after the environment of an exception with a local context: the `LocalContext` object, the name if there is one, and the terms. The `LocalContext` object is `base` with the other declarations of `locals`, or the declarations of `locals` if there is no `base`. The result has new references. `lmvars` and `far` are the level metavariables and the far free variables of the call. If a term cannot be encoded, the result is the message.
 fn lctx_fields(
     m: &mut LeanMake,
     st: &Store,
@@ -1216,7 +1222,7 @@ fn lctx_fields(
     terms: &[ExprId],
     locals: &[Local],
     base: Option<(u64, usize)>,
-    lmvars: &[(NameId, u64)],
+    (lmvars, far): (&[(NameId, u64)], &[NameId]),
 ) -> Result<Vec<u64>, String> {
     let skip = base.map_or(0, |(_, n)| n);
     let mut parts = Vec::new();
@@ -1232,6 +1238,7 @@ fn lctx_fields(
         let fvars = locals.iter().map(|l| l.id).collect();
         let mut enc = Encoder::new(m, st)
             .with_fvars(fvars)
+            .with_far_fvars(far.to_vec())
             .with_level_mvars(lmvars);
         for p in parts {
             match p {

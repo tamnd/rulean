@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use rulean_core::env::{ConstInfo, ConstKind};
+use rulean_core::expr::FAR_FVAR;
 use rulean_format::{Decl, Hints, QuotKind, Safety};
 use rulean_nat::Nat;
 use rulean_store::{BinderInfo, Expr, ExprId, Level, LevelId, Literal, Name, NameId, Store};
@@ -145,6 +146,8 @@ pub struct Encoder<'a, M: Make> {
     exprs: HashMap<u64, u64>,
     /// The `FVarId` name of each free variable of the store, by its level. See `with_fvars`.
     fvars: Vec<NameId>,
+    /// The `FVarId` name of each far free variable of the store, by its number. See `with_far_fvars`.
+    far: Vec<NameId>,
     /// The `Level.mvar` object of each level parameter that stands for a level metavariable. See `with_level_mvars`.
     lmvars: HashMap<u32, u64>,
 }
@@ -183,6 +186,7 @@ impl<'a, M: Make> Encoder<'a, M> {
             levels: HashMap::new(),
             exprs: HashMap::new(),
             fvars: Vec::new(),
+            far: Vec::new(),
             lmvars: HashMap::new(),
         }
     }
@@ -191,6 +195,21 @@ impl<'a, M: Make> Encoder<'a, M> {
     pub fn with_fvars(mut self, fvars: Vec<NameId>) -> Encoder<'a, M> {
         self.fvars = fvars;
         self
+    }
+
+    /// Gives the `FVarId` name of each far free variable, as `Converter::far_fvars` gives them. The encoder writes the far free variable with the number `k` as `Expr.fvar` with the name `far[k]`.
+    pub fn with_far_fvars(mut self, far: Vec<NameId>) -> Encoder<'a, M> {
+        self.far = far;
+        self
+    }
+
+    /// The `FVarId` name of the free variable with the level `l`, if the encoder has one.
+    fn fvar_name(&self, l: u32) -> Option<NameId> {
+        if l >= FAR_FVAR {
+            self.far.get((l - FAR_FVAR) as usize).copied()
+        } else {
+            self.fvars.get(l as usize).copied()
+        }
     }
 
     /// Gives the level parameters that stand for level metavariables, with the `Level.mvar` object of each one, as `Converter::level_mvars` gives them. The encoder writes each of these parameters as a new reference to its object. The objects must stay alive while the encoder exists.
@@ -347,7 +366,7 @@ impl<'a, M: Make> Encoder<'a, M> {
                     }
                     Expr::Proj(p) => stack.push((p.expr, false)),
                     Expr::FVar(l, _) => {
-                        if l as usize >= self.fvars.len() {
+                        if self.fvar_name(l).is_none() {
                             return Err(Fault::new(
                                 FaultKind::FreeVar,
                                 key(x),
@@ -420,7 +439,10 @@ impl<'a, M: Make> Encoder<'a, M> {
                     self.m.expr_proj(n, i, s)
                 }
                 Expr::FVar(l, _) => {
-                    let n = self.name(self.fvars[l as usize]);
+                    let Some(f) = self.fvar_name(l) else {
+                        unreachable!("the first pass checks each free variable")
+                    };
+                    let n = self.name(f);
                     self.m.expr_fvar(n)
                 }
             };

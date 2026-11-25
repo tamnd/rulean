@@ -990,12 +990,30 @@ fn the_two_kernels_give_the_same_verdicts() {
         ("whnf h", Q::Whnf(h), Want::Ok),
         ("check h", Q::Check(h), Want::Ok),
     ];
+    // The free variable `w` is not in the local context. The C++ kernel gives "unknown free variable" only when it infers the type of `w`, and rulean converts `w` to a far free variable.
+    let w_id = st.name_str_bytes(st.anon(), b"_fw");
+    terms.far.push(w_id);
+    let w = rulean_core::expr::far_fvar(&mut st, 0);
+    let mut t = T { st: &mut st };
+    let pred = t.c("pred");
+    let s = t.c("N.s");
+    let sw = t.app(s, &[w]);
+    let pred_sw = t.app(pred, &[sw]);
+    let ws: Vec<(&str, Q, Want)> = vec![
+        ("w = w", Q::DefEq(w, w), Want::Bool(true)),
+        ("pred (N.s w) = w", Q::DefEq(pred_sw, w), Want::Bool(true)),
+        ("whnf (pred (N.s w))", Q::Whnf(pred_sw), Want::Ok),
+        ("whnf w", Q::Whnf(w), Want::Ok),
+        ("w = x", Q::DefEq(w, x), Want::Err),
+        ("check w", Q::Check(w), Want::Err),
+        ("check (N.s w)", Q::Check(sw), Want::Err),
+    ];
     let mut same_tags = 0;
-    for (what, q, want) in qs.iter().chain(&hs) {
+    for (what, q, want) in qs.iter().chain(&hs).chain(&ws) {
         same_tags += terms.same(&dual, &st, elab, what, q, *want);
     }
-    // `check Missing` gives `unknownConstant`, the two checks with too many arguments and `check (fun n => n n)` give `funExpected`, and `check (N.s Prop)` gives `appTypeMismatch`.
-    assert_eq!(same_tags, 5);
+    // `check Missing` gives `unknownConstant`, the two checks with too many arguments and `check (fun n => n n)` give `funExpected`, `check (N.s Prop)` gives `appTypeMismatch`, and the three queries that infer the type of `w` give "unknown free variable".
+    assert_eq!(same_tags, 8);
 
     // The functions that the elaborator calls. `e1` is correct, the value of `e2` has the wrong type, and `e3` is `e2` without the check.
     let mut t = T { st: &mut st };
@@ -1483,6 +1501,8 @@ struct Terms<'a> {
     rt: &'a Runtime,
     /// The names of the `FVarId` of the local declarations, by level.
     fvars: Vec<NameId>,
+    /// The names of the `FVarId` of the far free variables, by number. These free variables are not in the local context.
+    far: Vec<NameId>,
     /// The `LocalContext` object. The test owns one reference.
     lctx: u64,
     is_def_eq: DefEqFn,
@@ -1526,6 +1546,7 @@ impl<'a> Terms<'a> {
             Terms {
                 rt,
                 fvars,
+                far: Vec::new(),
                 lctx,
                 is_def_eq: func::<DefEqFn>(rt, c"lean_kernel_is_def_eq"),
                 whnf: func::<TermFn>(rt, c"lean_kernel_whnf"),
@@ -1572,6 +1593,7 @@ impl<'a> Terms<'a> {
                 let mut m = unsafe { LeanMake::new(self.rt) };
                 Encoder::new(&mut m, st)
                     .with_fvars(self.fvars.clone())
+                    .with_far_fvars(self.far.clone())
                     .expr(e)
                     .expect("a term")
             })

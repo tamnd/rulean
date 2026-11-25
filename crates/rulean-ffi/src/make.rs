@@ -145,6 +145,8 @@ pub struct Encoder<'a, M: Make> {
     exprs: HashMap<u64, u64>,
     /// The `FVarId` name of each free variable of the store, by its level. See `with_fvars`.
     fvars: Vec<NameId>,
+    /// The `Level.mvar` object of each level parameter that stands for a level metavariable. See `with_level_mvars`.
+    lmvars: HashMap<u32, u64>,
 }
 
 impl<M: Make> core::fmt::Debug for Encoder<'_, M> {
@@ -181,12 +183,19 @@ impl<'a, M: Make> Encoder<'a, M> {
             levels: HashMap::new(),
             exprs: HashMap::new(),
             fvars: Vec::new(),
+            lmvars: HashMap::new(),
         }
     }
 
     /// Gives the `FVarId` name of each free variable of the store, by its level. The encoder writes the free variable of level `i` as `Expr.fvar` with the name `fvars[i]`. Without this call, a free variable is a fault.
     pub fn with_fvars(mut self, fvars: Vec<NameId>) -> Encoder<'a, M> {
         self.fvars = fvars;
+        self
+    }
+
+    /// Gives the level parameters that stand for level metavariables, with the `Level.mvar` object of each one, as `Converter::level_mvars` gives them. The encoder writes each of these parameters as a new reference to its object. The objects must stay alive while the encoder exists.
+    pub fn with_level_mvars(mut self, lmvars: &[(NameId, u64)]) -> Encoder<'a, M> {
+        self.lmvars = lmvars.iter().map(|&(p, o)| (p.0, o)).collect();
         self
     }
 
@@ -288,10 +297,13 @@ impl<'a, M: Make> Encoder<'a, M> {
                     let b = self.level_done(b);
                     self.m.level_imax(a, b)
                 }
-                Level::Param(n) => {
-                    let n = self.name(n);
-                    self.m.level_param(n)
-                }
+                Level::Param(n) => match self.lmvars.get(&n.0) {
+                    Some(&o) => self.take(o),
+                    None => {
+                        let n = self.name(n);
+                        self.m.level_param(n)
+                    }
+                },
             };
             self.levels.insert(x.0, o);
         }

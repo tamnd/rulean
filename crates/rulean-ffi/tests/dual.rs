@@ -970,9 +970,27 @@ fn the_two_kernels_give_the_same_verdicts() {
         ("check (fun n => n n)", Q::Check(self_app), Want::Err),
     ];
     // SAFETY: the runtime is Lean v4.36.0.
-    let terms = unsafe { Terms::new(&rt, &st, fvars, &locals) };
+    let mut terms = unsafe { Terms::new(&rt, &st, fvars, &locals) };
+    // The elaborator gives local declarations with metavariables. The local `(m : ?m)` comes after `x` and `y`, and no term refers to it. The C++ kernel does not read it, and rulean must skip it. The local `(h : Sort ?u)` comes after `m`, and the terms refer to it. Its free variable has the level 2 in rulean, because rulean skips `m`.
+    let mut t = T { st: &mut st };
+    let (m_id, m_user, m_mvar) = (t.n("_fm"), t.n("m"), t.n("_mm"));
+    let (h_id, h_user, h_lmvar) = (t.n("_fh"), t.n("h"), t.n("_mu"));
+    // SAFETY: the runtime is Lean v4.36.0.
+    unsafe {
+        terms.push_mvar_local(&st, m_id, m_user, Hole::Expr(m_mvar));
+        terms.push_mvar_local(&st, h_id, h_user, Hole::Sort(h_lmvar));
+    }
+    terms.fvars.push(h_id);
+    let prop = st.mk_sort(st.level_zero());
+    let h = st.mk_fvar(2, prop);
+    let hs: Vec<(&str, Q, Want)> = vec![
+        ("h = h", Q::DefEq(h, h), Want::Bool(true)),
+        ("h = x", Q::DefEq(h, x), Want::Bool(false)),
+        ("whnf h", Q::Whnf(h), Want::Ok),
+        ("check h", Q::Check(h), Want::Ok),
+    ];
     let mut same_tags = 0;
-    for (what, q, want) in &qs {
+    for (what, q, want) in qs.iter().chain(&hs) {
         same_tags += terms.same(&dual, &st, elab, what, q, *want);
     }
     // `check Missing` gives `unknownConstant`, the two checks with too many arguments and `check (fun n => n n)` give `funExpected`, and `check (N.s Prop)` gives `appTypeMismatch`.
@@ -1295,6 +1313,13 @@ type DefEqFn = unsafe extern "C" fn(u64, u64, u64, u64) -> u64;
 type TermFn = unsafe extern "C" fn(u64, u64, u64) -> u64;
 type Equal = unsafe extern "C" fn(u64, u64) -> u8;
 
+/// The metavariable in the type of a local declaration of `Terms::push_mvar_local`, by the name of its `MVarId` or `LMVarId`.
+#[derive(Clone, Copy)]
+enum Hole {
+    Expr(NameId),
+    Sort(NameId),
+}
+
 /// The terms of the term functions and their local context.
 struct Terms<'a> {
     rt: &'a Runtime,
@@ -1349,6 +1374,30 @@ impl<'a> Terms<'a> {
                 check: func::<TermFn>(rt, c"lean_kernel_check"),
                 equal: func::<Equal>(rt, c"lean_expr_equal"),
             }
+        }
+    }
+
+    /// Adds a local declaration with a metavariable to the local context: `(user : ?mvar)` for `Hole::Expr(mvar)` and `(user : Sort ?mvar)` for `Hole::Sort(mvar)`. The `FVarId` is `id`. The store cannot have these types, so the caller adds `id` to `fvars` if a term refers to the declaration.
+    ///
+    /// # Safety
+    ///
+    /// The runtime is Lean v4.36.0.
+    unsafe fn push_mvar_local(&mut self, st: &Store, id: NameId, user: NameId, hole: Hole) {
+        type Mk = unsafe extern "C" fn(u64) -> u64;
+        // SAFETY: these are the types of the Lean functions of v4.36.0. The functions consume their object arguments.
+        unsafe {
+            let mk_local = func::<MkLocal>(self.rt, c"lean_local_ctx_mk_local_decl");
+            let mut m = LeanMake::new(self.rt);
+            let mut enc = Encoder::new(&mut m, st);
+            let (id, user) = (enc.name(id), enc.name(user));
+            let ty = match hole {
+                Hole::Expr(n) => func::<Mk>(self.rt, c"l_Lean_mkMVar")(enc.name(n)),
+                Hole::Sort(n) => {
+                    let l = func::<Mk>(self.rt, c"l_Lean_mkLevelMVar")(enc.name(n));
+                    func::<Mk>(self.rt, c"lean_expr_mk_sort")(l)
+                }
+            };
+            self.lctx = mk_local(self.lctx, id, user, ty, 0);
         }
     }
 

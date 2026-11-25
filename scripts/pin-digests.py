@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Compute the primitive pinning digests of spec 05.8 from lean4export NDJSON files.
 
-Usage: scripts/pin-digests.py EXPORT...
+Usage: scripts/pin-digests.py [--axiom] EXPORT...
 
-The script reads each export, computes the digest of each target declaration that it finds, and writes the Rust array of crates/rulean-core/src/pin_ref_v4_35.in to stdout. Two exports that give different digests for one target are an error. A target that no export has is an error.
+The script reads each export, computes the digest of each target declaration that it finds, and writes the Rust array of crates/rulean-core/src/pin_ref_v4_35.in to stdout. With --axiom, the script writes the array of crates/rulean-core/src/pin_axiom_v4_35.in. This array has the digest of the axiom that has the level parameters and the type of each target definition. For a target inductive type, the entry is zero. Two exports that give different digests for one target are an error. A target that no export has is an error.
 
 The encoding is the encoding of crates/rulean-core/src/pin.rs. A change to one file must have the same change in the other file.
 """
@@ -53,7 +53,7 @@ def nat_bytes(v):
     return v.to_bytes((v.bit_length() + 7) // 8, "little")
 
 
-def digests(path):
+def digests(path, axiom):
     names = {0: h(0x01)}
     text = {0: ""}
     levels = {0: h(0x08)}
@@ -122,7 +122,9 @@ def digests(path):
         if "def" in o:
             d = o["def"]
             n = text[d["name"]]
-            if n in TARGETS and d["safety"] == "safe":
+            if n in TARGETS and d["safety"] == "safe" and axiom:
+                out[n] = h(0x22, lparams(d["levelParams"]), exprs[d["type"]])
+            elif n in TARGETS and d["safety"] == "safe":
                 out[n] = h(0x20, lparams(d["levelParams"]), exprs[d["type"]], exprs[d["value"]])
         if "inductive" in o:
             b = o["inductive"]
@@ -134,16 +136,20 @@ def digests(path):
                     for c in t["ctors"]:
                         parts.append(names[c])
                         parts.append(exprs[ctors[c]["type"]])
-                    out[n] = h(0x21, *parts)
+                    out[n] = bytes(32) if axiom else h(0x21, *parts)
     return out
 
 
 def main():
-    if len(sys.argv) < 2:
-        sys.exit("usage: scripts/pin-digests.py EXPORT...")
+    args = sys.argv[1:]
+    axiom = len(args) > 0 and args[0] == "--axiom"
+    if axiom:
+        args = args[1:]
+    if len(args) < 1:
+        sys.exit("usage: scripts/pin-digests.py [--axiom] EXPORT...")
     found = {}
-    for path in sys.argv[1:]:
-        for n, d in digests(path).items():
+    for path in args:
+        for n, d in digests(path, axiom).items():
             if n in found and found[n] != d:
                 sys.exit(f"{path}: the digest of {n} is not the digest of an earlier export")
             found[n] = d

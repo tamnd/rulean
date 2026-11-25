@@ -129,6 +129,18 @@ impl<'a, H: Heap> Converter<'a, H> {
         Ok(id)
     }
 
+    /// Converts the `Name` object at `n`. A scalar is the anonymous name.
+    pub fn name(&mut self, n: u64) -> Result<NameId, Fault> {
+        let f = if n & 1 == 1 {
+            Field::Scalar(n >> 1)
+        } else {
+            Field::Object(n)
+        };
+        let id = self.c.name_field(n, f)?;
+        self.full(n)?;
+        Ok(id)
+    }
+
     /// The store of the converter.
     pub fn store(&self) -> &Store {
         self.c.st

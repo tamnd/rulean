@@ -935,6 +935,7 @@ fn the_two_kernels_give_the_same_verdicts() {
 
     same_with_mirror(&dual, base, &mut st, &cases);
     shared_mirrors(&dual, base, &st, &cases);
+    shared_misses(&dual, &mut st);
 
     // The term functions. The elaborator environment has the final kernel environment of the C++ kernel.
     // SAFETY: `updateBaseAfterKernelAdd` consumes its arguments, so the test gives it a new reference to the kernel environment.
@@ -1532,6 +1533,83 @@ fn shared_mirrors(dual: &Dual, base: u64, st: &Store, cases: &[(&str, Decl, bool
     assert_eq!((a.converted, b.converted), (0, 0));
     assert_eq!((a.rebuilds, b.rebuilds), (0, 0));
     assert!(b.reused > 0);
+    // SAFETY: the test owns `env`.
+    unsafe { dual.rt.dec(env) };
+}
+
+fn shared_misses(dual: &Dual, st: &mut Store) {
+    // The C++ kernel adds the chain `m0 := m1`, ..., `m5 := N.s N.z` of type `N`, so a mirror does not have these constants. A check of `V m0` unfolds the full chain, but the walk of the declaration stops after 3 steps, so the first pass misses a constant.
+    let mut t = T { st: &mut *st };
+    let n = t.c("N");
+    let nz = t.c("N.z");
+    let ns = t.c("N.s");
+    let mut value = t.app(ns, &[nz]);
+    let mut env = dual.env;
+    // SAFETY: the test owns its reference to `env`.
+    unsafe { dual.rt.inc(env) };
+    for i in (0..6).rev() {
+        let d = t.defn(&format!("m{i}"), n, value, Safety::Safe);
+        let e = add_with(dual, &dual.kernel, true, env, t.st, &d, 0)
+            .expect("the C++ kernel accepts the chain");
+        // SAFETY: the test owns `env`.
+        unsafe { dual.rt.dec(env) };
+        env = e;
+        value = t.c(&format!("m{i}"));
+    }
+    let v = t.c("V");
+    let ty = t.app(v, &[value]);
+    let vmk = t.c("V.mk");
+    let decls = ["y1", "y2", "y3"].map(|s| t.defn(s, ty, vmk, Safety::Safe));
+    let accepts = |k: &Kernel, d: &Decl| match add_with(dual, k, false, env, st, d, 0) {
+        Ok(e) => {
+            // SAFETY: the test owns `e`.
+            unsafe { dual.rt.dec(e) };
+            true
+        }
+        Err(_) => false,
+    };
+
+    // Without the pool, each new mirror misses the constant again.
+    // SAFETY: the runtime is Lean v4.36.0.
+    let alone = unsafe { Kernel::new(dual.rt) }.expect("the kernel functions");
+    assert!(accepts(&alone, &decls[0]));
+    assert!(alone.mirror_stats().rechecks > 0);
+
+    let pool = MirrorPool::new();
+    // SAFETY: the runtime is Lean v4.36.0.
+    let mut ks = [(); 2].map(|_| unsafe { Kernel::new(dual.rt) }.expect("the kernel functions"));
+    for k in &mut ks {
+        k.share_mirrors(&pool);
+    }
+    assert!(accepts(&ks[0], &decls[0]));
+    let first = ks[0].mirror_stats();
+    assert!(first.rechecks > 0);
+    // A call with a set token drops the mirror of the pool, so the next call makes a new mirror.
+    let o = {
+        // SAFETY: the encoder gives the maker only objects that it made.
+        let mut m = unsafe { LeanMake::new(dual.rt) };
+        Encoder::new(&mut m, st)
+            .declaration(&decls[1])
+            .expect("an object")
+    };
+    // SAFETY: `env`, `o` and the token are live objects. The call consumes a new reference to `env` and borrows the others.
+    let r = unsafe {
+        dual.rt.inc(env);
+        ks[0].add_decl(env, 0, 512, o, dual.cancel.0)
+    };
+    assert_eq!(tag(&dual.h, r), 0);
+    assert_eq!(exc_tag(&dual.h, word(&dual.h, r + 8)), INTERRUPTED);
+    // SAFETY: the test owns `r` and `o`.
+    unsafe {
+        dual.rt.dec(r);
+        dual.rt.dec(o);
+    }
+    // The new mirror loads the constant that the first mirror missed, so the check does not run again.
+    assert!(accepts(&ks[1], &decls[2]));
+    let second = ks[1].mirror_stats();
+    eprintln!("misses of the pool: {first:?} {second:?}");
+    assert_eq!(second.rechecks, 0);
+    assert!(second.converted > 0);
     // SAFETY: the test owns `env`.
     unsafe { dual.rt.dec(env) };
 }

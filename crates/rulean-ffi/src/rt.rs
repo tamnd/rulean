@@ -130,6 +130,9 @@ exports! {
     expr_mk_let: "lean_expr_mk_let" => fn(Obj, Obj, Obj, Obj, u8) -> Obj;
     expr_mk_lit: "lean_expr_mk_lit" => fn(Obj) -> Obj;
     expr_mk_proj: "lean_expr_mk_proj" => fn(Obj, Obj, Obj) -> Obj;
+    mk_empty_local_ctx: "lean_mk_empty_local_ctx" => fn(Obj) -> Obj;
+    local_ctx_mk_local_decl: "lean_local_ctx_mk_local_decl" => fn(Obj, Obj, Obj, Obj, u8) -> Obj;
+    local_ctx_mk_let_decl: "lean_local_ctx_mk_let_decl" => fn(Obj, Obj, Obj, Obj, Obj, u8) -> Obj;
 }
 
 /// The Lean modules are initialized one time in the process.
@@ -274,6 +277,30 @@ macro_rules! call {
         // SAFETY: the contract of `LeanMake::new` makes each argument an object that the call can consume, and the function is the export of Lean of this type.
         addr(unsafe { ($self.rt.f.$f)($($a),*) })
     };
+}
+
+impl LeanMake<'_> {
+    /// An empty `LocalContext` (`LocalContext.mkEmpty`).
+    pub fn local_ctx_empty(&mut self) -> u64 {
+        call!(self.mk_empty_local_ctx(obj(boxed(0))))
+    }
+
+    /// `lctx` with a new local declaration of the free variable `fvar` (`LocalContext.mkLocalDecl`). The call consumes its object arguments.
+    pub fn local_ctx_local(
+        &mut self,
+        lctx: u64,
+        fvar: u64,
+        user: u64,
+        ty: u64,
+        bi: BinderInfo,
+    ) -> u64 {
+        call!(self.local_ctx_mk_local_decl(obj(lctx), obj(fvar), obj(user), obj(ty), bi as u8))
+    }
+
+    /// `lctx` with a new `let` declaration of the free variable `fvar` (`LocalContext.mkLetDecl`). The declaration is dependent, as in the C++ kernel. The call consumes its object arguments.
+    pub fn local_ctx_let(&mut self, lctx: u64, fvar: u64, user: u64, ty: u64, value: u64) -> u64 {
+        call!(self.local_ctx_mk_let_decl(obj(lctx), obj(fvar), obj(user), obj(ty), obj(value), 0))
+    }
 }
 
 impl Make for LeanMake<'_> {

@@ -120,6 +120,9 @@ pub struct Fault {
     pub kind: ErrorKind,
     /// The term where the error was found.
     pub at: ExprId,
+    /// Two types of the error, as the C++ kernel gives them in its exception. For `AppTypeMismatch`, they are the type of the function and the type of the argument. For `DefTypeMismatch`, they are the type of the value and the expected type. The expected type of a declaration is not kept, because the declaration has it. For the other kinds, they are the dummy term.
+    pub ty1: ExprId,
+    pub ty2: ExprId,
 }
 
 /// The binary `Nat` operations of `reduce_nat`, in the order of the `nat_ops` table.
@@ -522,8 +525,20 @@ impl Checker {
 
     /// Records an error and returns the dummy value. Only the first error is kept.
     pub(crate) fn fail(&mut self, kind: ErrorKind, at: ExprId) -> ExprId {
+        let d = self.dummy;
+        self.fail_with(kind, at, d, d)
+    }
+
+    /// Records the fault `kind` at `at` with the two types of the error (`Fault::ty1` and `Fault::ty2`), if there is no fault yet. It gives the dummy term.
+    pub(crate) fn fail_with(
+        &mut self,
+        kind: ErrorKind,
+        at: ExprId,
+        ty1: ExprId,
+        ty2: ExprId,
+    ) -> ExprId {
         if self.fault.is_none() {
-            self.fault = Some(Fault { kind, at });
+            self.fault = Some(Fault { kind, at, ty1, ty2 });
         }
         self.dummy
     }
@@ -639,6 +654,26 @@ impl Checker {
         self.lctx_ty.push(ty);
         self.lctx_val.push(val);
         self.st.mk_fvar(lvl, ty)
+    }
+
+    /// The dummy term. A fault has it for a term that it does not keep.
+    pub fn dummy(&self) -> ExprId {
+        self.dummy
+    }
+
+    /// The number of free variables of the local context. The context keeps its free variables until the next declaration or term call.
+    pub fn local_count(&self) -> usize {
+        self.lctx_ty.len()
+    }
+
+    /// The free variable of the level `i`: its user name, its binder info, its type and its value. `i` is less than `local_count`.
+    pub fn local(&self, i: usize) -> (NameId, BinderInfo, ExprId, Option<ExprId>) {
+        (
+            self.lctx_name[i],
+            self.lctx_info[i],
+            self.lctx_ty[i],
+            self.lctx_val[i],
+        )
     }
 
     /// The value of a `let` free variable, if any.
@@ -1011,7 +1046,7 @@ impl Checker {
                 return self.dummy;
             }
             if !ok {
-                return self.fail(ErrorKind::AppTypeMismatch, e);
+                return self.fail_with(ErrorKind::AppTypeMismatch, e, f_type, a_type);
             }
             self.instantiate1(body, a)
         } else {
@@ -1074,7 +1109,7 @@ impl Checker {
                         self.ensure_sort_core(t, ty);
                         let vt = self.infer_type_core(val, infer_only);
                         if !self.bad() && !self.is_def_eq(vt, ty) && !self.bad() {
-                            self.fail(ErrorKind::DefTypeMismatch, e);
+                            self.fail_with(ErrorKind::DefTypeMismatch, e, vt, ty);
                         }
                     }
                     let fv = self.mk_local(l.name, BinderInfo::Default, ty, Some(val));

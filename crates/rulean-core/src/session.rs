@@ -12,7 +12,7 @@
 
 use crate::expr;
 use crate::memo::Memo;
-use crate::tc::Checker;
+use crate::tc::{Checker, Fault};
 use alloc::vec::Vec;
 use rulean_store::{Expr, ExprId, Literal, Raw, Tier, hash};
 
@@ -371,7 +371,7 @@ impl Checker {
         while i < pending.len() {
             let (tag, a, b, v) = pending[i];
             let v2 = if value_is_term(tag) && ExprId(v).tier() == Tier::Scratch {
-                self.promote(ExprId(v), &mut map, &mut budget)
+                self.promote(ExprId(v), &mut map, &mut budget, false)
             } else {
                 Some(ExprId(v))
             };
@@ -387,8 +387,52 @@ impl Checker {
         self.sess.pending = pending;
     }
 
-    /// A frozen copy of the scratch term `e`, or `None` if the copy needs more than `budget` new nodes, if `e` has a free variable, or if the store is full. `map` has the copies made so far.
-    fn promote(&mut self, e: ExprId, map: &mut Memo, budget: &mut usize) -> Option<ExprId> {
+    /// Copies the terms of the fault `f` and the types and the values of the local context into the frozen tier. The caller then clears the scratch tier. A term that cannot be copied becomes the dummy term. The copies have no budget, because this runs only for a rejection.
+    pub(crate) fn keep_fault(&mut self, f: Fault) -> Fault {
+        let mut map = Memo::new();
+        let mut budget = usize::MAX;
+        let saved = self.st.uses_scratch();
+        self.st.set_scratch(false);
+        let at = self.keep(f.at, &mut map, &mut budget);
+        let ty1 = self.keep(f.ty1, &mut map, &mut budget);
+        let ty2 = self.keep(f.ty2, &mut map, &mut budget);
+        let mut i = 0;
+        while i < self.lctx_ty.len() {
+            let t = self.lctx_ty[i];
+            self.lctx_ty[i] = self.keep(t, &mut map, &mut budget);
+            if let Some(v) = self.lctx_val[i] {
+                self.lctx_val[i] = Some(self.keep(v, &mut map, &mut budget));
+            }
+            i += 1;
+        }
+        self.st.set_scratch(saved);
+        Fault {
+            kind: f.kind,
+            at,
+            ty1,
+            ty2,
+        }
+    }
+
+    /// A frozen copy of `e` with its free variables, or the dummy term.
+    fn keep(&mut self, e: ExprId, map: &mut Memo, budget: &mut usize) -> ExprId {
+        if e.tier() != Tier::Scratch {
+            return e;
+        }
+        match self.promote(e, map, budget, true) {
+            Some(c) => c,
+            None => self.dummy,
+        }
+    }
+
+    /// A frozen copy of the scratch term `e`, or `None` if the copy needs more than `budget` new nodes, if the store is full, or if `e` has a free variable and `fvars` is false. `map` has the copies made so far.
+    fn promote(
+        &mut self,
+        e: ExprId,
+        map: &mut Memo,
+        budget: &mut usize,
+        fvars: bool,
+    ) -> Option<ExprId> {
         // An explicit stack, because a term can be deep. A node is pushed once to copy its fields and once more to build it.
         let mut stack: Vec<(ExprId, bool)> = Vec::new();
         stack.push((e, false));
@@ -400,9 +444,9 @@ impl Checker {
             };
             if x.tier() == Tier::Scratch && !map.contains(x.0, 0) {
                 if ready {
-                    ok = self.promote_node(x, map, budget);
+                    ok = self.promote_node(x, map, budget, fvars);
                 } else {
-                    ok = self.promote_push(x, &mut stack);
+                    ok = self.promote_push(x, &mut stack, fvars);
                 }
             }
         }
@@ -412,8 +456,8 @@ impl Checker {
         Some(copied(map, e))
     }
 
-    /// Pushes the node `x` to build it later, and its fields to copy them first. It gives false for a free variable.
-    fn promote_push(&mut self, x: ExprId, stack: &mut Vec<(ExprId, bool)>) -> bool {
+    /// Pushes the node `x` to build it later, and its fields to copy them first. It gives false for a free variable if `fvars` is false.
+    fn promote_push(&mut self, x: ExprId, stack: &mut Vec<(ExprId, bool)>, fvars: bool) -> bool {
         stack.push((x, true));
         match self.st.node(x) {
             Expr::App(f, a) => {
@@ -430,14 +474,19 @@ impl Checker {
                 stack.push((l.ty, false));
             }
             Expr::Proj(p) => stack.push((p.expr, false)),
-            Expr::FVar(_, _) => return false,
+            Expr::FVar(_, t) => {
+                if !fvars {
+                    return false;
+                }
+                stack.push((t, false));
+            }
             Expr::BVar(_) | Expr::Sort(_) | Expr::Const(_, _) | Expr::Lit(_) => {}
         }
         true
     }
 
-    /// Builds the frozen copy of the node `x`, whose fields are frozen or in `map`. It gives false if the budget is used, for a free variable, or if the store is full.
-    fn promote_node(&mut self, x: ExprId, map: &mut Memo, budget: &mut usize) -> bool {
+    /// Builds the frozen copy of the node `x`, whose fields are frozen or in `map`. It gives false if the budget is used, if the store is full, or for a free variable if `fvars` is false.
+    fn promote_node(&mut self, x: ExprId, map: &mut Memo, budget: &mut usize, fvars: bool) -> bool {
         if *budget == 0 {
             return false;
         }
@@ -470,12 +519,20 @@ impl Checker {
                 let y = copied(map, p.expr);
                 self.st.mk_proj(p.struct_name, p.index, y)
             }
-            Expr::FVar(_, _) => return false,
+            Expr::FVar(l, t) => {
+                if !fvars {
+                    return false;
+                }
+                let t = copied(map, t);
+                self.st.mk_fvar(l, t)
+            }
         };
         if self.st.is_full() || r.tier() != Tier::Frozen {
             return false;
         }
-        self.sess.stats.promoted += 1;
+        if !fvars {
+            self.sess.stats.promoted += 1;
+        }
         map.put(x.0, 0, r.0);
         true
     }

@@ -12,6 +12,7 @@ use rulean_format::{Decl, Hints, QuotKind, Safety};
 use rulean_nat::Nat;
 use rulean_store::{BinderInfo, Expr, ExprId, Level, LevelId, Literal, Name, NameId, Store};
 
+use crate::conv::{FAR_PROJ, Far};
 use crate::heap::{OwnedHeap, boxed};
 use crate::{Fault, FaultKind};
 
@@ -146,8 +147,8 @@ pub struct Encoder<'a, M: Make> {
     exprs: HashMap<u64, u64>,
     /// The `FVarId` name of each free variable of the store, by its level. See `with_fvars`.
     fvars: Vec<NameId>,
-    /// The `FVarId` name of each far free variable of the store, by its number. See `with_far_fvars`.
-    far: Vec<NameId>,
+    /// The far free variables and the far projection indices of the store. See `with_far`.
+    far: Far,
     /// The `Level.mvar` object of each level parameter that stands for a level metavariable. See `with_level_mvars`.
     lmvars: HashMap<u32, u64>,
 }
@@ -186,7 +187,7 @@ impl<'a, M: Make> Encoder<'a, M> {
             levels: HashMap::new(),
             exprs: HashMap::new(),
             fvars: Vec::new(),
-            far: Vec::new(),
+            far: Far::default(),
             lmvars: HashMap::new(),
         }
     }
@@ -197,8 +198,8 @@ impl<'a, M: Make> Encoder<'a, M> {
         self
     }
 
-    /// Gives the `FVarId` name of each far free variable, as `Converter::far_fvars` gives them. The encoder writes the far free variable with the number `k` as `Expr.fvar` with the name `far[k]`.
-    pub fn with_far_fvars(mut self, far: Vec<NameId>) -> Encoder<'a, M> {
+    /// Gives the far free variables and the far projection indices, as `Converter::far` gives them. The encoder writes the far free variable with the number `k` as `Expr.fvar` with the name `far.fvars[k]`, and the projection index `FAR_PROJ + k` as the number `far.projs[k]`.
+    pub fn with_far(mut self, far: Far) -> Encoder<'a, M> {
         self.far = far;
         self
     }
@@ -206,7 +207,7 @@ impl<'a, M: Make> Encoder<'a, M> {
     /// The `FVarId` name of the free variable with the level `l`, if the encoder has one.
     fn fvar_name(&self, l: u32) -> Option<NameId> {
         if l >= FAR_FVAR {
-            self.far.get((l - FAR_FVAR) as usize).copied()
+            self.far.fvars.get((l - FAR_FVAR) as usize).copied()
         } else {
             self.fvars.get(l as usize).copied()
         }
@@ -434,7 +435,14 @@ impl<'a, M: Make> Encoder<'a, M> {
                 }
                 Expr::Proj(p) => {
                     let n = self.name(p.struct_name);
-                    let i = self.m.nat(&Nat::from_u64(u64::from(p.index)));
+                    let far = p
+                        .index
+                        .checked_sub(FAR_PROJ)
+                        .and_then(|k| self.far.projs.get(k as usize));
+                    let i = match far {
+                        Some(k) => self.m.nat(k),
+                        None => self.m.nat(&Nat::from_u64(u64::from(p.index))),
+                    };
                     let s = self.expr_done(p.expr);
                     self.m.expr_proj(n, i, s)
                 }

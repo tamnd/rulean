@@ -28,6 +28,7 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
 
 use rulean_core::env::{ConstInfo, ConstKind};
+use rulean_core::expr;
 use rulean_core::tc::{Checker, ErrorKind, Fault};
 use rulean_format::{Decl, Safety};
 use rulean_store::{BinderInfo, Expr, ExprId, NameId, Store};
@@ -621,7 +622,7 @@ impl<'a> Kernel<'a> {
         };
         if let Some(msg) = bad_mutual {
             // SAFETY: the caller gives `env`.
-            return unsafe { self.error(env, &st, Exc::Other(format!("{msg} (rulean)"))) };
+            return unsafe { self.error(env, &st, Exc::Other(msg.to_string())) };
         }
         // SAFETY: the caller gives `decl`, and the conversion found a kind without recursors.
         let infos = unsafe { self.shared_infos(decl) }.expect("a declaration without recursors");
@@ -1394,13 +1395,16 @@ fn exception(chk: &mut Checker, d: &Decl, f: Fault, decl: u64) -> Exc {
                 None => Exc::Other(message(kind)),
             }
         }
-        ErrorKind::AlreadyDeclared => match declared_names(chk, d)
-            .into_iter()
-            .find(|&n| chk.env.contains(n))
-        {
+        ErrorKind::AlreadyDeclared => match already_declared(chk, d) {
             Some(n) => Exc::Already(n),
             None => Exc::Other(message(kind)),
         },
+        ErrorKind::BadMutual
+        | ErrorKind::BadInductive
+        | ErrorKind::NestedPrefix
+        | ErrorKind::NonUniformOcc => {
+            Exc::Other(cpp_message(&chk.st, d, f).unwrap_or_else(|| message(kind)))
+        }
         ErrorKind::TheoremNotProp => match d {
             Decl::Thm(t) => Exc::ThmNotProp(t.name, t.ty),
             _ => Exc::Other(message(kind)),
@@ -1567,6 +1571,102 @@ fn lctx_fields(
     let mut out = vec![lctx];
     out.extend(it);
     Ok(out)
+}
+
+/// The name of an `alreadyDeclared` exception of `d`: the first name that `d` declares and that the environment has. If there is none, it is the first name of an inductive block that is also an earlier name of the block, in the order of `add_inductive_fn`: the types, the constructors and the recursors. For example, a constructor `X.rec` of the type `X` has the name of the recursor of `X`.
+fn already_declared(chk: &mut Checker, d: &Decl) -> Option<NameId> {
+    let names = declared_names(chk, d);
+    if let Some(&n) = names.iter().find(|&&n| chk.env.contains(n)) {
+        return Some(n);
+    }
+    let mut all = names;
+    if let Decl::Induct(b) = d {
+        for t in &b.types {
+            let rec = chk.st.name_str_bytes(t.name, b"rec");
+            all.push(rec);
+        }
+    }
+    all.iter()
+        .enumerate()
+        .find(|&(i, n)| all[..i].contains(n))
+        .map(|(_, &n)| n)
+}
+
+/// The text of `name` as the C++ kernel writes it in a message.
+fn name_string(st: &Store, n: NameId) -> String {
+    String::from_utf8_lossy(&st.name_text(n)).into_owned()
+}
+
+/// The message of the C++ kernel for the fault `f` of `d`, for the kinds that give `other` with a name or a reason in the message. The result is `None` if the call cannot find the name or the reason.
+fn cpp_message(st: &Store, d: &Decl, f: Fault) -> Option<String> {
+    match (f.kind, d) {
+        // The checks of `environment::add_mutual`, in its order.
+        (ErrorKind::BadMutual, Decl::Mutual(ds)) => {
+            let head = ds.first()?;
+            if head.safety == Safety::Safe {
+                return Some(
+                    "invalid mutual definition, declaration is not tagged as unsafe/partial"
+                        .to_string(),
+                );
+            }
+            for (i, v) in ds.iter().enumerate() {
+                if v.safety != head.safety {
+                    return Some("invalid mutual definition, declarations must have the same safety annotation".to_string());
+                }
+                if v.lparams != head.lparams {
+                    return Some("invalid mutual definition, declarations must have the same universe level parameters".to_string());
+                }
+                if ds[..i].iter().any(|w| w.name == v.name) {
+                    return Some(format!(
+                        "invalid mutual definition, duplicate declaration name '{}'",
+                        name_string(st, v.name)
+                    ));
+                }
+            }
+            None
+        }
+        // `check_no_nested_aux` checks the type of each inductive type and then the type of each of its constructors. `Fault::at` is the term that it checks.
+        (ErrorKind::NestedPrefix, Decl::Induct(b)) => {
+            let n = b.types.iter().find_map(|t| {
+                if t.ty == f.at {
+                    return Some(t.name);
+                }
+                t.ctors.iter().find_map(|&c| {
+                    b.ctors
+                        .iter()
+                        .find(|k| k.name == c && k.ty == f.at)
+                        .map(|k| k.name)
+                })
+            })?;
+            Some(format!(
+                "invalid declaration '{}', it uses the reserved prefix '_nested'",
+                name_string(st, n)
+            ))
+        }
+        // `get_params` of `elim_nested_inductive_fn` reads the parameters of the first inductive type and of each constructor, before the other checks. It does not reduce the type, so a `let` before a parameter is not a parameter. `Fault::at` is the type that it reads.
+        (ErrorKind::BadInductive, Decl::Induct(b)) => {
+            let first = b.types.first()?;
+            let read = first.ty == f.at || b.ctors.iter().any(|c| c.ty == f.at);
+            let mut t = f.at;
+            let mut k = 0;
+            while let Expr::Pi(p) = st.node(t) {
+                k += 1;
+                t = p.body;
+            }
+            (read && k < first.num_params).then(|| {
+                "invalid inductive datatype declaration, incorrect number of parameters".to_string()
+            })
+        }
+        // `check_uniform_ind_occs`. `Fault::at` is the occurrence, and its head is the inductive type.
+        (ErrorKind::NonUniformOcc, Decl::Induct(_)) => match st.node(expr::app_fn(st, f.at)) {
+            Expr::Const(n, _) => Some(format!(
+                "invalid occurrence of datatype '{}' being declared: it must be applied to the parameters and universe levels of the mutual declaration",
+                name_string(st, n)
+            )),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// The message of `other` for a rejection of the kind `kind`. The elaborator writes `(kernel)` before it.

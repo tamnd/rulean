@@ -3,6 +3,7 @@
 //! When `Checker::trace_on` is true, the checker writes one event for each rule that it applies: delta, iota, the quotient rules, the `Nat` extension, the type-directed rules of definitional equality, and the answer of each engine F query. The trace keeps at most `MAX_EVENTS` events, and it counts all events. When `trace_on` is false, the checker writes nothing.
 
 use alloc::vec::Vec;
+use rulean_store::ids::{low, raw};
 use rulean_store::{Expr, ExprId, NameId};
 
 use crate::expr;
@@ -137,8 +138,21 @@ impl Trace {
 }
 
 impl Checker {
-    /// Writes an event if the trace is on.
+    /// Writes an event if the trace is on, and counts an unfold if the kernel diagnostics are on.
     pub(crate) fn note(&mut self, rule: Rule, name: NameId) {
+        if self.diag_on
+            && matches!(rule, Rule::Delta | Rule::Iota | Rule::Quot)
+            && name != self.st.anon()
+        {
+            match self.diag_at.get(raw(name.0), 0) {
+                Some(i) => self.diag[low(i) as usize - 1].1 += 1,
+                None => {
+                    self.diag.push((name, 1));
+                    self.diag_at
+                        .put(raw(name.0), 0, raw(self.diag.len() as u32));
+                }
+            }
+        }
         if !self.trace_on {
             return;
         }
@@ -154,7 +168,7 @@ impl Checker {
 
     /// `note` with the head constant of an application, or the anonymous name.
     pub(crate) fn note_head(&mut self, rule: Rule, e: ExprId) {
-        if !self.trace_on {
+        if !self.trace_on && !self.diag_on {
             return;
         }
         let f = expr::app_fn(&self.st, e);

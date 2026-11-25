@@ -159,10 +159,15 @@ fn beta_delta_and_zeta() {
     let e = t.app(id, &[c]);
     assert_eq!(t.whnf(e), c);
     assert_eq!(t.c.whnf_core(e, false, false), c);
-    // A definition unfolds in whnf but not in whnf_core.
+    // A definition unfolds in whnf but not in whnf_core. The kernel diagnostics count the unfold.
     let d = t.def("d", a, c, 1);
+    t.c.diag_on = true;
     assert_eq!(t.c.whnf_core(d, false, false), d);
+    assert!(t.c.diag.is_empty());
     assert_eq!(t.whnf(d), c);
+    let n = t.name("d");
+    assert_eq!(t.c.diag, vec![(n, 1)]);
+    t.c.diag_on = false;
     // let x := c; x
     let n = t.name("x");
     let l = t.c.st.mk_let(n, a, c, b0);
@@ -432,6 +437,8 @@ fn recursor_iota() {
     let m = t.k("M");
     let x = t.k("x");
     let y = t.k("y");
+    // The kernel diagnostics count each step of the recursor, as `whnf_core` of the C++ kernel does.
+    t.c.diag_on = true;
     let e = t.app(rec, &[m, x, y, bfc]);
     assert_eq!(t.whnf(e), y);
     let e = t.app(rec, &[m, x, y, btc]);
@@ -441,6 +448,9 @@ fn recursor_iota() {
     let e = t.app(rec, &[m, x, y, o]);
     assert_eq!(t.whnf(e), e);
     assert!(t.c.fault().is_none());
+    let n = t.name("B.rec");
+    assert_eq!(t.c.diag_count(n), 2);
+    assert_eq!(t.c.diag.len(), 1);
 }
 
 #[test]

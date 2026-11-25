@@ -28,6 +28,7 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
 
 use rulean_core::env::{ConstInfo, ConstKind};
+use rulean_core::expr;
 use rulean_core::tc::{Checker, ErrorKind, Fault};
 use rulean_format::{Decl, Safety};
 use rulean_store::{BinderInfo, Expr, ExprId, NameId, Store};
@@ -45,6 +46,10 @@ type QuotInit = unsafe extern "C" fn(u64) -> u8;
 type MarkQuot = unsafe extern "C" fn(u64) -> u64;
 type ToKernel = unsafe extern "C" fn(u64) -> u64;
 type UpdateBase = unsafe extern "C" fn(u64, u64) -> u64;
+type GetDiag = unsafe extern "C" fn(u64) -> u64;
+type DiagEnabled = unsafe extern "C" fn(u64) -> u8;
+type RecordUnfold = unsafe extern "C" fn(u64, u64) -> u64;
+type SetDiag = unsafe extern "C" fn(u64, u64) -> u64;
 
 /// The operation of a term function.
 #[derive(Clone, Copy)]
@@ -198,6 +203,10 @@ pub struct Kernel<'a> {
     mark_quot: MarkQuot,
     to_kernel: ToKernel,
     update_base: UpdateBase,
+    get_diag: GetDiag,
+    diag_enabled: DiagEnabled,
+    record_unfold: RecordUnfold,
+    set_diag: SetDiag,
     /// The mirror of `add_decl`. A call takes it and puts it back.
     cache: RefCell<Option<Mirror>>,
     stats: Cell<MirrorStats>,
@@ -235,6 +244,10 @@ impl<'a> Kernel<'a> {
                 mark_quot: func(rt, c"lean_environment_mark_quot_init")?,
                 to_kernel: func(rt, c"lean_elab_environment_to_kernel_env")?,
                 update_base: func(rt, c"lean_elab_environment_update_base_after_kernel_add")?,
+                get_diag: func(rt, c"lean_kernel_get_diag")?,
+                diag_enabled: func(rt, c"lean_kernel_diag_is_enabled")?,
+                record_unfold: func(rt, c"lean_kernel_record_unfold")?,
+                set_diag: func(rt, c"lean_kernel_set_diag")?,
                 cache: RefCell::new(None),
                 stats: Cell::new(MirrorStats::default()),
             })
@@ -274,6 +287,10 @@ impl<'a> Kernel<'a> {
         };
         // `convert_and_mirror` can make a new mirror with the default limit, so the call sets the limit after it.
         m.chk.max_heartbeat = max_heartbeat as u64;
+        // SAFETY: the caller gives `env`.
+        let diag = unsafe { self.diag_of(env) };
+        m.chk.diag_on = diag.is_some();
+        m.chk.clear_diag();
         let Mirror { chk, mut origin } = m;
         let before = chk.env.len();
         // SAFETY: the caller gives `cancel`, and the call borrows it.
@@ -288,8 +305,11 @@ impl<'a> Kernel<'a> {
                 Ok(r) => r,
                 Err(x) => {
                     // The checker of the mirror is on the thread of the check, so the call drops the mirror.
-                    // SAFETY: the mirror owns the references of `origin`.
-                    unsafe { self.release_origin(&mut origin) };
+                    // SAFETY: the mirror owns the references of `origin`, and the call owns `diag`.
+                    unsafe {
+                        self.release_origin(&mut origin);
+                        self.drop_diag(diag);
+                    }
                     // SAFETY: the caller gives `env`. The exception has no `Store` objects, so an empty `Store` is sufficient.
                     return unsafe { self.error(env, &Store::new(), x) };
                 }
@@ -297,8 +317,11 @@ impl<'a> Kernel<'a> {
         };
         if let Some(f) = fault {
             let exc = exception(&mut chk, &d, f, decl);
-            // SAFETY: the caller gives `env`.
-            let r = unsafe { self.error(env, &chk.st, exc) };
+            // SAFETY: the caller gives `env`, and the call owns `diag`.
+            let r = unsafe {
+                self.drop_diag(diag);
+                self.error(env, &chk.st, exc)
+            };
             // A failed check adds no constant to the Lean environment, so the mirror must not keep one.
             chk.env.truncate(before);
             self.put(Mirror { chk, origin });
@@ -312,6 +335,11 @@ impl<'a> Kernel<'a> {
                 let mut m = m;
                 // SAFETY: `e` is the new environment, and the call owns it. The mirror then has the origin of each new constant.
                 let ok = unsafe { self.record_new(e, &mut m, before) };
+                let e = match diag {
+                    // SAFETY: the call owns `e` and `diag`.
+                    Some(g) => unsafe { self.with_diag(e, &m.chk, g) },
+                    None => e,
+                };
                 if ok {
                     self.put(m);
                 } else {
@@ -323,10 +351,71 @@ impl<'a> Kernel<'a> {
             }
             Err(r) => {
                 // The Lean environment does not have the new constants, so the call drops the mirror.
-                // SAFETY: the mirror owns its references.
-                unsafe { self.release(m) };
+                // SAFETY: the mirror owns its references, and the call owns `diag`.
+                unsafe {
+                    self.release(m);
+                    self.drop_diag(diag);
+                }
                 r
             }
+        }
+    }
+
+    /// The kernel diagnostics of `env`, if they are enabled (`scoped_diagnostics`). The result is an owned `Kernel.Diagnostics` object.
+    ///
+    /// # Safety
+    ///
+    /// `env` is a live `Kernel.Environment` object. The call does not consume it.
+    unsafe fn diag_of(&self, env: u64) -> Option<u64> {
+        // SAFETY: the exported functions consume their arguments, so the call gives them new references.
+        unsafe {
+            self.rt.inc(env);
+            let d = (self.get_diag)(env);
+            self.rt.inc(d);
+            if (self.diag_enabled)(d) != 0 {
+                Some(d)
+            } else {
+                self.rt.dec(d);
+                None
+            }
+        }
+    }
+
+    /// Records the unfolds of the checker in the diagnostics `diag` and puts them into the environment `e` (`scoped_diagnostics::update`). The call consumes `e` and `diag`, and gives the new environment.
+    ///
+    /// # Safety
+    ///
+    /// `e` is a live `Kernel.Environment` object and `diag` is a live `Kernel.Diagnostics` object. The call owns both.
+    unsafe fn with_diag(&self, e: u64, chk: &Checker, diag: u64) -> u64 {
+        let mut d = diag;
+        for &(n, k) in &chk.diag {
+            let name = {
+                // SAFETY: the encoder gives the maker only objects that it made.
+                let mut m = unsafe { LeanMake::new(self.rt) };
+                Encoder::new(&mut m, &chk.st).name(n)
+            };
+            // SAFETY: `recordUnfold` consumes the diagnostics and the name, and gives new diagnostics. The call owns `name` and gives back its reference at the end.
+            unsafe {
+                for _ in 0..k {
+                    self.rt.inc(name);
+                    d = (self.record_unfold)(d, name);
+                }
+                self.rt.dec(name);
+            }
+        }
+        // SAFETY: `setDiagnostics` consumes the environment and the diagnostics.
+        unsafe { (self.set_diag)(e, d) }
+    }
+
+    /// Gives back the reference to the diagnostics `diag`, if there is one.
+    ///
+    /// # Safety
+    ///
+    /// The call owns `diag`.
+    unsafe fn drop_diag(&self, diag: Option<u64>) {
+        if let Some(d) = diag {
+            // SAFETY: the contract of the function.
+            unsafe { self.rt.dec(d) };
         }
     }
 
@@ -533,7 +622,7 @@ impl<'a> Kernel<'a> {
         };
         if let Some(msg) = bad_mutual {
             // SAFETY: the caller gives `env`.
-            return unsafe { self.error(env, &st, Exc::Other(format!("{msg} (rulean)"))) };
+            return unsafe { self.error(env, &st, Exc::Other(msg.to_string())) };
         }
         // SAFETY: the caller gives `decl`, and the conversion found a kind without recursors.
         let infos = unsafe { self.shared_infos(decl) }.expect("a declaration without recursors");
@@ -1306,13 +1395,16 @@ fn exception(chk: &mut Checker, d: &Decl, f: Fault, decl: u64) -> Exc {
                 None => Exc::Other(message(kind)),
             }
         }
-        ErrorKind::AlreadyDeclared => match declared_names(chk, d)
-            .into_iter()
-            .find(|&n| chk.env.contains(n))
-        {
+        ErrorKind::AlreadyDeclared => match already_declared(chk, d) {
             Some(n) => Exc::Already(n),
             None => Exc::Other(message(kind)),
         },
+        ErrorKind::BadMutual
+        | ErrorKind::BadInductive
+        | ErrorKind::NestedPrefix
+        | ErrorKind::NonUniformOcc => {
+            Exc::Other(cpp_message(&chk.st, d, f).unwrap_or_else(|| message(kind)))
+        }
         ErrorKind::TheoremNotProp => match d {
             Decl::Thm(t) => Exc::ThmNotProp(t.name, t.ty),
             _ => Exc::Other(message(kind)),
@@ -1479,6 +1571,102 @@ fn lctx_fields(
     let mut out = vec![lctx];
     out.extend(it);
     Ok(out)
+}
+
+/// The name of an `alreadyDeclared` exception of `d`: the first name that `d` declares and that the environment has. If there is none, it is the first name of an inductive block that is also an earlier name of the block, in the order of `add_inductive_fn`: the types, the constructors and the recursors. For example, a constructor `X.rec` of the type `X` has the name of the recursor of `X`.
+fn already_declared(chk: &mut Checker, d: &Decl) -> Option<NameId> {
+    let names = declared_names(chk, d);
+    if let Some(&n) = names.iter().find(|&&n| chk.env.contains(n)) {
+        return Some(n);
+    }
+    let mut all = names;
+    if let Decl::Induct(b) = d {
+        for t in &b.types {
+            let rec = chk.st.name_str_bytes(t.name, b"rec");
+            all.push(rec);
+        }
+    }
+    all.iter()
+        .enumerate()
+        .find(|&(i, n)| all[..i].contains(n))
+        .map(|(_, &n)| n)
+}
+
+/// The text of `name` as the C++ kernel writes it in a message.
+fn name_string(st: &Store, n: NameId) -> String {
+    String::from_utf8_lossy(&st.name_text(n)).into_owned()
+}
+
+/// The message of the C++ kernel for the fault `f` of `d`, for the kinds that give `other` with a name or a reason in the message. The result is `None` if the call cannot find the name or the reason.
+fn cpp_message(st: &Store, d: &Decl, f: Fault) -> Option<String> {
+    match (f.kind, d) {
+        // The checks of `environment::add_mutual`, in its order.
+        (ErrorKind::BadMutual, Decl::Mutual(ds)) => {
+            let head = ds.first()?;
+            if head.safety == Safety::Safe {
+                return Some(
+                    "invalid mutual definition, declaration is not tagged as unsafe/partial"
+                        .to_string(),
+                );
+            }
+            for (i, v) in ds.iter().enumerate() {
+                if v.safety != head.safety {
+                    return Some("invalid mutual definition, declarations must have the same safety annotation".to_string());
+                }
+                if v.lparams != head.lparams {
+                    return Some("invalid mutual definition, declarations must have the same universe level parameters".to_string());
+                }
+                if ds[..i].iter().any(|w| w.name == v.name) {
+                    return Some(format!(
+                        "invalid mutual definition, duplicate declaration name '{}'",
+                        name_string(st, v.name)
+                    ));
+                }
+            }
+            None
+        }
+        // `check_no_nested_aux` checks the type of each inductive type and then the type of each of its constructors. `Fault::at` is the term that it checks.
+        (ErrorKind::NestedPrefix, Decl::Induct(b)) => {
+            let n = b.types.iter().find_map(|t| {
+                if t.ty == f.at {
+                    return Some(t.name);
+                }
+                t.ctors.iter().find_map(|&c| {
+                    b.ctors
+                        .iter()
+                        .find(|k| k.name == c && k.ty == f.at)
+                        .map(|k| k.name)
+                })
+            })?;
+            Some(format!(
+                "invalid declaration '{}', it uses the reserved prefix '_nested'",
+                name_string(st, n)
+            ))
+        }
+        // `get_params` of `elim_nested_inductive_fn` reads the parameters of the first inductive type and of each constructor, before the other checks. It does not reduce the type, so a `let` before a parameter is not a parameter. `Fault::at` is the type that it reads.
+        (ErrorKind::BadInductive, Decl::Induct(b)) => {
+            let first = b.types.first()?;
+            let read = first.ty == f.at || b.ctors.iter().any(|c| c.ty == f.at);
+            let mut t = f.at;
+            let mut k = 0;
+            while let Expr::Pi(p) = st.node(t) {
+                k += 1;
+                t = p.body;
+            }
+            (read && k < first.num_params).then(|| {
+                "invalid inductive datatype declaration, incorrect number of parameters".to_string()
+            })
+        }
+        // `check_uniform_ind_occs`. `Fault::at` is the occurrence, and its head is the inductive type.
+        (ErrorKind::NonUniformOcc, Decl::Induct(_)) => match st.node(expr::app_fn(st, f.at)) {
+            Expr::Const(n, _) => Some(format!(
+                "invalid occurrence of datatype '{}' being declared: it must be applied to the parameters and universe levels of the mutual declaration",
+                name_string(st, n)
+            )),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// The message of `other` for a rejection of the kind `kind`. The elaborator writes `(kernel)` before it.

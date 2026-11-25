@@ -372,6 +372,8 @@ pub struct Checker {
     pub(crate) lctx_info: Vec<BinderInfo>,
     pub(crate) lctx_ty: Vec<ExprId>,
     pub(crate) lctx_val: Vec<Option<ExprId>>,
+    /// The levels of the free variables in scope, in the order of `mk_local`. The C++ kernel removes the local declarations of a binder when `infer_lambda`, `infer_pi`, `infer_let` and `is_def_eq_binding` return (`flet<local_ctx>`). The checker keeps all the free variables, because the caches can refer to them, but it removes their levels from this list. After a fault, the list does not change, so it has the scope of the fault.
+    pub(crate) scope: Vec<u32>,
     // The caches of `type_checker::state`. `infer` has the mode in the second key.
     pub(crate) c_infer: Memo,
     pub(crate) c_whnf_core: Memo,
@@ -456,6 +458,7 @@ impl Checker {
             lctx_info: Vec::new(),
             lctx_ty: Vec::new(),
             lctx_val: Vec::new(),
+            scope: Vec::new(),
             c_infer: Memo::new(),
             c_whnf_core: Memo::new(),
             c_whnf: Memo::new(),
@@ -497,6 +500,7 @@ impl Checker {
         self.lctx_info.truncate(0);
         self.lctx_ty.truncate(0);
         self.lctx_val.truncate(0);
+        self.scope.truncate(0);
         self.clear_caches();
         self.va.reset();
         self.fi.reset();
@@ -676,7 +680,27 @@ impl Checker {
         self.lctx_info.push(info);
         self.lctx_ty.push(ty);
         self.lctx_val.push(val);
+        if !self.bad() {
+            self.scope.push(lvl);
+        }
         self.st.mk_fvar(lvl, ty)
+    }
+
+    /// The length of the scope list. Give it to `leave_scope` when the binders of the caller go out of scope.
+    pub(crate) fn enter_scope(&self) -> usize {
+        self.scope.len()
+    }
+
+    /// Removes the free variables after `mark` from the scope list, if there is no fault.
+    pub(crate) fn leave_scope(&mut self, mark: usize) {
+        if !self.bad() {
+            self.scope.truncate(mark);
+        }
+    }
+
+    /// The levels of the free variables in scope. After a fault, these are the free variables in scope at the fault, as in the local context of a C++ kernel exception.
+    pub fn scope(&self) -> &[u32] {
+        &self.scope
     }
 
     /// The dummy term. A fault has it for a term that it does not keep.
@@ -968,6 +992,14 @@ impl Checker {
 
     /// `infer_lambda`.
     fn infer_lambda(&mut self, e0: ExprId, infer_only: bool) -> ExprId {
+        let mark = self.enter_scope();
+        let r = self.infer_lambda_in(e0, infer_only);
+        self.leave_scope(mark);
+        r
+    }
+
+    /// The body of `infer_lambda`. The free variables that it makes stay in scope.
+    fn infer_lambda_in(&mut self, e0: ExprId, infer_only: bool) -> ExprId {
         let mut fvars: Vec<ExprId> = Vec::new();
         let mut e = e0;
         let mut walking = true;
@@ -1000,6 +1032,14 @@ impl Checker {
 
     /// `infer_pi`.
     fn infer_pi(&mut self, e0: ExprId, infer_only: bool) -> ExprId {
+        let mark = self.enter_scope();
+        let r = self.infer_pi_in(e0, infer_only);
+        self.leave_scope(mark);
+        r
+    }
+
+    /// The body of `infer_pi`. The free variables that it makes stay in scope.
+    fn infer_pi_in(&mut self, e0: ExprId, infer_only: bool) -> ExprId {
         let mut fvars: Vec<ExprId> = Vec::new();
         let mut us: Vec<LevelId> = Vec::new();
         let mut e = e0;
@@ -1119,6 +1159,14 @@ impl Checker {
 
     /// `infer_let`.
     fn infer_let(&mut self, e0: ExprId, infer_only: bool) -> ExprId {
+        let mark = self.enter_scope();
+        let r = self.infer_let_in(e0, infer_only);
+        self.leave_scope(mark);
+        r
+    }
+
+    /// The body of `infer_let`. The free variables that it makes stay in scope.
+    fn infer_let_in(&mut self, e0: ExprId, infer_only: bool) -> ExprId {
         let mut fvars: Vec<ExprId> = Vec::new();
         let mut e = e0;
         let mut walking = true;

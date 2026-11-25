@@ -138,6 +138,14 @@ impl Checker {
 
     /// `is_def_eq_binding`: the domains and the bodies of two binders of the same kind, for all the binders of that kind at the head.
     fn is_def_eq_binding(&mut self, t0: ExprId, s0: ExprId) -> bool {
+        let mark = self.enter_scope();
+        let r = self.is_def_eq_binding_in(t0, s0);
+        self.leave_scope(mark);
+        r
+    }
+
+    /// The body of `is_def_eq_binding`. The free variables that it makes stay in scope.
+    fn is_def_eq_binding_in(&mut self, t0: ExprId, s0: ExprId) -> bool {
         let lam = self.is_lambda(t0);
         let mut t = t0;
         let mut s = s0;

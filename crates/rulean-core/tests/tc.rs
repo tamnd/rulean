@@ -254,6 +254,36 @@ fn nat_pow_count_bound() {
 }
 
 #[test]
+fn nat_size_bound_of_the_checker() {
+    // `LEAN_NAT_MAX_SIZE=16` of `tests/elab/nat_size_limit.lean`: two limbs are in the bound, and three limbs are not.
+    let mut t = T::new();
+    t.c.nat_max = 16;
+    let mul = t.k("Nat.mul");
+    let a = t.nat(1 << 32);
+    let e = t.app(mul, &[a, a]);
+    let r = t.whnf(e);
+    assert!(t.c.fault().is_none());
+    let e = t.app(mul, &[r, r]);
+    t.whnf(e);
+    assert_eq!(t.c.fault().map(|f| f.kind), Some(ErrorKind::NatTooLarge));
+    let mut t = T::new();
+    t.c.nat_max = 16;
+    let pow = t.k("Nat.pow");
+    let two = t.nat(2);
+    let hundred = t.nat(100);
+    let e = t.app(pow, &[two, hundred]);
+    t.whnf(e);
+    assert_eq!(t.c.fault().map(|f| f.kind), Some(ErrorKind::NatTooLarge));
+    let mut t = T::new();
+    let pow = t.k("Nat.pow");
+    let two = t.nat(2);
+    let hundred = t.nat(100);
+    let e = t.app(pow, &[two, hundred]);
+    t.whnf(e);
+    assert!(t.c.fault().is_none());
+}
+
+#[test]
 fn proof_irrelevance() {
     let mut t = T::new();
     let s0 = t.sort(0);

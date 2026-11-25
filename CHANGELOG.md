@@ -13,6 +13,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 - The heartbeat limit of the checker (spec 09.6.4). `Checker::max_heartbeat` of `rulean-core` is the limit, and 0 is no limit. The checker counts one heartbeat for each call of `infer_type_core`, `whnf_core` and `is_def_eq_core`, as `check_system` of the C++ kernel does, and the count starts at 0 for each declaration. Above the limit, the check stops with the new `ErrorKind::Heartbeat`, which is a resource failure. `Kernel::add_decl` of `rulean-ffi` gives the limit `max_heartbeat` to the checker, and a timeout gives `Kernel.Exception.deterministicTimeout`. The test `dual` finds the smallest limit with which each kernel accepts each declaration, and requires that the count of rulean is not above the count of the C++ kernel.
 
+- The cancel token of `Kernel::add_decl` of `rulean-ffi` (spec 09.6.4). With a token, the check runs on a new thread, and the calling thread reads the flag of the token each millisecond. A set token gives `Kernel.Exception.interrupted` at once, and the check continues on its thread until it ends, and its result is discarded. Without a token, the check runs on the calling thread as before. The test `dual` gives each accepted declaration to the C++ kernel and to rulean with a set token and with a token that is not set.
+
 ### Fixed
 
 - For an axiom, a definition, a theorem, an opaque constant and a mutual block, `Kernel::add_decl` now adds the `*Val` object of the declaration, as the C++ kernel does. Before, it wrote the constant again from the store, and the conversion into the store removes `mdata`, so the terms in the Lean environment had no `mdata`. The elaborator reads `mdata`, for example in the values of definitions.

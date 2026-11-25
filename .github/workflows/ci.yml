@@ -316,14 +316,24 @@ jobs:
           grep -w 'T lean_kernel_whnf' _tmp/symbols.txt
           grep -w 'T lean_kernel_check' _tmp/symbols.txt
 
-  # The lean binary of Lean v4.36.0 with rulean as its kernel (spec 09.6.2). scripts/lean-build.sh links the static libraries of the release with the static library of rulean-ffi. The job runs tests/lean-build/smoke.lean with the lean of the release, with the new lean and with the dual-kernel build of scripts/lean-build.sh --dual, and the outputs must be the same. The job depends on the Lean release, so it is not a required check.
+  # The lean binary of Lean v4.36.0 with rulean as its kernel (spec 09.6.2), on macOS and on Linux. scripts/lean-build.sh links the static libraries of the release with the static library of rulean-ffi. The job runs tests/lean-build/smoke.lean with the lean of the release, with the new lean and with the dual-kernel build of scripts/lean-build.sh --dual, and the outputs must be the same. The job depends on the Lean release, so it is not a required check.
   lean-build:
-    name: lean build
-    runs-on: macos-15
+    name: lean build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            lean: lean-4.36.0-darwin_aarch64
+            sha256: 49acada8749ad1343eff1224a3d2510ac61ed53363d37b5e738e8c587e7deabd
+          - os: ubuntu-24.04
+            lean: lean-4.36.0-linux
+            sha256: 2b7ab1ed8b92d2e6abfaf41344823b510064dbc9c0260cac73eb496ab2dea6eb
     env:
-      LEAN_ASSET: lean-4.36.0-darwin_aarch64.tar.zst
-      LEAN_SHA256: 49acada8749ad1343eff1224a3d2510ac61ed53363d37b5e738e8c587e7deabd
+      LEAN_DIR: ${{ matrix.lean }}
+      LEAN_SHA256: ${{ matrix.sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -337,15 +347,16 @@ jobs:
       - name: the Lean v4.36.0 release
         run: |
           mkdir -p _tmp/lean
-          curl -sSfL --retry 3 -o "_tmp/lean/$LEAN_ASSET" "https://github.com/leanprover/lean4/releases/download/v4.36.0/$LEAN_ASSET"
-          echo "$LEAN_SHA256  _tmp/lean/$LEAN_ASSET" | shasum -a 256 -c -
-          zstd -dc "_tmp/lean/$LEAN_ASSET" | tar -xf - -C _tmp/lean
+          curl -sSfL --retry 3 -o "_tmp/lean/$LEAN_DIR.tar.zst" "https://github.com/leanprover/lean4/releases/download/v4.36.0/$LEAN_DIR.tar.zst"
+          echo "$LEAN_SHA256  _tmp/lean/$LEAN_DIR.tar.zst" | shasum -a 256 -c -
+          zstd -dc "_tmp/lean/$LEAN_DIR.tar.zst" | tar -xf - -C _tmp/lean
+          rm "_tmp/lean/$LEAN_DIR.tar.zst"
       - name: lean with rulean as its kernel
-        run: scripts/lean-build.sh _tmp/lean-rulean "$PWD/_tmp/lean/lean-4.36.0-darwin_aarch64"
+        run: scripts/lean-build.sh _tmp/lean-rulean "$PWD/_tmp/lean/$LEAN_DIR"
       - name: the same output as the lean of the release
         run: |
           status=0
-          _tmp/lean/lean-4.36.0-darwin_aarch64/bin/lean tests/lean-build/smoke.lean > _tmp/smoke-cpp.txt 2>&1 || status=$?
+          "_tmp/lean/$LEAN_DIR/bin/lean" tests/lean-build/smoke.lean > _tmp/smoke-cpp.txt 2>&1 || status=$?
           echo "exit $status" >> _tmp/smoke-cpp.txt
           status=0
           _tmp/lean-rulean/bin/lean tests/lean-build/smoke.lean > _tmp/smoke-rulean.txt 2>&1 || status=$?
@@ -354,13 +365,19 @@ jobs:
           diff _tmp/smoke-cpp.txt _tmp/smoke-rulean.txt
       # The dual-kernel build of spec 11.3.1 calls the C++ kernel and rulean on each declaration and term, and it stops if the results differ.
       - name: the dual-kernel build
-        run: scripts/lean-build.sh --dual _tmp/lean-dual "$PWD/_tmp/lean/lean-4.36.0-darwin_aarch64"
+        run: scripts/lean-build.sh --dual _tmp/lean-dual "$PWD/_tmp/lean/$LEAN_DIR"
       - name: the same output with the dual-kernel build
         run: |
           status=0
           _tmp/lean-dual/bin/lean tests/lean-build/smoke.lean > _tmp/smoke-dual.txt 2>&1 || status=$?
           echo "exit $status" >> _tmp/smoke-dual.txt
           diff _tmp/smoke-cpp.txt _tmp/smoke-dual.txt
+      # If a step fails, the log shows the libraries of the release.
+      - name: the libraries of the release
+        if: failure()
+        run: |
+          find "_tmp/lean/$LEAN_DIR/lib" -maxdepth 2 \( -name '*.a' -o -name '*.so*' \) -exec ls -l {} +
+          "_tmp/lean/$LEAN_DIR/bin/leanc" --print-ldflags || true
 
   # The cross-validation of the `.olean` reader with lean4export on Init and Std (spec 07.3.6), for each Lean release of a profile (spec 05.2). v4.35.0 and v4.36.0 have the profile v4.35 and write oleans of version 2. v4.37.0-rc1 has the profile v4.37 and writes oleans of version 4. For a future release that has no profile yet, set NO_PROFILE=1 for the script (`scripts/olean-xval.sh`), so rulean must decline the export and the oleans give only a parse. The job depends on the Lean releases, so it is not a required check.
   olean-xval:

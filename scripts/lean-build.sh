@@ -9,7 +9,7 @@
 #
 # With --dual, the script makes the dual-kernel build of spec 11.3. The static library of rulean-ffi then has the feature dual: each kernel symbol also calls the C++ function with the suffix _cpp and compares the two results. If they differ, the process writes the difference to the standard error and stops. The binary exports the _cpp functions, and rulean finds them when the program runs.
 #
-# The script works on macOS only. It needs git, a C++ compiler, cargo, llvm-objcopy and llvm-nm. Set CXX, OBJCOPY or NM to use a different tool.
+# The script works on macOS and on Linux. It needs git, a C++ compiler, cargo, llvm-objcopy and llvm-nm. Set CXX, OBJCOPY or NM to use a different tool.
 
 set -euo pipefail
 
@@ -22,10 +22,16 @@ if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
   echo "usage: $0 [--dual] OUT [TOOLCHAIN]" >&2
   exit 2
 fi
-if [ "$(uname -s)" != Darwin ]; then
-  echo "lean-build: only macOS is supported" >&2
-  exit 1
-fi
+# The C names of Mach-O symbols have the prefix _, and the C names of ELF symbols have no prefix.
+os="$(uname -s)"
+case "$os" in
+  Darwin) p=_ ;;
+  Linux) p= ;;
+  *)
+    echo "lean-build: only macOS and Linux are supported" >&2
+    exit 1
+    ;;
+esac
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 mkdir -p "$1"
@@ -90,7 +96,7 @@ lib="$toolchain/lib/lean"
 syms=(lean_add_decl lean_add_decl_without_checking lean_elab_add_decl lean_elab_add_decl_without_checking lean_kernel_is_def_eq lean_kernel_whnf lean_kernel_check)
 rename=()
 for s in "${syms[@]}"; do
-  rename+=(--redefine-sym "_${s}=_${s}_cpp")
+  rename+=(--redefine-sym "${p}${s}=${p}${s}_cpp")
 done
 "$objcopy" "${rename[@]}" "$lib/libleancpp.a" "$build/libleancpp-rulean.a"
 
@@ -99,32 +105,47 @@ done
 "$llvm_nm" -g --defined-only "$rulean" 2> /dev/null | awk '{print $3}' | sort -u > "$build/rulean-defined.txt"
 "$llvm_nm" -u "$build/libleancpp-rulean.a" "$lib/libLean.a" "$lib/libStd.a" "$lib/libInit.a" | awk '{print $NF}' | sort -u > "$build/lean-undefined.txt"
 for s in "${syms[@]}"; do
-  if ! grep -qxF "_${s}_cpp" "$build/cpp-defined.txt"; then
+  if ! grep -qxF "${p}${s}_cpp" "$build/cpp-defined.txt"; then
     echo "lean-build: libleancpp.a does not define $s" >&2
     exit 1
   fi
-  if grep -qxF "_${s}" "$build/cpp-defined.txt"; then
+  if grep -qxF "${p}${s}" "$build/cpp-defined.txt"; then
     echo "lean-build: the copy of libleancpp.a still defines $s" >&2
     exit 1
   fi
-  if ! grep -qxF "_${s}" "$build/rulean-defined.txt"; then
+  if ! grep -qxF "${p}${s}" "$build/rulean-defined.txt"; then
     echo "lean-build: rulean-ffi does not define $s" >&2
     exit 1
   fi
-  if grep -qxF "_${s}_cpp" "$build/lean-undefined.txt"; then
+  if grep -qxF "${p}${s}_cpp" "$build/lean-undefined.txt"; then
     echo "lean-build: an object of Lean refers to ${s}_cpp" >&2
     exit 1
   fi
 done
 
-"$cxx" -o "$out/bin/lean" "$build/main.o" "$build/shell.o" \
-  "$lib/libLean.a" "$lib/libStd.a" "$lib/libInit.a" "$build/libleancpp-rulean.a" "$lib/libleanrt.a" "$lib/libcadical.a" \
-  "$toolchain/lib/libgmp.a" "$toolchain/lib/libuv.a" "$toolchain/lib/libssl.a" "$toolchain/lib/libcrypto.a" \
-  "$rulean" -Wl,-export_dynamic -lc++
+# The order of the libraries is the order of the release (src/CMakeLists.txt of Lean). The linker of macOS finds the symbols of all the libraries. The linker of Linux reads each library one time, so the libraries that refer to each other are in a group, and the static library of rulean-ffi is in the same group as libLean.a, which refers to the kernel symbols.
+libs=("$lib/libcadical.a")
+for l in libgmp.a libuv.a libssl.a libcrypto.a; do
+  if [ -f "$toolchain/lib/$l" ]; then
+    libs+=("$toolchain/lib/$l")
+  elif [ -f "$lib/$l" ]; then
+    libs+=("$lib/$l")
+  fi
+done
+if [ "$os" = Darwin ]; then
+  "$cxx" -o "$out/bin/lean" "$build/main.o" "$build/shell.o" \
+    "$lib/libLean.a" "$lib/libStd.a" "$lib/libInit.a" "$build/libleancpp-rulean.a" "$lib/libleanrt.a" "${libs[@]}" \
+    "$rulean" -Wl,-export_dynamic -lc++
+else
+  "$cxx" -o "$out/bin/lean" "$build/main.o" "$build/shell.o" \
+    -Wl,--start-group "$build/libleancpp-rulean.a" "$lib/libLean.a" "$rulean" -Wl,--end-group "$lib/libStd.a" \
+    -Wl,--start-group "$lib/libInit.a" "$lib/libleanrt.a" -Wl,--end-group "${libs[@]}" \
+    -rdynamic -lstdc++ -lpthread -ldl -lrt -lm
+fi
 if [ "$features" = dual ]; then
   "$llvm_nm" -g --defined-only "$out/bin/lean" | awk '{print $3}' | sort -u > "$build/lean-defined.txt"
   for s in "${syms[@]}"; do
-    if ! grep -qxF "_${s}_cpp" "$build/lean-defined.txt"; then
+    if ! grep -qxF "${p}${s}_cpp" "$build/lean-defined.txt"; then
       echo "lean-build: the binary does not export ${s}_cpp" >&2
       exit 1
     fi

@@ -450,6 +450,17 @@ fn nested_type_is_accepted() {
 }
 
 #[test]
+fn nested_type_with_a_missing_constructor_is_a_fault() {
+    // The mirror of rulean-ffi can have an inductive type without its constructors, until a check looks them up.
+    let mut t = T::new();
+    add_box(&mut t);
+    let mk = t.name("Bx.mk");
+    assert!(t.c.env.remove(mk));
+    let (types, ctors, recs) = nested_block(&mut t);
+    assert_eq!(t.add(types, ctors, recs), Some(ErrorKind::UnknownConst));
+}
+
+#[test]
 fn wrong_nested_count_is_rejected() {
     let mut t = T::new();
     add_box(&mut t);

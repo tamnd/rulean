@@ -270,7 +270,11 @@ impl Checker {
             Expr::Const(n, ls) => (n, ls),
             _ => (self.st.anon(), s.levels),
         };
-        let slot = self.env.find(iname);
+        let at = s.types[0];
+        let slot = self.get_const(iname, at);
+        if slot == 0 {
+            return s.aux_nested.len();
+        }
         let all = match &self.env.at(slot).kind {
             ConstKind::Induct(i) => i.all.clone(),
             _ => Vec::new(),
@@ -318,13 +322,16 @@ impl Checker {
         s.types.push(aux_type);
         let mut c = 0;
         while c < ctors.len() && !self.bad() {
-            let cslot = self.env.find(ctors[c]);
-            let cn = names::replace_prefix(&mut self.st, ctors[c], jname, aux_name);
-            let ct = self.aux_term(s, cslot, ilvls, args, np);
-            s.cnames.push(cn);
-            s.ctypes.push(ct);
-            s.cowner.push(k);
-            s.cexport.push(0);
+            // If the environment does not have the constructor, `get_const` sets a fault, and the loop stops.
+            let cslot = self.get_const(ctors[c], s.types[0]);
+            if cslot != 0 {
+                let cn = names::replace_prefix(&mut self.st, ctors[c], jname, aux_name);
+                let ct = self.aux_term(s, cslot, ilvls, args, np);
+                s.cnames.push(cn);
+                s.ctypes.push(ct);
+                s.cowner.push(k);
+                s.cexport.push(0);
+            }
             c += 1;
         }
         s.cstart.push(s.cnames.len());
@@ -654,9 +661,11 @@ impl Checker {
         self.leave_scope(0);
         let mut c = 0;
         while c < s.nctors && !self.bad() {
-            let slot = self.env.find(s.cnames[c]);
-            let ty = self.env.at(slot).ty;
-            self.check(ty);
+            let slot = self.get_const(s.cnames[c], s.types[0]);
+            if slot != 0 {
+                let ty = self.env.at(slot).ty;
+                self.check(ty);
+            }
             c += 1;
         }
         let mut i = 0;
@@ -667,7 +676,10 @@ impl Checker {
     }
 
     fn recheck_rec(&mut self, rn: NameId) {
-        let slot = self.env.find(rn);
+        let slot = self.get_const(rn, self.dummy);
+        if slot == 0 {
+            return;
+        }
         let info = self.env.at(slot).clone();
         let saved = self.lparams.clone();
         self.lparams = info.lparams.clone();

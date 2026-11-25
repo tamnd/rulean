@@ -977,6 +977,29 @@ fn the_two_kernels_give_the_same_verdicts() {
     }
     // `check Missing` gives `unknownConstant`, the two checks with too many arguments and `check (fun n => n n)` give `funExpected`, and `check (N.s Prop)` gives `appTypeMismatch`.
     assert_eq!(same_tags, 5);
+
+    // The functions that the elaborator calls. `e1` is correct, the value of `e2` has the wrong type, and `e3` is `e2` without the check.
+    let mut t = T { st: &mut st };
+    let n = t.c("N");
+    let z = t.c("N.z");
+    let prop = t.prop();
+    let elab_cases = vec![
+        ("e1", t.defn("e1", n, z, Safety::Safe), true, true),
+        ("e2", t.defn("e2", n, prop, Safety::Safe), true, false),
+        ("e3", t.defn("e3", n, prop, Safety::Safe), false, true),
+    ];
+    // SAFETY: these are the types of the Lean functions of v4.36.0.
+    let cpp_elab = unsafe {
+        (
+            func::<AddDecl>(&rt, c"lean_elab_add_decl"),
+            func::<AddUnchecked>(&rt, c"lean_elab_add_decl_without_checking"),
+        )
+    };
+    for (name, d, check, want) in &elab_cases {
+        same_elab(
+            &mut dual, elab, &st, cpp_elab, to_kernel, name, d, *check, *want,
+        );
+    }
     // SAFETY: the test owns the environments and the local context.
     unsafe {
         rt.dec(terms.lctx);
@@ -984,6 +1007,93 @@ fn the_two_kernels_give_the_same_verdicts() {
         rt.dec(dual.env);
         rt.dec(dual.cancel.0);
         rt.dec(dual.cancel.1);
+    }
+}
+
+/// Gives the declaration `d` with the name `name` to `lean_elab_add_decl` of the C++ kernel and to `Kernel::elab_add_decl` with the elaborator environment `elab`, or to the functions without the check if `check` is false. With the feature `export`, the exported symbol of rulean also gets it. Each result must be `Except.ok` if `want` is true. The new environments must have the same constant, and the exceptions must have the same tag. The call borrows `elab`.
+#[allow(clippy::too_many_arguments)]
+fn same_elab(
+    dual: &mut Dual,
+    elab: u64,
+    st: &Store,
+    cpp: (AddDecl, AddUnchecked),
+    to_kernel: unsafe extern "C" fn(u64) -> u64,
+    name: &str,
+    d: &Decl,
+    check: bool,
+    want: bool,
+) {
+    let rt = dual.rt;
+    let o = {
+        // SAFETY: the encoder gives the maker only objects that it made.
+        let mut m = unsafe { LeanMake::new(rt) };
+        Encoder::new(&mut m, st).declaration(d).expect("an object")
+    };
+    let mut rs = Vec::new();
+    // The functions consume the environment, so the test gives each a new reference. They borrow the declaration and the cancel token.
+    // SAFETY: `elab` and `o` are live objects, and the functions have these types.
+    unsafe {
+        rt.inc(elab);
+        rs.push(if check {
+            (cpp.0)(elab, 0, 512, o, boxed(0))
+        } else {
+            (cpp.1)(elab, o)
+        });
+        rt.inc(elab);
+        rs.push(if check {
+            dual.kernel.elab_add_decl(elab, 0, 512, o, boxed(0))
+        } else {
+            dual.kernel.elab_add_decl_without_checking(elab, o)
+        });
+        #[cfg(feature = "export")]
+        {
+            rt.inc(elab);
+            rs.push(if check {
+                rulean_ffi::export::lean_elab_add_decl(elab, 0, 512, o, boxed(0))
+            } else {
+                rulean_ffi::export::lean_elab_add_decl_without_checking(elab, o)
+            });
+        }
+    }
+    let mut seen = Vec::new();
+    for &r in &rs {
+        // `Except.error` has the tag 0 and `Except.ok` has the tag 1.
+        assert_eq!(
+            tag(&dual.h, r) == 1,
+            want,
+            "the verdict of {name} (check {check})"
+        );
+        let x = word(&dual.h, r + 8);
+        if want {
+            // SAFETY: `toKernelEnv` consumes its argument, so the test gives it a new reference.
+            let kenv = unsafe {
+                rt.inc(x);
+                to_kernel(x)
+            };
+            let n = qname(&mut dual.chk.st, name);
+            let c = dual.constant(kenv, n);
+            assert!(c.is_some(), "the new environment has no {name}");
+            seen.push(format!("{c:?}"));
+            // SAFETY: the test owns `kenv`.
+            unsafe { rt.dec(kenv) };
+        } else {
+            seen.push(format!("tag {}", exc_tag(&dual.h, x)));
+        }
+    }
+    assert!(
+        seen.iter().all(|s| *s == seen[0]),
+        "{name} (check {check}): {seen:?}"
+    );
+    eprintln!(
+        "elab {name} check {check}: {}",
+        seen[0].chars().take(60).collect::<String>()
+    );
+    // SAFETY: the test owns the results and the declaration.
+    unsafe {
+        for r in rs {
+            rt.dec(r);
+        }
+        rt.dec(o);
     }
 }
 

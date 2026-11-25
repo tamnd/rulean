@@ -12,6 +12,8 @@
 //!
 //! With a cancel token, the check runs on a new thread, and the calling thread reads the token each millisecond (spec 09.6.4). If the token is set, the call gives `interrupted` at once. The check continues on its thread until it stops, and its result is discarded. The C++ kernel reads the token at each heartbeat, so it can stop in the middle of a check, but the checker of rulean has no point at which it can stop. Without a token, the check runs on the calling thread.
 //!
+//! `Kernel::elab_add_decl` and `Kernel::elab_add_decl_without_checking` have the contracts of `lean_elab_add_decl` and `lean_elab_add_decl_without_checking`, which the elaborator calls. They take a `Lean.Environment`, use `add_decl` or `add_decl_without_checking` on its kernel environment, and give the new kernel environment to `updateBaseAfterKernelAdd`, as the C++ functions do.
+//!
 //! `Kernel::is_def_eq`, `Kernel::whnf` and `Kernel::check` have the contracts of `lean_kernel_is_def_eq`, `lean_kernel_whnf` and `lean_kernel_check`. They take a `Lean.Environment`, a `LocalContext` and terms. The call converts the local context and the terms, mirrors the constants that they refer to, and runs the checker in the local context. A result term goes back to Lean with the `FVarId` of each free variable.
 //!
 //! This module, `rt`, `live` and `export` are the only modules of the crate with `unsafe` code (spec 12).
@@ -41,6 +43,7 @@ type Add = unsafe extern "C" fn(u64, u64) -> u64;
 type QuotInit = unsafe extern "C" fn(u64) -> u8;
 type MarkQuot = unsafe extern "C" fn(u64) -> u64;
 type ToKernel = unsafe extern "C" fn(u64) -> u64;
+type UpdateBase = unsafe extern "C" fn(u64, u64) -> u64;
 
 /// The operation of a term function.
 #[derive(Clone, Copy)]
@@ -174,6 +177,7 @@ pub struct Kernel<'a> {
     quot_init: QuotInit,
     mark_quot: MarkQuot,
     to_kernel: ToKernel,
+    update_base: UpdateBase,
     /// The mirror of `add_decl`. A call takes it and puts it back.
     cache: RefCell<Option<Mirror>>,
     stats: Cell<MirrorStats>,
@@ -210,6 +214,7 @@ impl<'a> Kernel<'a> {
                 quot_init: func(rt, c"lean_environment_quot_init")?,
                 mark_quot: func(rt, c"lean_environment_mark_quot_init")?,
                 to_kernel: func(rt, c"lean_elab_environment_to_kernel_env")?,
+                update_base: func(rt, c"lean_elab_environment_update_base_after_kernel_add")?,
                 cache: RefCell::new(None),
                 stats: Cell::new(MirrorStats::default()),
             })
@@ -504,6 +509,68 @@ impl<'a> Kernel<'a> {
             // SAFETY: `add` consumes the environment and the constant, and gives a new environment.
             e = unsafe { (self.add)(e, ci) };
         }
+        // SAFETY: the maker makes `Except.ok e`, and the result owns `e`.
+        unsafe { LeanMake::new(self.rt) }.ctor(1, &[e], &[])
+    }
+
+    /// `Lean.Environment.addDeclCore` with `doCheck`, which is `lean_elab_add_decl` of Lean v4.36.0. The call consumes `env` and borrows `decl` and `cancel`. The result is a new `Except Kernel.Exception Lean.Environment` object.
+    ///
+    /// The C++ function makes the kernel environment of `env`, adds the declaration to it with the C++ kernel, and gives the new kernel environment to `updateBaseAfterKernelAdd`. This call does the same with `add_decl`. The exception of a rejected declaration has the kernel environment, as the C++ exception has.
+    ///
+    /// # Safety
+    ///
+    /// `env` is a `Lean.Environment` object and `decl` is a `Declaration` object of the runtime.
+    pub unsafe fn elab_add_decl(
+        &self,
+        env: u64,
+        max_heartbeat: usize,
+        max_rec_depth: usize,
+        decl: u64,
+        cancel: u64,
+    ) -> u64 {
+        // SAFETY: the caller gives `env`, `decl` and `cancel`, and `add_decl` consumes the kernel environment.
+        unsafe {
+            self.elab(env, |k| {
+                self.add_decl(k, max_heartbeat, max_rec_depth, decl, cancel)
+            })
+        }
+    }
+
+    /// `Lean.Environment.addDeclCore` without `doCheck`, which is `lean_elab_add_decl_without_checking` of Lean v4.36.0. The call consumes `env` and borrows `decl`. The result is a new `Except Kernel.Exception Lean.Environment` object.
+    ///
+    /// # Safety
+    ///
+    /// `env` is a `Lean.Environment` object and `decl` is a `Declaration` object of the runtime.
+    pub unsafe fn elab_add_decl_without_checking(&self, env: u64, decl: u64) -> u64 {
+        // SAFETY: the caller gives `env` and `decl`, and `add_decl_without_checking` consumes the kernel environment.
+        unsafe { self.elab(env, |k| self.add_decl_without_checking(k, decl)) }
+    }
+
+    /// Runs `add` on the kernel environment of the `Lean.Environment` object `env`, and gives the result for `env`. `add` consumes the kernel environment and gives an `Except Kernel.Exception Kernel.Environment` object. The call consumes `env`.
+    ///
+    /// # Safety
+    ///
+    /// `env` is a live `Lean.Environment` object, and `add` has the contract above.
+    unsafe fn elab(&self, env: u64, add: impl FnOnce(u64) -> u64) -> u64 {
+        // SAFETY: `toKernelEnv` consumes its argument, so the call gives it a new reference to `env`.
+        let kenv = unsafe {
+            self.rt.inc(env);
+            (self.to_kernel)(env)
+        };
+        let r = add(kenv);
+        // `Except.error` has the tag 0 and `Except.ok` has the tag 1. The two `Except` types have the same exception.
+        if self.word(r) >> 56 != 1 {
+            // SAFETY: the call owns `env`, and the exception does not keep it.
+            unsafe { self.rt.dec(env) };
+            return r;
+        }
+        // SAFETY: `r` is `Except.ok` with the new kernel environment, and `updateBaseAfterKernelAdd` consumes its arguments.
+        let e = unsafe {
+            let k = self.field(r, 0);
+            self.rt.inc(k);
+            self.rt.dec(r);
+            (self.update_base)(env, k)
+        };
         // SAFETY: the maker makes `Except.ok e`, and the result owns `e`.
         unsafe { LeanMake::new(self.rt) }.ctor(1, &[e], &[])
     }

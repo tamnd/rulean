@@ -394,6 +394,8 @@ pub struct Checker {
     pub(crate) c_force: Memo,
     /// Engine F: `const_never_proof` of a constant at key (constant, 0), 1 for true and 2 for false.
     pub(crate) c_never_proof: Memo,
+    /// The keys of `c_infer`, `c_whnf_core` and `c_whnf`. The C++ kernel keys these caches with `is_equal`, so terms that are equal up to binder names and binder info share one entry. Key (term, 0) is the first equal term that the checker saw (`canon`). Key (hash, 2) is the last term of the chain of terms with this hash, and key (term, 1) is the next term of the chain.
+    pub(crate) c_canon: Memo,
     /// The session: judgments on frozen closed terms that stay across declarations (spec 08.4).
     pub sess: Session,
     /// `m_eager_reduce`.
@@ -469,6 +471,7 @@ impl Checker {
             lctx_val: Vec::new(),
             scope: Vec::new(),
             c_infer: Memo::new(),
+            c_canon: Memo::new(),
             c_whnf_core: Memo::new(),
             c_whnf: Memo::new(),
             c_unfold: Memo::new(),
@@ -536,6 +539,7 @@ impl Checker {
         self.c_conv_success.clear();
         self.c_force.clear();
         self.c_never_proof.clear();
+        self.c_canon.clear();
     }
 
     /// Removes the counts of the kernel diagnostics.
@@ -630,7 +634,8 @@ impl Checker {
             + self.c_conv_failure.bytes()
             + self.c_conv_success.bytes()
             + self.c_force.bytes()
-            + self.c_never_proof.bytes();
+            + self.c_never_proof.bytes()
+            + self.c_canon.bytes();
         self.st.memory().total()
             + self.env.bytes()
             + lctx
@@ -881,6 +886,33 @@ impl Checker {
             Expr::Lam(b) => (b.dom, b.body),
             _ => (e, e),
         }
+    }
+
+    /// The cache key of a term: the first term that the checker saw that is equal to it up to binder names and binder info (`expr_map` with `is_equal`).
+    pub(crate) fn canon(&mut self, e: ExprId) -> ExprId {
+        if let Some(c) = self.c_canon.get(e.0, 0) {
+            return ExprId(c);
+        }
+        let h = raw(self.st.hash(e));
+        let head = self.c_canon.get(h, 2);
+        let mut at = head;
+        let mut found = e;
+        while let Some(c) = at {
+            if expr::expr_equal(&self.st, &mut self.x, ExprId(c), e) {
+                found = ExprId(c);
+                at = None;
+            } else {
+                at = self.c_canon.get(c, 1);
+            }
+        }
+        if found == e {
+            if let Some(c) = head {
+                self.c_canon.put(e.0, 1, c);
+            }
+            self.c_canon.put(h, 2, e.0);
+        }
+        self.c_canon.put(e.0, 0, found.0);
+        found
     }
 
     /// The alpha-equality of the official kernel (`operator==` on `expr`).
@@ -1367,7 +1399,8 @@ impl Checker {
             return self.dummy;
         }
         let mode = infer_only as u32;
-        let r = match self.c_infer.get(e.0, raw(mode)) {
+        let k = self.canon(e);
+        let r = match self.c_infer.get(k.0, raw(mode)) {
             Some(r) => ExprId(r),
             None => {
                 // Only infer-only results go into the session: a check-mode result also depends on the level parameters and the safety of the declaration.
@@ -1379,13 +1412,13 @@ impl Checker {
                 };
                 match hit {
                     Some(r) => {
-                        self.c_infer.put(e.0, raw(mode), r);
+                        self.c_infer.put(k.0, raw(mode), r);
                         ExprId(r)
                     }
                     None => {
                         let r = self.infer_type_node(e, infer_only);
                         if !self.bad() {
-                            self.c_infer.put(e.0, raw(mode), r.0);
+                            self.c_infer.put(k.0, raw(mode), r.0);
                             if key {
                                 self.sess.note(S_INFER, e.0, 0, r.0);
                             }

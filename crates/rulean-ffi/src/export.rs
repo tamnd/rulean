@@ -139,17 +139,13 @@ pub unsafe extern "C" fn lean_add_decl(
             let r = k.dual_add(
                 env,
                 decl,
-                false,
-                "lean_add_decl",
-                |e| {
-                    cpp::<AddFn>(k, c"lean_add_decl_cpp")(
-                        e,
-                        max_heartbeat,
-                        max_rec_depth,
-                        decl,
-                        cancel,
-                    )
-                },
+                (false, "lean_add_decl"),
+                (
+                    |e, max| {
+                        cpp::<AddFn>(k, c"lean_add_decl_cpp")(e, max, max_rec_depth, decl, cancel)
+                    },
+                    Some(max_heartbeat),
+                ),
                 |e| k.add_decl(e, max_heartbeat, max_rec_depth, decl, cancel),
             );
             #[cfg(not(feature = "dual"))]
@@ -173,9 +169,11 @@ pub unsafe extern "C" fn lean_add_decl_without_checking(env: u64, decl: u64) -> 
             let r = k.dual_add(
                 env,
                 decl,
-                false,
-                "lean_add_decl_without_checking",
-                |e| cpp::<AddUncheckedFn>(k, c"lean_add_decl_without_checking_cpp")(e, decl),
+                (false, "lean_add_decl_without_checking"),
+                (
+                    |e, _| cpp::<AddUncheckedFn>(k, c"lean_add_decl_without_checking_cpp")(e, decl),
+                    None,
+                ),
                 |e| k.add_decl_without_checking(e, decl),
             );
             #[cfg(not(feature = "dual"))]
@@ -205,17 +203,19 @@ pub unsafe extern "C" fn lean_elab_add_decl(
             let r = k.dual_add(
                 env,
                 decl,
-                true,
-                "lean_elab_add_decl",
-                |e| {
-                    cpp::<AddFn>(k, c"lean_elab_add_decl_cpp")(
-                        e,
-                        max_heartbeat,
-                        max_rec_depth,
-                        decl,
-                        cancel,
-                    )
-                },
+                (true, "lean_elab_add_decl"),
+                (
+                    |e, max| {
+                        cpp::<AddFn>(k, c"lean_elab_add_decl_cpp")(
+                            e,
+                            max,
+                            max_rec_depth,
+                            decl,
+                            cancel,
+                        )
+                    },
+                    Some(max_heartbeat),
+                ),
                 |e| k.elab_add_decl(e, max_heartbeat, max_rec_depth, decl, cancel),
             );
             #[cfg(not(feature = "dual"))]
@@ -239,9 +239,15 @@ pub unsafe extern "C" fn lean_elab_add_decl_without_checking(env: u64, decl: u64
             let r = k.dual_add(
                 env,
                 decl,
-                true,
-                "lean_elab_add_decl_without_checking",
-                |e| cpp::<AddUncheckedFn>(k, c"lean_elab_add_decl_without_checking_cpp")(e, decl),
+                (true, "lean_elab_add_decl_without_checking"),
+                (
+                    |e, _| {
+                        cpp::<AddUncheckedFn>(k, c"lean_elab_add_decl_without_checking_cpp")(
+                            e, decl,
+                        )
+                    },
+                    None,
+                ),
                 |e| k.elab_add_decl_without_checking(e, decl),
             );
             #[cfg(not(feature = "dual"))]

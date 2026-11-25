@@ -149,7 +149,7 @@ Engine R is a direct port of `type_checker.cpp`, `inductive.h` and `quot.cpp` fr
 
 Rules for R:
 
-- Same function names, same step order, same caches with the same keys (A§1.5). Success caches only. No union-find (#14806).
+- Same function names, same step order, same caches with the same keys (A§1.5). Success caches only. No union-find (#14806). The official kernel keys `m_infer_type`, `m_whnf_core` and `m_whnf` with `is_equal`, which does not compare binder names and binder info. The store gives different handles to two terms that differ only in binder names. Thus R keys these three caches with the first term of the declaration that is equal to the term in the same sense (`canon`). Before this rule, R missed the cache hits of the official kernel on such terms, and it counted more heartbeats than the official kernel for some declarations.
 - One Rust function per C++ function where possible. Each function has a comment with the C++ file, line range and commit.
 - R has no performance target. It must not time out where the official kernel does not, so its limits are the official limits times 4 (05.11).
 - When the official kernel changes, R changes first. F follows after the reordering lemmas are updated (14.4).

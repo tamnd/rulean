@@ -313,6 +313,21 @@ static T_IMPORT: AtomicU64 = AtomicU64::new(0);
 static T_CHECK: AtomicU64 = AtomicU64::new(0);
 static T_RESULT: AtomicU64 = AtomicU64::new(0);
 static T_CPP: AtomicU64 = AtomicU64::new(0);
+
+/// The file of the environment variable `RULEAN_DUAL_BEATS`, if it has a path. The dual-kernel build appends a line with the heartbeats of rulean, the heartbeats of the C++ kernel and the name for each declaration that the two kernels accept (`Kernel::dual_add`, spec 09.6.4).
+fn beats_log() -> Option<&'static Mutex<std::fs::File>> {
+    static LOG: std::sync::OnceLock<Option<Mutex<std::fs::File>>> = std::sync::OnceLock::new();
+    LOG.get_or_init(|| {
+        let path = std::env::var_os("RULEAN_DUAL_BEATS").filter(|p| !p.is_empty())?;
+        let f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .ok()?;
+        Some(Mutex::new(f))
+    })
+    .as_ref()
+}
 static T_CONVERTED: AtomicU64 = AtomicU64::new(0);
 static T_REUSED: AtomicU64 = AtomicU64::new(0);
 static T_REPLACED: AtomicU64 = AtomicU64::new(0);
@@ -371,6 +386,8 @@ pub struct Kernel<'a> {
     /// The pool of mirrors that the kernel shares with other kernels (`Kernel::share_mirrors`).
     pool: Option<&'a MirrorPool>,
     stats: Cell<MirrorStats>,
+    /// The heartbeats and the name of the last declaration of `add_decl`, if the file of `RULEAN_DUAL_BEATS` is open (`beats_log`).
+    last: RefCell<Option<(u64, String)>>,
 }
 
 /// The function `name` of the runtime with the type `F`.
@@ -412,6 +429,7 @@ impl<'a> Kernel<'a> {
                 cache: RefCell::new(None),
                 pool: None,
                 stats: Cell::new(MirrorStats::default()),
+                last: RefCell::new(None),
             })
         }
     }
@@ -626,6 +644,13 @@ impl<'a> Kernel<'a> {
                 }
             }
         };
+        if beats_log().is_some() {
+            let name = decl_names(&d)
+                .first()
+                .map(|&n| name_string(&m.chk.st, n))
+                .unwrap_or_default();
+            *self.last.borrow_mut() = Some((m.chk.heartbeats(), name));
+        }
         let Mirror {
             chk,
             origin,
@@ -1265,7 +1290,9 @@ impl<'a> Kernel<'a> {
         None
     }
 
-    /// Runs an `addDecl` function of the C++ kernel (`cpp`) and of rulean (`ours`) on `env`, for the dual-kernel build (spec 11.3). The two functions consume the environment, and the call consumes `env`. If the results differ (`compare_add`), the call writes the difference to the standard error and stops the process. Otherwise the result is the result of rulean.
+    /// Runs an `addDecl` function of the C++ kernel (`cpp`) and of rulean (`ours`) on `env`, for the dual-kernel build (spec 11.3). The two functions consume the environment, and the call consumes `env`. `cpp` takes the environment and the heartbeat limit, and `max` is the limit of the call, or `None` for a function without a limit. If the results differ (`compare_add`), the call writes the difference to the standard error and stops the process. Otherwise the result is the result of rulean.
+    ///
+    /// If the file of `RULEAN_DUAL_BEATS` is open, `max` is not `None` and the two kernels accept the declaration, the call also finds the heartbeats of the C++ kernel for the declaration (`cpp_beats`) and writes a line to the file (spec 09.6.4).
     ///
     /// # Safety
     ///
@@ -1274,27 +1301,101 @@ impl<'a> Kernel<'a> {
         &self,
         env: u64,
         decl: u64,
-        elab: bool,
-        what: &str,
-        cpp: impl FnOnce(u64) -> u64,
+        (elab, what): (bool, &str),
+        (cpp, max): (impl Fn(u64, usize) -> u64, Option<usize>),
         ours: impl FnOnce(u64) -> u64,
     ) -> u64 {
+        let log = beats_log().zip(max);
         let t = Instant::now();
         // SAFETY: each function consumes a reference to `env`.
         let a = unsafe {
             self.rt.inc(env);
-            cpp(env)
+            cpp(env, max.unwrap_or(0))
         };
         add_time(&T_CPP, t);
+        if log.is_some() {
+            // SAFETY: the calibration below uses this reference.
+            unsafe { self.rt.inc(env) };
+            self.last.borrow_mut().take();
+        }
         let b = ours(env);
         // SAFETY: the caller gives `decl`, and the results are live.
         if let Some(r) = unsafe { self.compare_add(decl, a, b, elab) } {
             eprintln!("rulean dual: {what}: {r}");
             std::process::abort();
         }
+        let both = self.verdict(a) == Verdict::Ok && self.verdict(b) == Verdict::Ok;
         // SAFETY: the call owns `a`, and only the result of rulean goes back.
         unsafe { self.rt.dec(a) };
+        if let Some((file, max)) = log {
+            let last = self.last.borrow_mut().take();
+            if both && let Some((ours, name)) = last {
+                // SAFETY: the call owns the reference of `env` from above.
+                let theirs = unsafe { self.cpp_beats(env, &cpp, ours, max) };
+                if let Some(theirs) = theirs {
+                    use std::io::Write;
+                    let mut f = file.lock().unwrap_or_else(|e| e.into_inner());
+                    // An error is ignored, because the line is only a measurement.
+                    let _ = writeln!(f, "{ours} {theirs} {name}");
+                }
+            }
+            // SAFETY: the call owns the reference of `env` from above.
+            unsafe { self.rt.dec(env) };
+        }
         b
+    }
+
+    /// The heartbeats of the C++ kernel for a declaration that it accepts, for the calibration of the dual-kernel build (spec 09.6.4). `ours` is the count of rulean and `max` is the limit of the call, with 0 for no limit. The C++ kernel does not give its count, so the call finds the smallest limit with which `cpp` accepts. Before each check, it sets the counter of the thread to 0 with `lean::reset_heartbeat`, as the task manager does at the start of a task. A limit of 0 is no limit, so a count of 0 gives 1. The result is `None` if Lean has no `lean::reset_heartbeat`.
+    ///
+    /// The search starts at `ours - 1`, because the count of rulean must not be above the count of the C++ kernel (deviation D2). The counter of the thread then has the count of the last check, and not the count of the task.
+    ///
+    /// # Safety
+    ///
+    /// `env` is a live environment, and `cpp` consumes a reference to it.
+    pub unsafe fn cpp_beats(
+        &self,
+        env: u64,
+        cpp: &impl Fn(u64, usize) -> u64,
+        ours: u64,
+        max: usize,
+    ) -> Option<u64> {
+        // SAFETY: `lean::reset_heartbeat` of Lean v4.36.0 has no arguments and no result.
+        let reset =
+            unsafe { func::<unsafe extern "C" fn()>(self.rt, c"_ZN4lean15reset_heartbeatEv") }
+                .ok()?;
+        let accepts = |limit: u64| {
+            let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+            // SAFETY: the contract of the function. The check gets a new reference to `env`.
+            unsafe {
+                reset();
+                self.rt.inc(env);
+                let r = cpp(env, limit);
+                let ok = self.verdict(r) == Verdict::Ok;
+                self.rt.dec(r);
+                ok
+            }
+        };
+        // The C++ kernel accepted with `max` and a counter that can be above 0, so its count is at most `max`.
+        let top = if max == 0 { u64::MAX } else { max as u64 };
+        let (mut lo, mut hi) = if ours > 1 && accepts(ours - 1) {
+            (1, ours - 1)
+        } else {
+            (ours.max(1), ours.max(1))
+        };
+        // `lo` is at most the count. If `hi` does not accept, the count is above `hi`.
+        while hi < top && !accepts(hi) {
+            lo = hi + 1;
+            hi = hi.saturating_mul(2).min(top);
+        }
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if accepts(mid) {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        Some(hi)
     }
 
     /// Runs a term function of the C++ kernel (`cpp`) and of rulean (`ours`) on the objects `args`, for the dual-kernel build (spec 11.3). The two functions consume the objects, and the call consumes them. If the results differ (`compare_term`), the call writes the difference to the standard error and stops the process. Otherwise the result is the result of rulean.

@@ -557,13 +557,14 @@ impl Checker {
             }
             Expr::App(_, _) | Expr::Let(_) | Expr::Proj(_) => {}
         }
-        if let Some(r) = self.c_whnf_core.get(e.0, 0) {
+        let k = self.canon(e);
+        if let Some(r) = self.c_whnf_core.get(k.0, 0) {
             return ExprId(r);
         }
         let key = !cheap_rec && !cheap_proj && self.sess_key(e);
         if key {
             if let Some(r) = self.sess_get(S_WHNF_CORE, e.0, 0) {
-                self.c_whnf_core.put(e.0, 0, r);
+                self.c_whnf_core.put(k.0, 0, r);
                 return ExprId(r);
             }
         }
@@ -573,7 +574,7 @@ impl Checker {
         let (r, cache) = self.whnf_core_node(e, cheap_rec, cheap_proj);
         self.leave_beat();
         if cache && !cheap_rec && !cheap_proj && !self.bad() {
-            self.c_whnf_core.put(e.0, 0, r.0);
+            self.c_whnf_core.put(k.0, 0, r.0);
             if key {
                 self.sess.note(S_WHNF_CORE, e.0, 0, r.0);
             }
@@ -936,19 +937,20 @@ impl Checker {
             }
             _ => {}
         }
-        if let Some(r) = self.c_whnf.get(e.0, 0) {
+        let k = self.canon(e);
+        if let Some(r) = self.c_whnf.get(k.0, 0) {
             return ExprId(r);
         }
         let key = self.sess_key(e);
         if key {
             if let Some(r) = self.sess_get(S_WHNF, e.0, 0) {
-                self.c_whnf.put(e.0, 0, r);
+                self.c_whnf.put(k.0, 0, r);
                 return ExprId(r);
             }
         }
         let r = self.whnf_loop(e);
         if !self.bad() {
-            self.c_whnf.put(e.0, 0, r.0);
+            self.c_whnf.put(k.0, 0, r.0);
             if key {
                 self.sess.note(S_WHNF, e.0, 0, r.0);
             }

@@ -1,0 +1,109 @@
+name: mathlib part
+
+# One part of the workflow mathlib. The part gets the lean of the job toolchain and the state of the part before it, runs scripts/mathlib-build.sh for at most 300 minutes, and keeps the new state as an artifact for the next part.
+on:
+  workflow_call:
+    inputs:
+      part:
+        description: The number of the part, from 1
+        type: number
+        required: true
+    outputs:
+      status:
+        description: done, timeout or failed (scripts/mathlib-build.sh)
+        value: ${{ jobs.part.outputs.status }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  LEAN: 4.36.0
+  LEAN_SHA256: 2b7ab1ed8b92d2e6abfaf41344823b510064dbc9c0260cac73eb496ab2dea6eb
+  PART: ${{ inputs.part }}
+  WORK: /mnt/mathlib
+
+jobs:
+  part:
+    name: part ${{ inputs.part }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    outputs:
+      status: ${{ steps.build.outputs.status }}
+    steps:
+      - name: free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          sudo mkdir -p "$WORK"
+          sudo chown "$USER" "$WORK"
+          df -h / /mnt
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The release with the lean of the job toolchain in place of its own lean.
+      - name: the Lean release
+        run: |
+          mkdir -p "$WORK/lean"
+          curl -sSfL --retry 3 -o "$WORK/lean.tar.zst" "https://github.com/leanprover/lean4/releases/download/v$LEAN/lean-$LEAN-linux.tar.zst"
+          echo "$LEAN_SHA256  $WORK/lean.tar.zst" | sha256sum -c -
+          tar --zstd -xf "$WORK/lean.tar.zst" -C "$WORK/lean"
+          rm "$WORK/lean.tar.zst"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mathlib-lean
+          path: ${{ env.WORK }}/rulean
+      - name: lean with rulean as its kernel
+        run: |
+          install -m 755 "$WORK/rulean/lean" "$WORK/lean/lean-$LEAN-linux/bin/lean"
+          "$WORK/lean/lean-$LEAN-linux/bin/lean" --version
+      - id: before
+        if: inputs.part > 1
+        name: the part before
+        run: echo "part=$((PART - 1))" >> "$GITHUB_OUTPUT"
+      - if: inputs.part > 1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mathlib-state-${{ steps.before.outputs.part }}
+          path: ${{ env.WORK }}/state
+      - if: inputs.part > 1
+        name: the state of the part before
+        run: |
+          tar --zstd -xf "$WORK/state/mathlib.tar.zst" -C "$WORK"
+          rm -r "$WORK/state"
+      - id: build
+        name: lake build Mathlib
+        env:
+          RULEAN_FFI_TIMING: ${{ env.WORK }}/out/timing.txt
+        run: |
+          status=0
+          scripts/mathlib-build.sh "$WORK" "$WORK/lean/lean-$LEAN-linux" 300 || status=$?
+          echo "status=$(cat "$WORK/out/status")" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Mathlib, part $PART"
+            echo "- status: $(cat "$WORK/out/status")"
+            echo "- oleans: $(cat "$WORK/out/built")"
+            echo "- errors: $(grep -c '^error' "$WORK/out/lake.log" || true)"
+            echo "- differences of the two kernels: $(grep -c 'rulean dual:' "$WORK/out/lake.log" || true)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          tail -n 50 "$WORK/out/lake.log"
+          exit "$status"
+      # The next part continues the build from this state.
+      - if: ${{ !cancelled() && steps.build.outputs.status == 'timeout' }}
+        name: the state for the next part
+        run: tar --zstd -cf "$WORK/mathlib.tar.zst" -C "$WORK" mathlib
+      - if: ${{ !cancelled() && steps.build.outputs.status == 'timeout' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mathlib-state-${{ inputs.part }}
+          path: ${{ env.WORK }}/mathlib.tar.zst
+          retention-days: 2
+          compression-level: 0
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mathlib-out-${{ inputs.part }}
+          path: ${{ env.WORK }}/out
+          if-no-files-found: ignore

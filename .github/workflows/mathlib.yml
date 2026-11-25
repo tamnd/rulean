@@ -1,0 +1,87 @@
+name: mathlib
+
+# lake build of Mathlib v4.36.0 with the dual-kernel build of scripts/lean-build.sh --dual (spec 09.6 and 11.3.1). The dual-kernel build gives each declaration to rulean and to the C++ kernel, and it gives back the result of rulean. If the two results differ, the lean process writes "rulean dual:" and the difference to the standard error and stops. Thus a build with no error shows that Mathlib builds with rulean as its kernel and that the two kernels agree on each declaration. RULEAN_FFI_TIMING records the times of the conversion (09.6.3).
+#
+# The build of Mathlib from its source is longer than one job, so the workflow has a chain of parts. Each part builds for at most 300 minutes and keeps the state of the build as an artifact, and the next part continues from that state. A part runs only if the part before it stopped at its time limit.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mathlib-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  LEAN: 4.36.0
+  LEAN_SHA256: 2b7ab1ed8b92d2e6abfaf41344823b510064dbc9c0260cac73eb496ab2dea6eb
+
+jobs:
+  toolchain:
+    name: the dual-kernel lean
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: rustup component add llvm-tools
+      - name: the headers of libc++
+        run: sudo apt-get update -q && sudo apt-get install -y --no-install-recommends libc++-dev libc++abi-dev
+      - name: the Lean release
+        run: |
+          mkdir -p _tmp/lean
+          curl -sSfL --retry 3 -o _tmp/lean/lean.tar.zst "https://github.com/leanprover/lean4/releases/download/v$LEAN/lean-$LEAN-linux.tar.zst"
+          echo "$LEAN_SHA256  _tmp/lean/lean.tar.zst" | sha256sum -c -
+          tar --zstd -xf _tmp/lean/lean.tar.zst -C _tmp/lean
+          rm _tmp/lean/lean.tar.zst
+      - run: scripts/lean-build.sh --dual _tmp/lean-dual "$PWD/_tmp/lean/lean-$LEAN-linux"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mathlib-lean
+          path: _tmp/lean-dual/bin/lean
+          retention-days: 2
+
+  # The parts call the workflow of this repository with the path form. actionlint does not accept the form $/ of zizmor yet.
+  part-1:
+    needs: toolchain
+    uses: ./.github/workflows/mathlib-part.yml # zizmor: ignore[self-repository]
+    with:
+      part: 1
+  part-2:
+    needs: part-1
+    if: needs.part-1.outputs.status == 'timeout'
+    uses: ./.github/workflows/mathlib-part.yml # zizmor: ignore[self-repository]
+    with:
+      part: 2
+  part-3:
+    needs: part-2
+    if: needs.part-2.outputs.status == 'timeout'
+    uses: ./.github/workflows/mathlib-part.yml # zizmor: ignore[self-repository]
+    with:
+      part: 3
+  part-4:
+    needs: part-3
+    if: needs.part-3.outputs.status == 'timeout'
+    uses: ./.github/workflows/mathlib-part.yml # zizmor: ignore[self-repository]
+    with:
+      part: 4
+  part-5:
+    needs: part-4
+    if: needs.part-4.outputs.status == 'timeout'
+    uses: ./.github/workflows/mathlib-part.yml # zizmor: ignore[self-repository]
+    with:
+      part: 5
+  part-6:
+    needs: part-5
+    if: needs.part-5.outputs.status == 'timeout'
+    uses: ./.github/workflows/mathlib-part.yml # zizmor: ignore[self-repository]
+    with:
+      part: 6

@@ -114,6 +114,20 @@ impl Memo {
         }
     }
 
+    /// The value of the key if the map has the key. If not, this sets the value of the key to `v` and gives `None`. It walks the table one time, but `get` and then `put` walk it two times.
+    pub fn get_or_put(&mut self, a: Raw, b: Raw, v: Raw) -> Option<Raw> {
+        let h = pair_hash(a, b);
+        let (found, pos) = self.find(a, b, h);
+        if found != 0 {
+            Some(self.entries[found - 1].v)
+        } else {
+            let i = self.entries.len() as Raw;
+            self.entries.push(Entry { a, b, v });
+            self.table.put(pos, h, i);
+            None
+        }
+    }
+
     /// Removes every entry. This is O(1) for the table.
     pub fn clear(&mut self) {
         self.entries.truncate(0);

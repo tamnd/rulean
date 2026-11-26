@@ -64,13 +64,10 @@ impl Checker {
 
     /// The key of the packed node (a, b). A new node gets the number of nodes plus 16, so a key of a node is not a key of an empty spine or environment.
     fn key_pair(&mut self, a: Raw, b: Raw) -> u32 {
-        match self.k_nodes.get(a, b) {
-            Some(x) => low(x),
-            None => {
-                let x = self.k_nodes.len() as u32 + 16;
-                self.k_nodes.put(a, b, raw(x));
-                x
-            }
+        let x = self.k_nodes.len() as u32 + 16;
+        match self.k_nodes.get_or_put(a, b, raw(x)) {
+            Some(y) => low(y),
+            None => x,
         }
     }
 

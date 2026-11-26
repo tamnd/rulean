@@ -56,6 +56,12 @@ Result of A9 for the arguments of a spine on Init, on 2026-11-26 (`rulean check 
 
 Result of a cache of level instantiation on Init, on 2026-11-26 (`rulean check --engine F`, macOS): a callgrind profile showed that `instantiate_lparams` used 48.8 G of 463.5 G instructions. Most of these calls were on the right side of a recursor rule in an iota step (32.6 G in 3.45 million calls) and on the type of a constant in `infer_constant` (5.7 G). The same term got the same levels many times in one declaration. The cache `c_lps` keeps the result at key (term, levels), and it is cleared with the other caches at the start of each declaration. A term that two constants share uses the cache only for the first constant, because the level parameters of the two constants can have a different order. The run uses 359.9 G instructions in place of 402.3 G. A cache that stays for the full session is not correct, because the scratch tier of the store is cleared after each declaration, and a handle in the cache can then point to a different node.
 
+Result of the structure test before the read-back in `struct_major`, on Init, on 2026-11-26: before, an iota step of engine F read the major premise back to a term each time it was not a constructor application, and only then `cnstr_when_structure` looked at the inductive type. The read-back is now skipped when the type is not a structure without recursion and indices, because then `cnstr_when_structure` gives the term back unchanged. The run uses 348.9 G instructions in place of 359.9 G.
+
+Result of the free variable terms by level, on Init, on 2026-11-26: the read-back of a free variable called `mk_fvar` each time, which was 29.9 million interns of a term that `mk_local` already made. The checker now keeps the term of each level in `lctx_fv`, and `keep_fault` makes it again when it copies the type of the level. The run uses 342.1 G instructions in place of 348.9 G.
+
+Measure of A3 on Init, on 2026-11-26: engine F asked 20165 `conv` queries, and engine R confirmed 13295 answers. 13115 of these came from the type checks of engine F inference, and 180 came from `is_def_eq_shared`. In the confirmed queries, proof irrelevance set `F_TYPED` 9852 times, structure eta 4493 times and K 325 times. A test build that did not confirm the answers of the type checks used 338.4 G instructions in place of 348.9 G. So on Init the confirm set costs about 10 G, and A3 is not the largest item for the target of 04.10.
+
 ## 04.4 Values
 
 The value types of spec 05.4.1 stay. Three changes:

@@ -483,6 +483,17 @@ impl Checker {
                 return major;
             }
         }
+        // `cnstr_when_structure` gives the term back when the type is not a structure without recursion and indices. Then the read-back is not necessary. A type that is not in the environment goes on, so that the fault stays the same.
+        let s = self.env.find(induct);
+        if s != 0 {
+            let structure = match &self.env.at(s).kind {
+                ConstKind::Induct(i) => i.ctors.len() == 1 && i.nindices == 0 && !i.is_rec,
+                _ => false,
+            };
+            if !structure {
+                return major;
+            }
+        }
         let base = self.lctx_ty.len() as u32;
         let t = self.quote(base, base, major);
         let t2 = self.cnstr_when_structure(rec_slot, induct, t, false, false);
@@ -701,8 +712,7 @@ impl Checker {
         match h {
             Head::FVar(lvl, _) => {
                 if lvl < base {
-                    let ty = self.lctx_ty[lvl as usize];
-                    self.st.mk_fvar(lvl, ty)
+                    self.lctx_fv[lvl as usize]
                 } else if lvl < k {
                     self.st.mk_bvar(k - 1 - lvl)
                 } else if lvl >= expr::FAR_FVAR {

@@ -54,6 +54,8 @@ Result of A9 for the arguments of a spine on Init, on 2026-11-26 (`rulean check 
 
 **A10. Memory is read in order.** The parser puts the nodes of a term in the order of the input, so the children of a node are before the node. A node has 8 or 12 bytes in a struct of arrays. The arena of values has the same layout. A walk of a term then reads memory mostly forward.
 
+Result of a cache of level instantiation on Init, on 2026-11-26 (`rulean check --engine F`, macOS): a callgrind profile showed that `instantiate_lparams` used 48.8 G of 463.5 G instructions. Most of these calls were on the right side of a recursor rule in an iota step (32.6 G in 3.45 million calls) and on the type of a constant in `infer_constant` (5.7 G). The same term got the same levels many times in one declaration. The cache `c_lps` keeps the result at key (term, levels), and it is cleared with the other caches at the start of each declaration. A term that two constants share uses the cache only for the first constant, because the level parameters of the two constants can have a different order. The run uses 359.9 G instructions in place of 402.3 G. A cache that stays for the full session is not correct, because the scratch tier of the store is cleared after each declaration, and a handle in the cache can then point to a different node.
+
 ## 04.4 Values
 
 The value types of spec 05.4.1 stay. Three changes:

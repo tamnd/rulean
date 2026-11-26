@@ -405,12 +405,10 @@ impl Checker {
         if nfields > major_args.len() {
             return None;
         }
-        let ls = self.st.level_list_vec(rls);
-        let lps = self.const_lparams(slot);
-        if ls.len() != lps.len() {
+        if self.st.level_list_items(rls).len() != self.env.at(slot).lparams.len() {
             return None;
         }
-        let mut rhs = expr::instantiate_lparams(&mut self.st, &mut self.x, rule.rhs, &lps, &ls);
+        let mut rhs = self.inst_lps_cached(slot, rule.rhs, rls);
         let np = r.nprefix as usize;
         rhs = self.st.mk_apps(rhs, &rec_args[..np]);
         let nparams = major_args.len() - nfields;

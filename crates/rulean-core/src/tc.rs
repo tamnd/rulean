@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 use rulean_format::Safety;
 use rulean_nat::Nat;
 use rulean_store::ids::{low, raw};
-use rulean_store::{BinderInfo, Expr, ExprId, LevelId, Literal, NameId, Store};
+use rulean_store::{BinderInfo, Expr, ExprId, LevelId, LevelListId, Literal, NameId, Store};
 
 use crate::conv::{Engine, FStats};
 use crate::env::{ConstKind, Env};
@@ -396,6 +396,10 @@ pub struct Checker {
     pub(crate) c_force: Memo,
     /// Engine F: `const_never_proof` of a constant at key (constant, 0), 1 for true and 2 for false.
     pub(crate) c_never_proof: Memo,
+    /// `instantiate_lparams` of a term of a constant at key (term, levels), where the parameters are the level parameters of the constant (spec 04.8). The iota rule of a recursor and the type of a constant get the same levels many times in one declaration. The table `c_lps_owner` has the slot of the constant at key (term, 0), and a term that two constants share does not use the cache for the second one, because the parameters of the two constants can be different.
+    pub(crate) c_lps: Memo,
+    /// The slot of the constant of each term in `c_lps`.
+    pub(crate) c_lps_owner: Memo,
     /// The keys of `c_infer`, `c_whnf_core` and `c_whnf`. The C++ kernel keys these caches with `is_equal`, so terms that are equal up to binder names and binder info share one entry. Key (term, 0) is the first equal term that the checker saw (`canon`). Key (hash, 2) is the last term of the chain of terms with this hash, and key (term, 1) is the next term of the chain.
     pub(crate) c_canon: Memo,
     /// The session: judgments on frozen closed terms that stay across declarations (spec 08.4).
@@ -486,6 +490,8 @@ impl Checker {
             c_conv_success: Memo::new(),
             c_force: Memo::new(),
             c_never_proof: Memo::new(),
+            c_lps: Memo::new(),
+            c_lps_owner: Memo::new(),
             sess: Session::default(),
             eager: false,
             depth: 0,
@@ -545,6 +551,8 @@ impl Checker {
         self.c_conv_success.clear();
         self.c_force.clear();
         self.c_never_proof.clear();
+        self.c_lps.clear();
+        self.c_lps_owner.clear();
         self.c_canon.clear();
     }
 
@@ -641,6 +649,8 @@ impl Checker {
             + self.c_conv_success.bytes()
             + self.c_force.bytes()
             + self.c_never_proof.bytes()
+            + self.c_lps.bytes()
+            + self.c_lps_owner.bytes()
             + self.c_canon.bytes();
         self.st.memory().total()
             + self.env.bytes()
@@ -934,16 +944,35 @@ impl Checker {
         expr::instantiate_rev(&mut self.st, &mut self.x, e, subst)
     }
 
-    /// The level parameters of the constant of a slot, as a vector.
-    pub(crate) fn const_lparams(&self, slot: u32) -> Vec<NameId> {
-        self.env.at(slot).lparams.clone()
-    }
-
     /// The type of the constant of the slot with the levels for its parameters (`instantiate_type_lparams`).
     pub(crate) fn instantiate_type_lparams(&mut self, slot: u32, ls: &[LevelId]) -> ExprId {
         let c = self.env.at(slot);
         let ty = c.ty;
         expr::instantiate_lparams(&mut self.st, &mut self.x, ty, &c.lparams, ls)
+    }
+
+    /// `instantiate_lparams` of the term `e` of the constant of the slot with the levels `us`, through the cache `c_lps`. The caller makes sure that `us` has one level for each level parameter of the constant.
+    pub(crate) fn inst_lps_cached(&mut self, slot: u32, e: ExprId, us: LevelListId) -> ExprId {
+        let own = self.c_lps_owner.get(e.0, 0);
+        let mine = match own {
+            Some(o) => o == raw(slot),
+            None => {
+                self.c_lps_owner.put(e.0, 0, raw(slot));
+                true
+            }
+        };
+        if mine {
+            if let Some(r) = self.c_lps.get(e.0, raw(us.0)) {
+                return ExprId(r);
+            }
+        }
+        let ls = self.st.level_list_vec(us);
+        let c = self.env.at(slot);
+        let r = expr::instantiate_lparams(&mut self.st, &mut self.x, e, &c.lparams, &ls);
+        if mine {
+            self.c_lps.put(e.0, raw(us.0), r.0);
+        }
+        r
     }
 
     /// The value of the constant of the slot with the levels for its parameters (`instantiate_value_lparams`).
@@ -1056,7 +1085,8 @@ impl Checker {
                 return self.dummy;
             }
         }
-        self.instantiate_type_lparams(slot, &ls)
+        let ty = self.env.at(slot).ty;
+        self.inst_lps_cached(slot, ty, list)
     }
 
     /// `infer_lambda`.

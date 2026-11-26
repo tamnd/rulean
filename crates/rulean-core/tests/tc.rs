@@ -123,6 +123,27 @@ fn infer_sort_lambda_and_pi() {
 }
 
 #[test]
+fn shared_type_with_other_parameter_order() {
+    // A.{u, v} and B.{v, u} have the same type term Sort u. The cache of level instantiation must not give the type of A for B.
+    let mut t = T::new();
+    let u = t.name("u");
+    let pu = t.c.st.level_param(u);
+    let ty = t.c.st.mk_sort(pu);
+    t.add("A", &["u", "v"], ty, ConstKind::Axiom);
+    t.add("B", &["v", "u"], ty, ConstKind::Axiom);
+    let z = t.c.st.level_zero();
+    let one = t.c.st.level_succ(z);
+    let a = t.kl("A", &[one, z]);
+    let b = t.kl("B", &[one, z]);
+    let s0 = t.sort(0);
+    let s1 = t.sort(1);
+    assert_eq!(t.c.check(a), s1);
+    assert_eq!(t.c.check(b), s0);
+    assert_eq!(t.c.check(a), s1);
+    assert!(t.c.fault().is_none());
+}
+
+#[test]
 fn unknown_constant_is_a_fault() {
     let mut t = T::new();
     let c = t.k("nothing");

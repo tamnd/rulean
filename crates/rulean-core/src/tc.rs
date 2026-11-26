@@ -17,7 +17,7 @@ use crate::env::{ConstKind, Env};
 use crate::expr::{self, Scratch};
 use crate::finfer::FInfer;
 use crate::level::{self, LevelCache};
-use crate::memo::{Lossy, Memo};
+use crate::memo::{Intern, Lossy, Memo};
 use crate::pin;
 use crate::profile::{Flags, Profile};
 use crate::session::{S_INFER, Session};
@@ -420,7 +420,7 @@ pub struct Checker {
     /// Engine F: the result of `force` of a value at key (value, 0), and of `force_core` at key (value, 1). The bits of `f_bits` that these steps set are at keys (value, 2) and (value, 3). It is cleared together with the arena.
     pub(crate) c_force: Memo,
     /// Engine F: the hash-consed nodes of the value keys (spec 04.12). A node (a, b) has the key at its entry. It is cleared together with the arena, and a release of a region does not change it, because a key does not contain a value handle.
-    pub(crate) k_nodes: Memo,
+    pub(crate) k_nodes: Intern,
     /// Engine F: the unfolding of a glued value at key (value key, 0), and the bits of `f_bits` that its evaluation set at key (value key, 1) (spec 04.12). It holds value handles, so it is truncated together with `c_force`.
     pub(crate) c_unfold_key: Memo,
     /// Engine F: `const_never_proof` of a constant at key (constant, 0), and `const_never_proof_at` with the levels `us` at key (constant, `us` + 1). The value is 1 for true and 2 for false.
@@ -523,7 +523,7 @@ impl Checker {
             c_conv_failure: Memo::new(),
             c_conv_success: Memo::new(),
             c_force: Memo::new(),
-            k_nodes: Memo::new(),
+            k_nodes: Intern::new(),
             c_unfold_key: Memo::new(),
             c_never_proof: Memo::new(),
             c_lps: Memo::new(),

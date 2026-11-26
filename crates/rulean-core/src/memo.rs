@@ -152,6 +152,152 @@ impl Memo {
     }
 }
 
+/// A slot of an `Intern` table. The key and the value are in the slot, so a lookup reads one slot and no other array.
+#[derive(Clone, Copy, Debug)]
+struct InternSlot {
+    epoch: u32,
+    a: Raw,
+    b: Raw,
+    v: Raw,
+}
+
+/// The first number of slots of an `Intern` table.
+const INTERN_FIRST: usize = 1 << 10;
+
+/// A map from a pair of keys to a value that has no `truncate`. It keeps the keys and the value in the slots of an open table, so a lookup reads one slot for each step of the walk. A `Memo` reads a table slot and then an entry, so it reads two places. The table uses epochs, so `clear` is O(1).
+#[derive(Clone, Debug)]
+pub struct Intern {
+    slots: Vec<InternSlot>,
+    epoch: u32,
+    count: usize,
+    mask: usize,
+}
+
+impl Default for Intern {
+    fn default() -> Intern {
+        Intern::new()
+    }
+}
+
+impl Intern {
+    /// An empty map.
+    pub fn new() -> Intern {
+        Intern::with_slots(INTERN_FIRST)
+    }
+
+    /// An empty map with `n` slots. `n` must be a power of two.
+    fn with_slots(n: usize) -> Intern {
+        let mut slots = Vec::with_capacity(n);
+        let mut i = 0;
+        while i < n {
+            slots.push(InternSlot {
+                epoch: 0,
+                a: 0,
+                b: 0,
+                v: 0,
+            });
+            i += 1;
+        }
+        // The slots start in epoch 0, so the live epoch is 1 and every slot is free.
+        Intern {
+            slots,
+            epoch: 1,
+            count: 0,
+            mask: n - 1,
+        }
+    }
+
+    /// The number of entries.
+    pub fn len(&self) -> usize {
+        self.count
+    }
+
+    /// True if the map has no entry.
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    /// The number of bytes of the slots.
+    pub fn bytes(&self) -> usize {
+        self.slots.len() * core::mem::size_of::<InternSlot>()
+    }
+
+    /// The position of the key, or the free position where the walk for the key stopped. The second value is true if the key is at the position.
+    fn find(&self, a: Raw, b: Raw) -> (usize, bool) {
+        let mut pos = (pair_hash(a, b) as usize) & self.mask;
+        let mut found = false;
+        let mut walking = true;
+        while walking {
+            let s = self.slots[pos];
+            if s.epoch != self.epoch {
+                walking = false;
+            } else if s.a == a && s.b == b {
+                found = true;
+                walking = false;
+            } else {
+                pos = (pos + 1) & self.mask;
+            }
+        }
+        (pos, found)
+    }
+
+    /// The value of the key if the map has the key. If not, this sets the value of the key to `v` and gives `None`.
+    pub fn get_or_put(&mut self, a: Raw, b: Raw, v: Raw) -> Option<Raw> {
+        let (pos, found) = self.find(a, b);
+        if found {
+            Some(self.slots[pos].v)
+        } else {
+            self.slots[pos] = InternSlot {
+                epoch: self.epoch,
+                a,
+                b,
+                v,
+            };
+            self.count += 1;
+            // The load stays below 1/2, so a walk is short and always reaches a free slot.
+            if self.count * 2 > self.slots.len() {
+                self.grow();
+            }
+            None
+        }
+    }
+
+    /// Doubles the number of slots and puts each entry again.
+    fn grow(&mut self) {
+        let old = core::mem::replace(self, Intern::with_slots(self.slots.len() * 2));
+        let mut i = 0;
+        while i < old.slots.len() {
+            let s = old.slots[i];
+            if s.epoch == old.epoch {
+                let (pos, _) = self.find(s.a, s.b);
+                self.slots[pos] = InternSlot {
+                    epoch: self.epoch,
+                    a: s.a,
+                    b: s.b,
+                    v: s.v,
+                };
+                self.count += 1;
+            }
+            i += 1;
+        }
+    }
+
+    /// Removes every entry. This is O(1) unless the epoch counter is at its end.
+    pub fn clear(&mut self) {
+        if self.epoch < u32::MAX {
+            self.epoch += 1;
+        } else {
+            let mut i = 0;
+            while i < self.slots.len() {
+                self.slots[i].epoch = 0;
+                i += 1;
+            }
+            self.epoch = 1;
+        }
+        self.count = 0;
+    }
+}
+
 /// The number of index bits of a `Lossy` cache. The cache has 2^13 slots, so it uses 2^13 times the size of a slot (128 KiB with 32-bit ids).
 const LOSSY_BITS: u32 = 13;
 
@@ -243,5 +389,32 @@ impl Lossy {
             }
             self.epoch = 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn intern_keeps_keys_after_grow_and_clear() {
+        let mut m = Intern::new();
+        let n: Raw = 5000;
+        let mut i: Raw = 0;
+        while i < n {
+            assert_eq!(m.get_or_put(i, i + 1, i + 16), None);
+            i += 1;
+        }
+        assert_eq!(m.len(), n as usize);
+        i = 0;
+        while i < n {
+            assert_eq!(m.get_or_put(i, i + 1, 0), Some(i + 16));
+            i += 1;
+        }
+        assert_eq!(m.get_or_put(1, 1, 7), None);
+        m.clear();
+        assert!(m.is_empty());
+        assert_eq!(m.get_or_put(3, 4, 9), None);
+        assert_eq!(m.get_or_put(3, 4, 0), Some(9));
     }
 }

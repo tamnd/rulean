@@ -205,8 +205,12 @@ impl Checker {
             self.f_stats.fallback += 1;
         }
         let base = self.lctx_ty.len() as u32;
+        // One cache for both read-backs: the two values often share sub-values.
+        self.c_quote.clear();
+        self.q_depth += 1;
         let ta = self.quote(base, base, a);
         let tb = self.quote(base, base, b);
+        self.q_depth -= 1;
         if self.bad() {
             return false;
         }

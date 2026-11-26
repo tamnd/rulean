@@ -12,6 +12,23 @@ use crate::json::{bytes_eq, utf8_valid};
 /// The largest number of digits of a number on the fast path. Each number with 19 digits fits in a `u64`.
 const MAX_DIGITS: usize = 19;
 
+/// The word with the byte 1 in each of its 8 bytes.
+const ONES: u64 = 0x0101_0101_0101_0101;
+
+/// The 8 bytes of `b` at `i` as one little-endian word. The caller makes sure that `i + 8 <= b.len()`.
+#[inline]
+fn word(b: &[u8], i: usize) -> u64 {
+    let s = &b[i..i + 8];
+    (s[0] as u64)
+        | (s[1] as u64) << 8
+        | (s[2] as u64) << 16
+        | (s[3] as u64) << 24
+        | (s[4] as u64) << 32
+        | (s[5] as u64) << 40
+        | (s[6] as u64) << 48
+        | (s[7] as u64) << 56
+}
+
 /// A position in one line. `ok` is false after the first byte that does not match a form.
 struct Cur {
     i: usize,
@@ -24,39 +41,99 @@ impl Cur {
     }
 
     /// Reads the fixed text `lit`.
+    #[inline]
     fn lit(&mut self, b: &[u8], lit: &[u8]) {
         if self.ok {
-            if bytes_eq(b, self.i, self.i + lit.len(), lit) {
-                self.i += lit.len();
+            let i = self.i;
+            let n = lit.len();
+            let mut eq = i <= b.len() && n <= b.len() - i;
+            let mut j = 0;
+            // The text is a constant at each call, so after inlining the words of `lit` are constants too, and a long text is one compare for each 8 bytes.
+            while eq && j + 8 <= n {
+                eq = word(b, i + j) == word(lit, j);
+                j += 8;
+            }
+            while eq && j < n {
+                eq = b[i + j] == lit[j];
+                j += 1;
+            }
+            if eq {
+                self.i = i + n;
             } else {
                 self.ok = false;
             }
         }
     }
 
-    /// Reads a number with 1 to 19 ASCII digits and no leading zero. The loop reads a slice of at most 19 bytes with a local index, so the index needs no bounds check, and `v * 10` is two shifts and one add, so it has one overflow check and not a multiply with an overflow check.
+    /// Reads a number with 1 to 19 ASCII digits and no leading zero. A number with at most 7 digits and 8 bytes of the line from its start goes to `num_word`. Another number goes to the loop of `num_bytes`.
     #[inline]
     fn num(&mut self, b: &[u8]) -> u64 {
         let mut v: u64 = 0;
         if self.ok {
             let start = self.i;
-            let end = if b.len() - start > MAX_DIGITS {
-                start + MAX_DIGITS
+            if b.len() - start >= 8 {
+                let w = word(b, start);
+                // A byte of `odd` is 0 if the byte of `w` is an ASCII digit: its high half is 3 and its low half is at most 9. The sums stay in their bytes, so a byte does not change the next byte.
+                let odd = ((w & (0xF0 * ONES)) ^ (0x30 * ONES))
+                    | (((w & (0x0F * ONES)) + 0x06 * ONES) & (0x10 * ONES));
+                // The high bit of a byte of `stops` is 1 if the byte of `w` is not a digit.
+                let stops = (odd | ((odd & (0x7F * ONES)) + 0x7F * ONES)) & (0x80 * ONES);
+                if stops != 0 {
+                    v = self.num_word(b, start, w, stops);
+                } else {
+                    v = self.num_bytes(b);
+                }
             } else {
-                b.len()
-            };
-            let s = &b[start..end];
-            let mut j = 0;
-            while j < s.len() && is_digit(s[j]) {
-                v = (v << 3) + (v << 1) + (s[j] - b'0') as u64;
-                j += 1;
+                v = self.num_bytes(b);
             }
-            let i = start + j;
-            self.i = i;
-            let more = i < b.len() && is_digit(b[i]);
-            if j == 0 || (j > 1 && s[0] == b'0') || more {
-                self.ok = false;
-            }
+        }
+        v
+    }
+
+    /// Reads a number of at most 7 digits from the word `w` of the line at `start`. The high bit of a byte of `stops` is 1 if the byte of `w` is not a digit, and `stops` is not 0. The digits are combined two, four and then eight at a time, and each product stays below 2^64, so no step has an overflow.
+    fn num_word(&mut self, b: &[u8], start: usize, w: u64, stops: u64) -> u64 {
+        // The lowest high bit of `stops` is bit 8 * n + 7, where n is the count of the digits. `!stops + 1` has no overflow, because `stops` is not 0.
+        let low = (stops & (!stops + 1)) >> 7;
+        let n4 = (low >= 1 << 32) as u32;
+        let t4 = low >> (32 * n4);
+        let n2 = (t4 >= 1 << 16) as u32;
+        let t2 = t4 >> (16 * n2);
+        let n1 = (t2 >= 1 << 8) as u32;
+        let n = (4 * n4 + 2 * n2 + n1) as usize;
+        let mut v: u64 = 0;
+        if n == 0 || (n > 1 && b[start] == b'0') {
+            self.ok = false;
+        } else {
+            // The digits go to the high bytes, with the first digit in byte 8 - n and the last digit in byte 7. The bytes after the number go out of the word.
+            let d = (w & (0x0F * ONES)) << (8 * (8 - n));
+            let d2 = (d * 10 + (d >> 8)) & 0x00FF_00FF_00FF_00FF;
+            let d4 = (d2 * 100 + (d2 >> 16)) & 0x0000_FFFF_0000_FFFF;
+            v = (d4 * 10000 + (d4 >> 32)) & 0xFFFF_FFFF;
+            self.i = start + n;
+        }
+        v
+    }
+
+    /// Reads a number with 1 to 19 ASCII digits and no leading zero, one byte at a time. The loop reads a slice of at most 19 bytes with a local index, so the index needs no bounds check, and `10 * v` is two shifts and one add.
+    fn num_bytes(&mut self, b: &[u8]) -> u64 {
+        let mut v: u64 = 0;
+        let start = self.i;
+        let end = if b.len() - start > MAX_DIGITS {
+            start + MAX_DIGITS
+        } else {
+            b.len()
+        };
+        let s = &b[start..end];
+        let mut j = 0;
+        while j < s.len() && is_digit(s[j]) {
+            v = (v << 3) + (v << 1) + (s[j] - b'0') as u64;
+            j += 1;
+        }
+        let i = start + j;
+        self.i = i;
+        let more = i < b.len() && is_digit(b[i]);
+        if j == 0 || (j > 1 && s[0] == b'0') || more {
+            self.ok = false;
         }
         v
     }
@@ -184,9 +261,12 @@ impl Parser {
             _ => &self.exprs,
         };
         let len = t.slots.len() as u64;
-        let cap = t.slots.capacity() as u64;
-        k <= MAX_TABLE_INDEX
-            && ((k < len && t.slots[k as usize] == UNDEF) || (k == len && len < cap))
+        // The ids of an export go up by one from line to line (spec perf/05.4), so the first test is the usual case.
+        if k == len {
+            k <= MAX_TABLE_INDEX && len < t.slots.capacity() as u64
+        } else {
+            k < len && k <= MAX_TABLE_INDEX && t.slots[k as usize] == UNDEF
+        }
     }
 
     /// Sets index `k` of `which`. The caller checked `fast_free` first.
@@ -556,5 +636,65 @@ impl Parser {
             self.fast_set(Record::Level, k, raw(id.0));
         }
         done
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::format;
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    /// Reads one number from `line` at 0 with `num` and with `num_bytes`, and gives the value, the end and the state of each.
+    fn both(line: &[u8]) -> ((u64, usize, bool), (u64, usize, bool)) {
+        let mut a = Cur::new(0);
+        let va = a.num(line);
+        let mut b = Cur::new(0);
+        let vb = b.num_bytes(line);
+        ((va, a.i, a.ok), (vb, b.i, b.ok))
+    }
+
+    #[test]
+    fn the_word_read_and_the_byte_read_agree() {
+        let mut cases: Vec<Vec<u8>> = Vec::new();
+        let mut n: u64 = 0;
+        while n < 200_000 {
+            cases.push(format!("{n},\"fn\":1}}").into_bytes());
+            cases.push(format!("{n}}}").into_bytes());
+            n += 1;
+        }
+        let mut p: u64 = 1;
+        while p < 10_000_000_000_000_000_000 {
+            cases.push(format!("{}x{{}}}}", p - 1).into_bytes());
+            cases.push(format!("{p}/abcdefgh").into_bytes());
+            p *= 10;
+        }
+        // Leading zeros, no digit, and each byte after a digit.
+        let mut c: u16 = 0;
+        while c < 256 {
+            cases.push(vec![
+                b'0', c as u8, b'1', b'2', b'3', b'4', b'5', b'6', b'7',
+            ]);
+            cases.push(vec![
+                b'4', b'2', c as u8, b'1', b'1', b'1', b'1', b'1', b'1',
+            ]);
+            cases.push(vec![
+                c as u8, b'1', b'1', b'1', b'1', b'1', b'1', b'1', b'1',
+            ]);
+            c += 1;
+        }
+        cases.push(b"12345678901234567890,".to_vec());
+        cases.push(b"1234567,".to_vec());
+        cases.push(b"12345678,".to_vec());
+        let mut k = 0;
+        while k < cases.len() {
+            let (a, b) = both(&cases[k]);
+            assert_eq!(a.2, b.2, "state of {:?}", cases[k]);
+            if a.2 {
+                assert_eq!(a, b, "value of {:?}", cases[k]);
+            }
+            k += 1;
+        }
     }
 }

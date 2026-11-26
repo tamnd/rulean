@@ -45,9 +45,15 @@ Result on Init, on 2026-11-26 (`rulean check --parse-only`, macOS, `/usr/bin/tim
 
 The digit loop reads a slice of at most 19 bytes with a local index, and it computes `10 * v` with two shifts. The release build has overflow checks, so a multiply has a check and a branch, and the shifts have only the check of the add. With this loop, Init uses 10.50 G instructions (the smallest of three runs).
 
+The compare of a fixed text reads 8 bytes of the line as one word and compares it with 8 bytes of the text. Each fixed text is a constant at its call, so after inlining the words of the text are constants too. With this compare and the room in the table of 05.5, Init uses 8.86 G instructions (the smallest of three runs).
+
+A number of at most 7 digits is read from one word of 8 bytes, if the line has 8 bytes from the start of the number. Masks find the bytes that are not digits, three compares find the count of the digits, and three products combine the digits two, four and then eight at a time. Each product stays below 2^64, so the overflow checks of the release build do not stop the read, and the read has no wrapping arithmetic. A number with more digits, or near the end of the line, uses the loop. A unit test compares the two reads. With the word read, Init uses 7.84 G instructions and 4.55 G cycles (the smallest of three runs on a loaded machine). This meets the exit of M8 (07.1).
+
 ## 05.4 Ids
 
 The id of each kind (`ie`, `in`, `il`) goes up by one from line to line in each export that we know. The index from an export id to a store handle (`Index` in `ndjson.rs`) stays an array. The fast path adds one check: if the id is the next id, the handle goes at the end of the array, with no check of the array length. An id that is not the next id uses the general path, which is valid for each order.
+
+The check of the next id comes first in the fast path. On Init this gives no change that is larger than the noise of the measure (8.84 G and 8.86 G instructions), because the compiler already made the old check short. So the ids need nothing more.
 
 ## 05.5 Intern on input
 

@@ -8,7 +8,7 @@ use rulean_format::Hints;
 use rulean_store::ids::raw;
 use rulean_store::{BinderInfo, Expr, ExprId, LevelId, LevelListId, NameId, SATURATED};
 
-use crate::env::compare_hints;
+use crate::env::{ConstKind, compare_hints};
 use crate::expr;
 use crate::level;
 use crate::pin::PIN_NAT;
@@ -996,7 +996,7 @@ impl Checker {
         }
     }
 
-    /// The steps after lazy delta: the same head with equal arguments, then the projections of folded structures, then function eta.
+    /// The steps after lazy delta: the same head with equal arguments, then the projections of folded structures, then function eta, then structure eta.
     ///
     /// As in the official kernel, two projections are first compared by their structures, and only then are the structures unfolded (`is_def_eq_proj`, then `whnf_core` with full projections). `force_core` keeps a projection of a folded structure (`proj_value_core`), so a projection that is still neutral here can reduce after delta on its structure.
     fn conv_whnf(&mut self, a: ValueId, b: ValueId) -> bool {
@@ -1015,9 +1015,63 @@ impl Checker {
             return self.conv(a2, b2);
         }
         match (va, vb) {
-            (Value::Neu(..), Value::Neu(..)) => false,
             (Value::Lam(_, _, d, c), _) => self.conv_eta(d, c, b),
             (_, Value::Lam(_, _, d, c)) => self.conv_eta(d, c, a),
+            _ => self.conv_eta_struct(a, b) || self.conv_eta_struct(b, a),
+        }
+    }
+
+    /// Structure eta (`try_eta_struct` of the official kernel): `S.mk p1 .. pn` and `t` are equal if `t.i` and `pi` are equal for each field, and the types are equal. `S` must be a structure with no recursion and no indices, and the constructor must have all its arguments. The type check reads both values back and uses engine R, as in proof irrelevance, so the rule sets `F_TYPED`. Without this rule, engine F found `Array.mk (Array.toList x)` and `x` not equal, and engine R then checked the full query again.
+    fn conv_eta_struct(&mut self, t: ValueId, s: ValueId) -> bool {
+        let (c, sp) = match self.vget(s) {
+            Value::Neu(Head::Const(c, _), sp) => (c, sp),
+            _ => return false,
+        };
+        let (induct, nparams, nfields) = match self.ctor_shape(c) {
+            Some(x) => x,
+            None => return false,
+        };
+        if self.va.spine_len(sp) != nparams + nfields || !self.plain_structure(induct) {
+            return false;
+        }
+        let base = self.lctx_ty.len() as u32;
+        let tt = self.quote(base, base, t);
+        let ts = self.quote(base, base, s);
+        if self.bad() {
+            return false;
+        }
+        let ty_t = self.infer(tt);
+        let ty_s = self.infer(ts);
+        if self.bad() || !self.is_def_eq_r(ty_t, ty_s) {
+            return false;
+        }
+        self.f_bits |= F_TYPED;
+        let mut ok = true;
+        let mut i = 0;
+        while ok && i < nfields && !self.bad() {
+            let p = self.proj_value(induct, i, t);
+            ok = match self.va.spine_arg(sp, nparams + i) {
+                Some(x) => self.conv(p, x),
+                None => false,
+            };
+            i += 1;
+        }
+        ok && !self.bad()
+    }
+
+    /// True if `n` is an inductive type with one constructor, no indices and no recursion. A name that is not in the environment gives false, so the rule does not apply.
+    fn plain_structure(&mut self, n: NameId) -> bool {
+        let s = self.env.find(n);
+        if s == 0 {
+            return false;
+        }
+        match &self.env.at(s).kind {
+            ConstKind::Induct(i) => {
+                let one = i.ctors.len() == 1;
+                let flat = i.nindices == 0;
+                let plain = !i.is_rec;
+                one & flat & plain
+            }
             _ => false,
         }
     }

@@ -10,6 +10,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `Lossy::put` is always inlined, and the first allocation of its slots is a cold function. On Init with one thread, engine R uses 144.5 G instructions in place of 151.5 G, and engine F uses 208.6 G in place of 211.5 G.
 - In check mode, `infer_app` infers the type of the head of an application one time, and not the type of each partial application. It instantiates the domain of each binder with the arguments before it, and the body of the pi type one time at the end. The checks and their order do not change. On Init with one thread, engine R uses 140.7 G instructions in place of 144.5 G.
 - Engine F compares a `Nat` literal with an application of `Nat.zero` or `Nat.succ` in lazy delta, as engine R does with `is_nat_zero` and `is_nat_succ`. Before, engine F found `5` and `Nat.succ x` not equal, and engine R then checked the full query again. On Init, engine F gives 904 "not equal" hints in place of 1,585. The count of instructions does not change.
+- Engine F has structure eta in conversion (`try_eta_struct`). `S.mk p1 .. pn` and `t` are equal if the types are equal and `t.i` and `pi` are equal for each field. The type check reads both values back and uses engine R, so the rule is in the confirm set. Before, engine F found `Array.mk (Array.toList x)` and `x` not equal. On Init, engine F gives 374 "not equal" hints in place of 904, and engine R confirms 15,518 answers in place of 13,972. The run uses 209.9 G instructions in place of 208.9 G.
 
 ## [0.8.6] - 2026-11-27
 

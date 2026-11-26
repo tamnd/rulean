@@ -49,6 +49,9 @@ pub struct FStats {
 /// The largest number of nodes that `same_value` visits. The check runs at each step of `conv`, and a failed check on a deep value runs again on each part of it, so a large budget costs time. On the Init export of v4.36.0, engine F uses 458 G instructions with 16, 435 G with 64, 423 G with 256 and 417 G with 1024. On the 42 Arena perf tests, the budget 256 makes `magma-list-pair-n21` slower (113.4 G to 120.6 G instructions), and 1024 makes `church-numerals` slower (0.1 G to 1.7 G).
 const SAME_BUDGET: u32 = 64;
 
+/// The largest number of delta steps on the side of a taken branch in `conv_lazy_delta` (row O8 of spec 05.7.3).
+const TAKEN_STEPS: u32 = 32;
+
 /// A bit of `Checker::f_bits`: the query used a delta step.
 pub(crate) const F_DELTA: u32 = 1;
 /// A bit of `Checker::f_bits`: the query used a type-directed rule (K-like reduction or structure eta of a major premise).
@@ -446,18 +449,34 @@ impl Checker {
     }
 
     /// Lazy delta on glued heads (spec 05.4.4 step 5, A§1.8 step 5). It unfolds the side with the greater height, or both sides if the heights are equal. Before it unfolds two applications of the same regular definition, it compares the levels and the arguments.
+    ///
+    /// If the side with the smaller height has the other side as an argument, as in `ite c a b =?= a`, that side is unfolded first, for at most `TAKEN_STEPS` steps (row O8 of spec 05.7.3). A branch that the condition takes then gives the other side with no unfolding of it. On `perf/ite-taken-branch`, the official order unfolds `a`, which computes an array of 300 numbers with a loop, and engine F filled its arena on each of the three theorems.
     fn conv_lazy_delta(&mut self, a: ValueId, b: ValueId) -> (LBool, ValueId, ValueId) {
         let mut x = a;
         let mut y = b;
         let mut r = LBool::Undef;
         let mut done = false;
+        // The side of a taken branch: -1 unfolds `x`, 1 unfolds `y`, 0 is the official order.
+        let mut lead = 0;
+        let mut taken = 0;
         while !done && !self.bad() {
             match (self.glued_head(x), self.glued_head(y)) {
                 (None, None) => done = true,
                 (Some(_), None) => x = self.conv_delta(x),
                 (None, Some(_)) => y = self.conv_delta(y),
                 (Some((c1, us1, sp1, h1)), Some((c2, us2, sp2, h2))) => {
-                    let c = compare_hints(h1, h2);
+                    let mut c = compare_hints(h1, h2);
+                    if c1 == c2 || taken >= TAKEN_STEPS {
+                        lead = 0;
+                    } else if lead == 0 && c > 0 && self.spine_holds(sp1, c2, y) {
+                        lead = -1;
+                    } else if lead == 0 && c < 0 && self.spine_holds(sp2, c1, x) {
+                        lead = 1;
+                    }
+                    if lead != 0 {
+                        c = lead;
+                        taken += 1;
+                    }
                     if c < 0 {
                         x = self.conv_delta(x);
                     } else if c > 0 {
@@ -490,6 +509,26 @@ impl Checker {
             }
         }
         (r, x, y)
+    }
+
+    /// True if an argument of the spine `sp` has the form of `v`, a glued value of the constant `c` (row O8 of spec 05.7.3). Only an argument with the head `c` is compared, so the check evaluates no other argument.
+    fn spine_holds(&mut self, sp: SpineId, c: NameId, v: ValueId) -> bool {
+        let mut s = sp;
+        let mut found = false;
+        while !found && s != SpineId::NIL {
+            let (arg, next) = self.va.spine_node(s);
+            let head = match self.va.get(arg) {
+                Value::Glued(c2, ..) => c2 == c,
+                Value::Susp(_, t, _) => {
+                    let f = expr::app_fn(&self.st, t);
+                    matches!(self.st.node(f), Expr::Const(c2, _) if c2 == c)
+                }
+                _ => false,
+            };
+            found = head && self.same_value(arg, v);
+            s = next;
+        }
+        found
     }
 
     /// Reflexivity on values (row O7 of spec 05.7.3): true if `a` and `b` have the same form, with no reduction. The form is the same when the constructors, the constants, the levels, the free variables and the literals are the same, and two closures have the same body and environments of the same form. Two values with the same form read back to the same term, so the answer is the quick check of the official step 1, where the official kernel compares two terms by their structure.

@@ -25,8 +25,162 @@ use crate::value::{
     Closure, EnvId, Head, SMALL_NAT_LIMIT, SlotId, SpineId, Value, ValueId, small, small_get,
 };
 use crate::whnf::{RecShape, find_rule};
+use rulean_store::Raw;
+
+/// The tags of the nodes of the value keys (spec 04.12). A tag goes in the top 5 bits of the first number of a node.
+const KEY_SPINE: u32 = 1;
+const KEY_ENV: u32 = 2;
+const KEY_SORT: u32 = 3;
+const KEY_SMALL: u32 = 4;
+const KEY_BINDER: u32 = 5;
+const KEY_CLOSURE: u32 = 6;
+const KEY_CONST: u32 = 7;
+const KEY_LOCAL: u32 = 8;
+const KEY_PROJ: u32 = 9;
+const KEY_PROJ_VALUE: u32 = 10;
+const KEY_CLOSED_TERM: u32 = 11;
+const KEY_SUSP: u32 = 12;
+const KEY_APP: u32 = 13;
+const KEY_NEW: u32 = 15;
+/// The tags of a node with a large first number. The node is two nodes: (tag, first number), then (that key, second number).
+const KEY_WIDE_HEAD: u32 = 31;
+const KEY_WIDE_TAIL: u32 = 30;
+/// The key of the empty spine and of the empty environment. A key of a node is 16 or more.
+const KEY_NIL_SPINE: u32 = 1;
+const KEY_NIL_ENV: u32 = 2;
+/// The recursion depth after which a value gets a new key.
+const KEY_DEPTH: u32 = 64;
 
 impl Checker {
+    /// The key of the node (tag, a, b) in `k_nodes` (spec 04.12). The same node gives the same key, and two different nodes give different keys.
+    fn key_node(&mut self, tag: u32, a: Raw, b: Raw) -> u32 {
+        if a < (1 << 27) {
+            self.key_pair(a | (raw(tag) << 27), b)
+        } else {
+            let t = self.key_pair(raw(tag) | (raw(KEY_WIDE_HEAD) << 27), a);
+            self.key_pair(raw(t) | (raw(KEY_WIDE_TAIL) << 27), b)
+        }
+    }
+
+    /// The key of the packed node (a, b). A new node gets the number of nodes plus 16, so a key of a node is not a key of an empty spine or environment.
+    fn key_pair(&mut self, a: Raw, b: Raw) -> u32 {
+        match self.k_nodes.get(a, b) {
+            Some(x) => low(x),
+            None => {
+                let x = self.k_nodes.len() as u32 + 16;
+                self.k_nodes.put(a, b, raw(x));
+                x
+            }
+        }
+    }
+
+    /// A new key that no other value has. The table is not truncated, so its length is a new number each time.
+    fn key_new(&mut self) -> u32 {
+        let n = raw(self.k_nodes.len() as u32);
+        self.key_node(KEY_NEW, n, n)
+    }
+
+    /// The value key of a spine. `d` is the recursion depth.
+    fn spine_key(&mut self, sp: SpineId, d: u32) -> u32 {
+        if sp == SpineId::NIL {
+            return KEY_NIL_SPINE;
+        }
+        let known = self.va.spine_key(sp);
+        if known != 0 {
+            return known;
+        }
+        let (a, p) = self.va.spine_node(sp);
+        let k = if d > KEY_DEPTH {
+            self.key_new()
+        } else {
+            let kp = self.spine_key(p, d + 1);
+            let ka = self.value_key(a, d + 1);
+            self.key_node(KEY_SPINE, raw(kp), raw(ka))
+        };
+        self.va.set_spine_key(sp, k);
+        k
+    }
+
+    /// The value key of an environment. `d` is the recursion depth.
+    fn env_key(&mut self, env: EnvId, d: u32) -> u32 {
+        if env == EnvId::NIL {
+            return KEY_NIL_ENV;
+        }
+        let known = self.va.env_key(env);
+        if known != 0 {
+            return known;
+        }
+        let (v, p) = self.va.env_node(env);
+        let k = if d > KEY_DEPTH {
+            self.key_new()
+        } else {
+            let kp = self.env_key(p, d + 1);
+            let kv = self.value_key(v, d + 1);
+            self.key_node(KEY_ENV, raw(kp), raw(kv))
+        };
+        self.va.set_env_key(env, k);
+        k
+    }
+
+    /// The value key of a value (spec 04.12): two values with the same key read back to the same term. The key comes from the keys of the parts, and it is kept in the arena. `d` is the recursion depth.
+    fn value_key(&mut self, v: ValueId, d: u32) -> u32 {
+        let known = self.va.vkey(v);
+        if known != 0 {
+            return known;
+        }
+        let k = if d > KEY_DEPTH {
+            self.key_new()
+        } else {
+            self.value_key_of(v, d)
+        };
+        self.va.set_vkey(v, k);
+        k
+    }
+
+    /// The body of `value_key`.
+    fn value_key_of(&mut self, v: ValueId, d: u32) -> u32 {
+        match self.va.get(v) {
+            Value::Sort(l) => self.key_node(KEY_SORT, raw(l.0), 0),
+            Value::Small(lo, hi) => self.key_node(KEY_SMALL, raw(lo), raw(hi)),
+            Value::Lit(_) | Value::PiOpen(..) => self.key_new(),
+            Value::Lam(_, _, dv, clo) | Value::Pi(_, _, dv, clo) => {
+                let kd = self.value_key(dv, d + 1);
+                let ke = self.env_key(clo.env, d + 1);
+                let kb = self.key_node(KEY_BINDER, raw(kd), raw(ke));
+                self.key_node(KEY_CLOSURE, raw(kb), clo.body.0)
+            }
+            Value::Neu(h, sp) => {
+                let kh = match h {
+                    Head::FVar(l, t) => {
+                        let kt = self.value_key(t, d + 1);
+                        self.key_node(KEY_LOCAL, raw(l), raw(kt))
+                    }
+                    Head::Const(c, us) => self.key_node(KEY_CONST, raw(c.0), raw(us.0)),
+                    Head::Proj(sn, i, x) => {
+                        let kx = self.value_key(x, d + 1);
+                        let kp = self.key_node(KEY_PROJ, raw(sn.0), raw(i));
+                        self.key_node(KEY_PROJ_VALUE, raw(kp), raw(kx))
+                    }
+                };
+                let ks = self.spine_key(sp, d + 1);
+                self.key_node(KEY_APP, raw(kh), raw(ks))
+            }
+            Value::Glued(c, us, sp, _) => {
+                let kh = self.key_node(KEY_CONST, raw(c.0), raw(us.0));
+                let ks = self.spine_key(sp, d + 1);
+                self.key_node(KEY_APP, raw(kh), raw(ks))
+            }
+            Value::Susp(env, e, _) => {
+                if self.st.loose_range(e) == 0 {
+                    self.key_node(KEY_CLOSED_TERM, 0, e.0)
+                } else {
+                    let ke = self.env_key(env, d + 1);
+                    self.key_node(KEY_SUSP, raw(ke), e.0)
+                }
+            }
+        }
+    }
+
     /// A value to return after a fault. The caller must check `bad` before it uses the value.
     pub(crate) fn v_dummy(&mut self) -> ValueId {
         let z = self.st.level_zero();
@@ -329,10 +483,26 @@ impl Checker {
                     }
                 };
                 self.f_bits |= F_DELTA;
+                let kc = self.key_node(KEY_CONST, raw(c.0), raw(us.0));
+                let ks = self.spine_key(sp, 0);
+                let k = self.key_node(KEY_APP, raw(kc), raw(ks));
+                if let Some(w) = self.c_unfold_key.get(raw(k), 0) {
+                    let u = ValueId(low(w));
+                    let bits = self.c_unfold_key.get(raw(k), 1).map_or(0, low);
+                    self.f_bits |= bits;
+                    self.va.slot_set(s, u);
+                    return u;
+                }
+                let saved = self.f_bits;
+                self.f_bits = 0;
                 let h = self.eval(EnvId::NIL, body);
                 let u = self.apply_spine(h, sp, e);
+                let got = self.f_bits;
+                self.f_bits = saved | got;
                 if !self.bad() {
                     self.va.slot_set(s, u);
+                    self.c_unfold_key.put(raw(k), 0, raw(u.0));
+                    self.c_unfold_key.put(raw(k), 1, raw(got));
                 }
                 u
             }

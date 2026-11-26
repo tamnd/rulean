@@ -170,6 +170,7 @@ impl Checker {
             return false;
         }
         let forced = self.c_force.len();
+        let unfolded = self.c_unfold_key.len();
         let stack = self.vstk.len();
         let m = self.va.mark();
         let r = self.f_conv_top_in(a, b);
@@ -179,6 +180,7 @@ impl Checker {
             } else {
                 self.va.release(m);
                 self.c_force.truncate(forced);
+                self.c_unfold_key.truncate(unfolded);
             }
         }
         r

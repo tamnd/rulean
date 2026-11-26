@@ -415,6 +415,10 @@ pub struct Checker {
     pub(crate) c_conv_success: Memo,
     /// Engine F: the result of `force` of a value at key (value, 0), and of `force_core` at key (value, 1). The bits of `f_bits` that these steps set are at keys (value, 2) and (value, 3). It is cleared together with the arena.
     pub(crate) c_force: Memo,
+    /// Engine F: the hash-consed nodes of the value keys (spec 04.12). A node (a, b) has the key at its entry. It is cleared together with the arena, and a release of a region does not change it, because a key does not contain a value handle.
+    pub(crate) k_nodes: Memo,
+    /// Engine F: the unfolding of a glued value at key (value key, 0), and the bits of `f_bits` that its evaluation set at key (value key, 1) (spec 04.12). It holds value handles, so it is truncated together with `c_force`.
+    pub(crate) c_unfold_key: Memo,
     /// Engine F: `const_never_proof` of a constant at key (constant, 0), 1 for true and 2 for false.
     pub(crate) c_never_proof: Memo,
     /// `instantiate_lparams` of a term of a constant at key (term, levels), where the parameters are the level parameters of the constant (spec 04.8). The iota rule of a recursor and the type of a constant get the same levels many times in one declaration. The table `c_lps_owner` has the slot of the constant at key (term, 0), and a term that two constants share does not use the cache for the second one, because the parameters of the two constants can be different.
@@ -513,6 +517,8 @@ impl Checker {
             c_conv_failure: Memo::new(),
             c_conv_success: Memo::new(),
             c_force: Memo::new(),
+            k_nodes: Memo::new(),
+            c_unfold_key: Memo::new(),
             c_never_proof: Memo::new(),
             c_lps: Memo::new(),
             c_lps_owner: Memo::new(),
@@ -554,6 +560,7 @@ impl Checker {
         self.scope.truncate(0);
         self.clear_caches();
         self.va.reset();
+        self.k_nodes.clear();
         self.fi.reset();
         self.f_under = 0;
         self.f_bits = 0;
@@ -575,6 +582,7 @@ impl Checker {
         self.c_conv_failure.clear();
         self.c_conv_success.clear();
         self.c_force.clear();
+        self.c_unfold_key.clear();
         self.c_never_proof.clear();
         self.c_lps.clear();
         self.c_lps_owner.clear();

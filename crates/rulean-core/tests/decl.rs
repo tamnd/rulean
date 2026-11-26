@@ -733,6 +733,44 @@ fn engine_f_compares_the_type_of_a_lambda_before_read_back() {
     assert_eq!(t.c.f_stats.disagree, 0);
 }
 
+/// Each lambda has its own local in engine F inference. In `fun a b => refl b`, the inner lambda has no loose bound variable, so it is inferred in the root context. Before the fix, it got the local of `a`, and engine F found `P b b` equal to `P a b`.
+#[test]
+fn engine_f_gives_each_lambda_its_own_local() {
+    let mut t = engine_f(false);
+    let (nat, _) = t.nat();
+    // `P : Nat → Nat → Type` and `refl : (n : Nat) → P n n`.
+    let s1 = t.sort(1);
+    let ns = t.pi("m", nat, s1);
+    let pty = t.pi("n", nat, ns);
+    let d = t.axiom("P", &[], pty, Safety::Safe);
+    assert_eq!(t.add(&d), None);
+    let p = t.k("P");
+    let b0 = t.bv(0);
+    let b1 = t.bv(1);
+    let pnn = t.app(p, &[b0, b0]);
+    let rty = t.pi("n", nat, pnn);
+    let d = t.axiom("refl", &[], rty, Safety::Safe);
+    assert_eq!(t.add(&d), None);
+    let refl = t.k("refl");
+    let rb = t.app(refl, &[b0]);
+    let inner = t.lam("b", nat, rb);
+    let v = t.lam("a", nat, inner);
+    // `ok : (a b : Nat) → P b b := fun a b => refl b`.
+    let pbb = t.app(p, &[b0, b0]);
+    let ty_ok_in = t.pi("b", nat, pbb);
+    let ty_ok = t.pi("a", nat, ty_ok_in);
+    let d = t.defn("ok", ty_ok, v, Safety::Safe);
+    assert_eq!(t.add(&Decl::Defn(d)), None);
+    // `bad : (a b : Nat) → P a b := fun a b => refl b`.
+    let pab = t.app(p, &[b1, b0]);
+    let ty_bad_in = t.pi("b", nat, pab);
+    let ty_bad = t.pi("a", nat, ty_bad_in);
+    let d = t.defn("bad", ty_bad, v, Safety::Safe);
+    assert_eq!(t.add(&Decl::Defn(d)), Some(ErrorKind::DefTypeMismatch));
+    assert!(!t.has("bad"));
+    assert_eq!(t.c.f_stats.disagree, 0);
+}
+
 #[test]
 fn engine_f_gives_the_errors_of_engine_r() {
     let mut t = engine_f(false);

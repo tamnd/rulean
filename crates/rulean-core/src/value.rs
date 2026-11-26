@@ -277,10 +277,10 @@ impl Arena {
         Some(self.spines[s.0 as usize].arg)
     }
 
-    /// The arguments of a spine, first argument first.
-    pub fn spine_args(&self, sp: SpineId) -> Vec<ValueId> {
+    /// Pushes the arguments of a spine on the stack `out`, first argument first, and gives the number of arguments. The stack keeps its capacity, so this makes no allocation when the stack has room (spec perf/04.3 A9).
+    pub fn spine_push_args(&self, sp: SpineId, out: &mut Vec<ValueId>) -> usize {
         let len = self.spine_len(sp) as usize;
-        let mut out: Vec<ValueId> = Vec::with_capacity(len);
+        let base = out.len();
         let mut i = 0;
         while i < len {
             out.push(ValueId(0));
@@ -290,11 +290,11 @@ impl Arena {
         let mut k = len;
         while k > 0 {
             let n = self.spines[s.0 as usize];
-            out[k - 1] = n.arg;
+            out[base + k - 1] = n.arg;
             s = n.parent;
             k -= 1;
         }
-        out
+        len
     }
 
     // Unfolding slots.

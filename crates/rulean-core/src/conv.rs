@@ -566,14 +566,19 @@ impl Checker {
         if self.va.spine_len(s1) != self.va.spine_len(s2) {
             return false;
         }
-        let a1 = self.va.spine_args(s1);
-        let a2 = self.va.spine_args(s2);
+        let b1 = self.vstk.len();
+        let n = self.va.spine_push_args(s1, &mut self.vstk);
+        let b2 = self.vstk.len();
+        self.va.spine_push_args(s2, &mut self.vstk);
         let mut ok = true;
         let mut i = 0;
-        while ok && i < a1.len() {
-            ok = self.conv(a1[i], a2[i]);
+        while ok && i < n {
+            let x = self.vstk[b1 + i];
+            let y = self.vstk[b2 + i];
+            ok = self.conv(x, y);
             i += 1;
         }
+        self.vstk.truncate(b1);
         ok
     }
 

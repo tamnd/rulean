@@ -48,6 +48,8 @@ The fix is not a faster hash table. The fix is to not make the terms.
 
 **A9. No allocation in the hot path.** The arena, the stacks and the scratch buffers are vectors that keep their capacity. A spine is a list in the arena. A temporary list of arguments uses a stack in the worker and not a new `Vec`.
 
+Result of A9 for the arguments of a spine on Init, on 2026-11-26 (`rulean check --engine F`, macOS): before, each read of the arguments of a spine made a new `Vec`, which was 114 million vectors with 168 million arguments in total. The arguments now go on the stack `vstk` of the worker, and the function that pushes them removes them before it returns. The run uses 402.3 G instructions in place of 428.3 G, and the counts of the engine report do not change.
+
 **A10. Memory is read in order.** The parser puts the nodes of a term in the order of the input, so the children of a node are before the node. A node has 8 or 12 bytes in a struct of arrays. The arena of values has the same layout. A walk of a term then reads memory mostly forward.
 
 ## 04.4 Values

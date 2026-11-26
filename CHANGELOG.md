@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ### Changed
 
+- Engine F keeps the domain of a binder as a suspended value when the domain is not an atom, so an unfolding that applies a lambda does not evaluate its domain (spec perf/04.3 A5). `Store::node` also inlines its node read. On the Init export, engine F uses 285.9 G instructions in place of 312.8 G, and engine R uses 185.0 G in place of 188.1 G. The answers do not change.
 - The memos of the term walks (`instantiate`, lift, abstract, the occurrence test, level instantiation and term equality) are fixed caches with 2^13 slots, and `mk_app` has a front cache with 2^16 slots (spec perf/04.3). On the Init export, engine R uses 182.4 G instructions in place of 227.0 G, and engine F uses 312.8 G in place of 340.0 G. The answers do not change.
 - Engine F evaluates an application argument that is an application, a projection or a `let` only when a rule reads it (spec perf/04.3 A5). On Init the check uses 340.0 G instructions in place of 343.8 G.
 - The checker keeps the free variable term of each level of the local context, and the read-back of engine F uses it in place of a new intern (spec perf/04.3 A9). On the Init export, engine F uses 342.1 G instructions in place of 348.9 G, and its answers do not change.

@@ -10,6 +10,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - A new value key walks the table of value keys one time, in place of two times (a lookup and then an insert). On Init with `--engine F` and one thread, the run uses 246.1 G instructions in place of 249.4 G.
 - The read-back of engine F (`quote`) keeps the term of each value in a cache for one top-level call, so a value that a term uses at many places is read back once. On Init with `--engine F` and one thread, the run uses 243.5 G instructions in place of 246.1 G.
 - `f_conv_top` uses one cache for the read-back of the two values of a query, so a sub-value that both values share is read back once. On Init with `--engine F` and one thread, the run uses 242.9 G instructions in place of 243.5 G.
+- The table of value keys keeps each key and its number in the slot of the hash table, so a lookup reads one place in memory in place of two. On Init with `--engine F` and one thread, the run uses 236.5 G instructions in place of 242.9 G.
 
 ## [0.8.5] - 2026-11-27
 

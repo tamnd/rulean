@@ -42,6 +42,8 @@ The fix is not a faster hash table. The fix is to not make the terms.
 
 **A6. Equality uses sharing first.** Two values that come from the same term in the same environment are equal at once. Two values that come from a closed term (no loose bound variables) are equal if the terms are the same handle. A value keeps the handle of its term while it is a closure, so this test costs one comparison. This keeps the speed of the official kernel on deep shared terms (smalltt TreeConv, 02.7).
 
+A cache of the value of each closed term is not a good form of A6. On Init, on 2026-11-26, `eval` ran 806 million times, and 102 million of these were on closed terms that are not a leaf. A cache of these values in `eval` gave 408.3 G instructions in place of 402.3 G, and a cache of only the bodies of definitions and the right sides of recursor rules gave 405.3 G. The cost of the lookups was more than the work that the hits saved. A6 must use the handle in the value, as above, and not a table.
+
 **A7. Each value keeps its weak head form.** A glued value keeps the folded form and the unfolded form. A second `whnf` of the same value reads the slot and does no work.
 
 **A8. Work across declarations stays.** The type of a constant becomes a value once for each list of levels, and the session keeps it (spec 08.4). The inferred type of a closed term stays in the session. The stamp rule of spec 08.4 applies to each entry.

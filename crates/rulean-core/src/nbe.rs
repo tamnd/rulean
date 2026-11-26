@@ -591,12 +591,10 @@ impl Checker {
         if nfields > mn {
             return None;
         }
-        let ls = self.st.level_list_vec(us);
-        let lps = self.const_lparams(slot);
-        if ls.len() != lps.len() {
+        if self.st.level_list_items(us).len() != self.env.at(slot).lparams.len() {
             return None;
         }
-        let rhs = expr::instantiate_lparams(&mut self.st, &mut self.x, rule.rhs, &lps, &ls);
+        let rhs = self.inst_lps_cached(slot, rule.rhs, us);
         let at = self.dummy;
         let mut f = self.eval(EnvId::NIL, rhs);
         let mut i = 0;

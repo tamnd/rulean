@@ -7,6 +7,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 ### Changed
 
 - In lazy delta, engine F unfolds both sides of the same regular head before it compares the arguments, and two unfoldings of the same form are equal (row O12 of spec 05.7.3). A `Nat` operation is not unfolded first, because the `Nat` extension evaluates its arguments. On `perf/short-circuit-and`, engine F accepts all checks with 1.07 G instructions in place of 77.3 G, because `false && a` and `false && b` both unfold to `false`, and the open terms `a` and `b` are not compared. On `perf/discarded-argument` and `perf/discarded-argument-match`, engine F uses 0.03 G in place of 0.46 G and 0.84 G. On the Init export, engine F accepts 115,254 checks in place of 115,262, the steps are 697.7 million in place of 691.3 million, and engine R confirms 12,955 equalities in place of 12,995.
+- Engine F sets a mark in its value arena at the start of each top query of conversion (spec perf/04.3 A4). When the arena is more than half full, the end of the query removes the nodes made after the mark, empties the older slots that got such a node, and removes the new entries of `c_force`. The regions of one declaration can remove at most 2^18 values. On the Init export, the checks of engine F that stop on a full arena went from 617 to 349, and engine F used 309.8 G instructions in place of 308.3 G.
 
 ## [0.8.1] - 2026-11-26
 

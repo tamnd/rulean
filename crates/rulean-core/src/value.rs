@@ -40,6 +40,9 @@ impl SpineId {
 /// The limit is a budget for engine F on one declaration. When engine F fills the arena, the work that it did is lost, and engine R does the query again. A larger limit lets engine F waste more work on a declaration that it cannot finish. On the 42 Arena perf tests, the total count of instructions was 1537 G with 2^22, 1348 G with 2^20 and 1326 G with 2^18. The test `grind-ring-5` went from 121 G to 28 G, and `gf3-matrix-product` went from 49 G with 2^20 to 68 G with 2^18. A reset of the arena at each query was worse: `grind-ring-5` took 698 G with 2^22.
 pub const MAX_NODES: u32 = 1 << 18;
 
+/// The number of values that the regions of one declaration can remove (spec perf/04.3 A4). After that, the arena fills as without regions, and engine R checks the declaration.
+pub const FREE_BUDGET: usize = 1 << 18;
+
 /// The bound of the inline `Nat` numbers of `Value::Small`: 2^63. The sum of two inline numbers fits in a `u64`.
 pub const SMALL_NAT_LIMIT: u64 = 1 << 63;
 
@@ -124,6 +127,14 @@ pub struct Arena {
     /// The bits of `f_bits` that the evaluation of a suspended argument set, one entry for each slot. A read of a filled slot sets them again.
     sbits: Vec<u8>,
     full: bool,
+    /// True between `mark` and `release` or `unmark`.
+    marked: bool,
+    /// The number of slots at the mark. A slot below this number that gets a value is put in `log`.
+    floor: usize,
+    /// The slots older than the mark that got a value after the mark (spec perf/04.3 A4).
+    log: Vec<u32>,
+    /// The number of values that `release` removed since the last `reset`.
+    freed: usize,
 }
 
 impl Arena {
@@ -136,6 +147,10 @@ impl Arena {
             slots: Vec::new(),
             sbits: Vec::new(),
             full: false,
+            marked: false,
+            floor: 0,
+            log: Vec::new(),
+            freed: 0,
         }
     }
 
@@ -171,6 +186,62 @@ impl Arena {
         self.slots.truncate(0);
         self.sbits.truncate(0);
         self.full = false;
+        self.marked = false;
+        self.log.truncate(0);
+        self.freed = 0;
+    }
+
+    /// Starts a region and gives its mark, or `None` if a region is open already. The nodes made after the mark can be removed with `release` (spec perf/04.3 A4).
+    pub fn mark(&mut self) -> Option<Counts> {
+        if self.marked || self.full {
+            return None;
+        }
+        self.marked = true;
+        self.floor = self.slots.len();
+        self.log.truncate(0);
+        Some(self.counts())
+    }
+
+    /// True if an array of the arena has more than half of `MAX_NODES` nodes. Then a region is released, and else it is kept for its caches.
+    pub fn crowded(&self) -> bool {
+        let half = (MAX_NODES / 2) as usize;
+        if self.freed >= FREE_BUDGET {
+            return false;
+        }
+        self.values.len() > half
+            || self.envs.len() > half
+            || self.spines.len() > half
+            || self.slots.len() > half
+    }
+
+    /// Closes the region and keeps its nodes.
+    pub fn unmark(&mut self) {
+        self.marked = false;
+        self.log.truncate(0);
+    }
+
+    /// Closes the region and removes the nodes made after the mark `m`. The caller must hold no handle to these nodes. An older slot that got a value of the region becomes empty again, because a slot is a cache of an evaluation. An older slot that got an older value keeps it.
+    pub fn release(&mut self, m: Counts) {
+        let n = self.log.len();
+        let mut i = 0;
+        while i < n {
+            let s = self.log[i] as usize;
+            if let Some(v) = self.slots[s] {
+                if v.0 as usize >= m.values {
+                    self.slots[s] = None;
+                    self.sbits[s] = 0;
+                }
+            }
+            i += 1;
+        }
+        self.freed += self.values.len() - m.values;
+        self.values.truncate(m.values);
+        self.envs.truncate(m.envs);
+        self.spines.truncate(m.spines);
+        self.slots.truncate(m.slots);
+        self.sbits.truncate(m.slots);
+        self.full = false;
+        self.unmark();
     }
 
     /// The index of the next node of an array of length `len`. At the limit it marks the arena full.
@@ -358,6 +429,9 @@ impl Arena {
             Some(_) => false,
             None => {
                 self.slots[i] = Some(v);
+                if self.marked && i < self.floor {
+                    self.log.push(i as u32);
+                }
                 true
             }
         }

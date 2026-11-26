@@ -188,3 +188,54 @@ fn a_suspended_argument_has_an_empty_slot_with_no_bits() {
     a.reset();
     assert_eq!(a.counts(), Counts::default());
 }
+
+#[test]
+fn a_release_removes_the_nodes_of_the_region() {
+    let mut a = Arena::new();
+    let s = sort(&mut a, 0);
+    let before = a.counts();
+    let m = a.mark().expect("no region is open");
+    assert!(a.mark().is_none());
+    let t = sort(&mut a, 1);
+    let sp = a.spine_push(SpineId::NIL, t);
+    a.alloc(Value::Neu(Head::FVar(0, s), sp));
+    a.release(m);
+    assert_eq!(a.counts(), before);
+    assert_eq!(a.get(s), Value::Sort(LevelId(0)));
+    assert!(a.mark().is_some());
+}
+
+#[test]
+fn a_release_empties_an_old_slot_that_got_a_new_value() {
+    let mut a = Arena::new();
+    let old = a.glued(NameId(1), LevelListId(0));
+    let kept = a.glued(NameId(2), LevelListId(0));
+    let s0 = sort(&mut a, 0);
+    let slot = |a: &Arena, v: ValueId| match a.get(v) {
+        Value::Glued(_, _, _, s) => s,
+        _ => panic!("not glued"),
+    };
+    let so = slot(&a, old);
+    let sk = slot(&a, kept);
+    let m = a.mark().expect("no region is open");
+    let t = sort(&mut a, 1);
+    assert!(a.slot_set(so, t));
+    a.slot_set_bits(so, 3);
+    assert!(a.slot_set(sk, s0));
+    a.release(m);
+    assert_eq!(a.slot_get(so), None);
+    assert_eq!(a.slot_bits(so), 0);
+    assert_eq!(a.slot_get(sk), Some(s0));
+}
+
+#[test]
+fn an_unmark_keeps_the_nodes_of_the_region() {
+    let mut a = Arena::new();
+    sort(&mut a, 0);
+    a.mark().expect("no region is open");
+    sort(&mut a, 1);
+    let after = a.counts();
+    a.unmark();
+    assert_eq!(a.counts(), after);
+    assert!(a.mark().is_some());
+}

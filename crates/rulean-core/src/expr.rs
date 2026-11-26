@@ -557,6 +557,22 @@ pub fn reverse(v: &mut [ExprId]) {
     }
 }
 
+/// `app_rev_args` that keeps the entries of `out` and pushes the arguments after them, last argument first. The head is the result.
+pub fn app_rev_args_push(st: &Store, e: ExprId, out: &mut Vec<ExprId>) -> ExprId {
+    let mut cur = e;
+    let mut walking = true;
+    while walking {
+        match st.node(cur) {
+            Expr::App(f, a) => {
+                out.push(a);
+                cur = f;
+            }
+            _ => walking = false,
+        }
+    }
+    cur
+}
+
 /// The application of `f` to the arguments in reverse order: `f rev[n-1] ... rev[0]` (`mk_rev_app`).
 pub fn mk_rev_app(st: &mut Store, f: ExprId, rev: &[ExprId]) -> ExprId {
     let mut r = f;

@@ -599,14 +599,16 @@ impl Checker {
 
     /// The application case of `whnf_core`: beta reduction, then the recursors.
     fn whnf_core_app(&mut self, e: ExprId, cheap_rec: bool, cheap_proj: bool) -> (ExprId, bool) {
-        let mut rev: Vec<ExprId> = Vec::new();
-        let f0 = expr::app_rev_args(&self.st, e, &mut rev);
+        // The arguments go on the stack `estk`, which keeps its capacity, so this makes no allocation (spec perf/04.3 A9). The recursive call on the head can use the stack above `base`, and each path removes its arguments before the last call.
+        let base = self.estk.len();
+        let f0 = expr::app_rev_args_push(&self.st, e, &mut self.estk);
         let f = self.whnf_core(f0, cheap_rec, cheap_proj);
         if self.bad() {
+            self.estk.truncate(base);
             return (self.dummy, false);
         }
         if self.is_lambda(f) {
-            let num_args = rev.len();
+            let num_args = self.estk.len() - base;
             let mut g = f;
             let mut m = 1;
             let mut walking = true;
@@ -620,16 +622,20 @@ impl Checker {
                 }
             }
             let (_, body) = self.binding(g);
-            let inst = expr::instantiate(&mut self.st, &mut self.x, body, &rev[num_args - m..]);
-            let r = expr::mk_rev_app(&mut self.st, inst, &rev[..num_args - m]);
+            let split = base + num_args - m;
+            let inst = expr::instantiate(&mut self.st, &mut self.x, body, &self.estk[split..]);
+            let r = expr::mk_rev_app(&mut self.st, inst, &self.estk[base..split]);
+            self.estk.truncate(base);
             (self.whnf_core(r, cheap_rec, cheap_proj), true)
         } else if self.eq(f, f0) {
+            self.estk.truncate(base);
             match self.reduce_recursor(e, cheap_rec, cheap_proj) {
                 Some(r) => (self.whnf_core(r, cheap_rec, cheap_proj), false),
                 None => (e, false),
             }
         } else {
-            let r = expr::mk_rev_app(&mut self.st, f, &rev);
+            let r = expr::mk_rev_app(&mut self.st, f, &self.estk[base..]);
+            self.estk.truncate(base);
             (self.whnf_core(r, cheap_rec, cheap_proj), true)
         }
     }
@@ -675,8 +681,7 @@ impl Checker {
             return None;
         }
         self.note_head(Rule::Delta, e);
-        let ls = self.st.level_list_vec(list);
-        if ls.len() > 0 {
+        if list != LevelListId(0) {
             if let Some(r) = self.c_unfold.get(e.0, 0) {
                 return Some(ExprId(r));
             }
@@ -687,6 +692,8 @@ impl Checker {
                     return Some(ExprId(r));
                 }
             }
+            // The levels are read only on a miss of both caches, because `level_list_vec` makes a new vector (spec perf/04.3 A9).
+            let ls = self.st.level_list_vec(list);
             let r = self.instantiate_value_lparams(d, &ls);
             self.c_unfold.put(e.0, 0, r.0);
             if key && !self.bad() {
@@ -694,7 +701,7 @@ impl Checker {
             }
             Some(r)
         } else {
-            Some(self.instantiate_value_lparams(d, &ls))
+            Some(self.instantiate_value_lparams(d, &[]))
         }
     }
 

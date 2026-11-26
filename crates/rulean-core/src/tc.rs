@@ -360,6 +360,8 @@ pub struct Checker {
     pub(crate) va: Arena,
     /// A stack of the arguments of spines (spec perf/04.3 A9). A function that reads the arguments of a spine pushes them here and removes them before it returns, so the functions that it calls can push more arguments above them. This replaces a new `Vec` for each spine.
     pub(crate) vstk: Vec<ValueId>,
+    /// A stack of the arguments of applications in `whnf_core` of engine R, used in the same way as `vstk` (spec perf/04.3 A9).
+    pub(crate) estk: Vec<ExprId>,
     /// The contexts and caches of engine F inference. They are cleared together with the arena.
     pub(crate) fi: FInfer,
     /// The number of binders that `quote` of engine F has opened. Their free variables are not in the local context.
@@ -478,6 +480,7 @@ impl Checker {
             x: Scratch::new(),
             va: Arena::new(),
             vstk: Vec::new(),
+            estk: Vec::new(),
             fi: FInfer::new(),
             f_under: 0,
             engine: Engine::R,

@@ -86,6 +86,10 @@ impl Checker {
 
     /// `is_def_eq` on two level lists: the same length and equivalent items.
     pub(crate) fn is_def_eq_levels(&mut self, a: LevelListId, b: LevelListId) -> bool {
+        // The same handle is the same list, and the check needs no copy of the levels (spec perf/04.3 A9).
+        if a == b {
+            return true;
+        }
         let la = self.st.level_list_vec(a);
         let lb = self.st.level_list_vec(b);
         level::is_equivalent_list(&mut self.st, &mut self.lc, &la, &lb)

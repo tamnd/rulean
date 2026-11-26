@@ -6,7 +6,7 @@
 //!
 //! A binder node has a free variable in the local context, with the level of the next free variable. The local context only grows during a declaration, so the levels of the nodes stay valid. A `let` node keeps the value in the environment and has no free variable. A literal and a free variable get their type in engine F. A projection does too. For a structure in `Prop`, engine R decides `is_prop` of each field type as one query on its read-back. A projection whose type has a form that engine F does not read goes to engine R, on the term with the free variables of the nodes in place of its loose bound variables. A `let` node gets its free variable only when engine R needs it.
 //!
-//! The result of inference is a value. A lambda gets a pi type whose body is the read-back of the type of its body (spec 05.4.3).
+//! The result of inference is a value. A lambda gets the type `Value::PiOpen`, which keeps the type of its body as a value under the local of the lambda (spec perf/04.5). `conv` compares it with a pi type under that local. Each other read of the type reads the body type back once into the body of a closure (spec 05.4.3).
 //!
 //! Engine F tries the value check of a declaration first. Each check of an argument type, a `let` value type and the declared type is a `conv` query of engine F. If a query is "not equal", or if it needs engine R to confirm it (spec 05.1), engine R decides that query on the read-back terms, and engine F continues if engine R gives "equal" (spec perf/04.3 A2). If engine R gives "not equal", or if engine F stops with a fault, the fault is removed and engine R checks the declaration again from the start. So a reject needs engine R (spec 05.1, rule 2).
 
@@ -18,7 +18,7 @@ use crate::conv::{Engine, F_DELTA, F_TYPED};
 use crate::level;
 use crate::memo::Memo;
 use crate::tc::{Checker, ErrorKind};
-use crate::value::{Closure, EnvId, Head, Value, ValueId};
+use crate::value::{EnvId, Head, Value, ValueId};
 
 /// The root context: no entries.
 const ROOT: u32 = 0;
@@ -419,19 +419,16 @@ impl Checker {
                 if self.bad() {
                     return self.v_dummy();
                 }
-                let lvl = match self.fi.nodes[c2 as usize].fvar {
-                    Some(fv) => match self.st.node(fv) {
-                        Expr::FVar(l, _) => l,
-                        _ => return self.f_stop(e),
-                    },
+                // The local of the lambda is the top of the environment of `c2`. The type keeps `bt` under it, and the read-back of `bt` comes only at a read that needs a closure (spec perf/04.5).
+                let x = match self.va.env_get(self.fi.nodes[c2 as usize].env, 0) {
+                    Some(x) => x,
                     None => return self.f_stop(e),
                 };
-                let body = self.quote(lvl, lvl + 1, bt);
-                let clo = Closure {
-                    env: EnvId::NIL,
-                    body,
-                };
-                self.v_alloc(Value::Pi(b.name, b.info, dv, clo))
+                let r = self.va.pi_open(b.name, b.info, x, bt);
+                if self.va.full() {
+                    self.fail(ErrorKind::ArenaFull, e);
+                }
+                r
             }
             Expr::Pi(b) => {
                 let s1 = self.f_infer(c, b.dom, infer_only);

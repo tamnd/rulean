@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- Engine F inference gives a lambda a pi type that keeps the type of the body as a value under the local of the lambda, and `conv` compares it with a pi type under that local, with no read-back and no new local (spec perf/04.5). Each other read of the type reads the body back once, as before. On the Init export, engine F uses 284.8 G instructions in place of 298.8 G, and accepts 115,537 checks in place of 115,522.
+
 ## [0.8.2] - 2026-11-26
 
 ### Added

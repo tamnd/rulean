@@ -92,6 +92,8 @@ pub enum Value {
     Glued(NameId, LevelListId, SpineId, SlotId),
     /// An argument that is not evaluated yet: the environment, the term and a slot for its value (spec perf/04.3 A5). The first read evaluates the term and puts the value in the slot, so the term is evaluated at most once. A value of this form is never in weak head normal form: each read of the form of a value goes through `Checker::vget`, which evaluates it first.
     Susp(EnvId, ExprId, SlotId),
+    /// The type of a lambda that engine F inference made, before its read-back (spec perf/04.5): the binder name and information, the local `x` of the lambda as a neutral value `FVar(l, d)`, the type of the body as a value under `x`, and a slot for the pi value with a closure. `conv` compares it with a pi type under `x` and makes no new local and no read-back. Each other read goes through `Checker::vget`, which reads the body type back once, as before this form, and keeps the pi value in the slot. So a value of this form is never in weak head normal form either.
+    PiOpen(NameId, BinderInfo, ValueId, ValueId, SlotId),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -448,6 +450,12 @@ impl Arena {
     pub fn susp(&mut self, env: EnvId, e: ExprId) -> ValueId {
         let s = self.slot_new();
         self.alloc(Value::Susp(env, e, s))
+    }
+
+    /// The type of a lambda with the local `x` and the body type `bt`, with an empty slot (see `Value::PiOpen`).
+    pub fn pi_open(&mut self, name: NameId, info: BinderInfo, x: ValueId, bt: ValueId) -> ValueId {
+        let s = self.slot_new();
+        self.alloc(Value::PiOpen(name, info, x, bt, s))
     }
 
     /// A glued value with no arguments and an empty slot.

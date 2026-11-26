@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ### Changed
 
+- Engine F reduces the structure of a projection without delta when a delta step of conversion evaluates the projection, as `whnf_core` with cheap projections in the official kernel, and conversion compares two projections by their structures before it unfolds them (spec 05.4.2 and row O9 of 05.7.3). On `perf/proj-applied-struct`, engine F used to fill its arena, and the test now uses 0.046 G instructions in place of 86 G. On the Init export, the steps change by less than 1 percent, and engine F accepts 115,258 checks in place of 115,257.
 - The `Nat` extension of engine F reads the literals of the argument values and makes no term for the application (spec perf/04.8). On the Init export, engine F uses 279.3 G instructions in place of 282.7 G. The answers do not change.
 - Lazy delta in engine F unfolds the side with the smaller height first when that side has the other side as an argument, as in `ite c a b =?= a` (row O8 of spec 05.7.3). On `perf/ite-taken-branch`, engine F used to fill its arena, and the test now uses 1.39 G instructions in place of 87.7 G. Row O8 has no twin lemma yet.
 - Engine F checks an argument of the form `eagerReduce _ _` and does not give the declaration to engine R. The hint sets the eager mode of engine R for the query, which engine R uses if it confirms the answer.

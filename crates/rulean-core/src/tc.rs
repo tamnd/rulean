@@ -362,6 +362,8 @@ pub struct Checker {
     pub f_stats: FStats,
     /// The rules that the current engine F query used, as the bits `F_DELTA` and `F_TYPED`.
     pub(crate) f_bits: u32,
+    /// True while a delta step of the conversion of engine F evaluates an unfolding. Then `eval` reduces the structure of a projection without delta, as `whnf_core` with cheap projections in the official kernel. `force` sets it to false for its own steps.
+    pub(crate) cheap_proj: bool,
     /// The number of open definitional equality queries. Engine F answers only a query that is not inside another query.
     pub(crate) eq_depth: u32,
     /// `rulean explain`: write the rules that the checker applies into `trace`.
@@ -472,6 +474,7 @@ impl Checker {
             confirm_all: false,
             f_stats: FStats::default(),
             f_bits: 0,
+            cheap_proj: false,
             eq_depth: 0,
             trace_on: false,
             trace: Trace::new(),

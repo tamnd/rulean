@@ -1,7 +1,7 @@
 //! Tests of definitional equality of engine F (spec 05.4.4) and of the way engine F and engine R share a query (spec 05.1). Each test builds a small environment by hand.
 
 use rulean_core::conv::Engine;
-use rulean_core::env::{ConstInfo, ConstKind};
+use rulean_core::env::{ConstInfo, ConstKind, CtorInfo, InductInfo};
 use rulean_core::tc::Checker;
 use rulean_core::trace::Rule;
 use rulean_format::{Hints, Safety};
@@ -315,4 +315,55 @@ fn a_taken_branch_is_unfolded_before_the_other_side() {
     assert_eq!(t.c.trace.counts[Rule::Delta.index()], 1);
     let s = t.c.f_stats;
     assert_eq!((s.queries, s.equal, s.fallback), (1, 1, 0));
+}
+
+#[test]
+fn two_projections_compare_the_structures_before_they_unfold_them() {
+    let mut t = T::new();
+    let l = t.c.st.level_zero();
+    let l1 = t.c.st.level_succ(l);
+    let s1 = t.c.st.mk_sort(l1);
+    let pr_n = t.name("Pr");
+    let mk_n = t.name("Pr.mk");
+    let induct = InductInfo {
+        nparams: 0,
+        nindices: 0,
+        all: vec![pr_n],
+        ctors: vec![mk_n],
+        nnested: 0,
+        is_rec: false,
+        is_reflexive: false,
+    };
+    t.add("Pr", s1, ConstKind::Induct(induct));
+    let pr = t.k("Pr");
+    let inner = t.pi("b", t.a_ty, pr);
+    let mk_ty = t.pi("a", t.a_ty, inner);
+    let ctor = CtorInfo {
+        induct: pr_n,
+        cidx: 0,
+        nparams: 0,
+        nfields: 2,
+    };
+    t.add("Pr.mk", mk_ty, ConstKind::Ctor(ctor));
+    let x = t.axiom("x", t.a_ty);
+    let y = t.axiom("y", t.a_ty);
+    let mk = t.k("Pr.mk");
+    let v = t.app(mk, &[x, y]);
+    let g = t.def("g", pr, v, 1);
+    let g2 = t.def("g2", pr, g, 2);
+    // The projections are behind the definitions `h1` and `h2`, so they come from a delta step of the conversion. The structures `g` and `g2` are equal after one delta step on `g2`. The structure of a projection is not unfolded before the two structures are compared, as with the cheap projections of the official kernel. So the query unfolds `h1`, `h2` and `g2`, and not `g`.
+    let p1 = t.c.st.mk_proj(pr_n, 0, g);
+    let p2 = t.c.st.mk_proj(pr_n, 0, g2);
+    let h1 = t.def("h1", t.a_ty, p1, 3);
+    let h2 = t.def("h2", t.a_ty, p2, 3);
+    t.c.trace_on = true;
+    assert!(t.eq(h1, h2));
+    assert_eq!(t.c.trace.counts[Rule::Delta.index()], 3);
+    let s = t.c.f_stats;
+    assert_eq!((s.queries, s.equal, s.fallback), (1, 1, 0));
+    // A projection of a structure behind a definition still reduces when the two sides are not equal by their structures.
+    let p3 = t.c.st.mk_proj(pr_n, 0, g2);
+    assert!(t.eq(p3, x));
+    let p4 = t.c.st.mk_proj(pr_n, 1, g2);
+    assert!(!t.eq(p4, x));
 }

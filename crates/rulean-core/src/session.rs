@@ -400,6 +400,7 @@ impl Checker {
         while i < self.lctx_ty.len() {
             let t = self.lctx_ty[i];
             self.lctx_ty[i] = self.keep(t, &mut map, &mut budget);
+            self.lctx_fv[i] = self.st.mk_fvar(i as u32, self.lctx_ty[i]);
             if let Some(v) = self.lctx_val[i] {
                 self.lctx_val[i] = Some(self.keep(v, &mut map, &mut budget));
             }

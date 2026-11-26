@@ -712,8 +712,7 @@ impl Checker {
         match h {
             Head::FVar(lvl, _) => {
                 if lvl < base {
-                    let ty = self.lctx_ty[lvl as usize];
-                    self.st.mk_fvar(lvl, ty)
+                    self.lctx_fv[lvl as usize]
                 } else if lvl < k {
                     self.st.mk_bvar(k - 1 - lvl)
                 } else if lvl >= expr::FAR_FVAR {

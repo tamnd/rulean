@@ -45,6 +45,8 @@ pub struct Report {
     pub steps: u64,
     /// The calls of `intern_expr` of the store, with the parse. With `--threads`, this is the sum over the stores of the workers.
     pub interns: u64,
+    /// The counts of the walks of the expression tables of the store, with the parse (spec perf/05.5). With `--threads`, this is the sum over the stores.
+    pub probes: rulean_store::ProbeStats,
 }
 
 /// The number of declarations in `slowest`.
@@ -123,6 +125,11 @@ pub fn json(r: &Report) -> String {
         r.wall_ms,
         r.steps,
         r.interns
+    ));
+    let p = &r.probes;
+    s.push_str(&format!(
+        "  \"probes\": {{ \"walks\": {}, \"slots\": {}, \"compares\": {}, \"hits\": {} }},\n",
+        p.walks, p.slots, p.compares, p.hits
     ));
     s.push_str(&format!("  \"quarantine\": {},\n", list(&r.quarantine)));
     s.push_str(&format!("  \"pin_mismatch\": {},\n", list(&r.pin_mismatch)));

@@ -413,6 +413,7 @@ fn check_sequential(o: &Options, c: &mut Checker, ds: &[Decl], rep: &mut Report)
     rep.f_stats = c.f_stats;
     rep.steps = c.steps;
     rep.interns = c.st.interns();
+    rep.probes = c.st.probe_stats();
     rep.s_stats = c.sess.stats;
     rep.s_entries = c.sess.len();
     if c.st.is_full() {
@@ -540,6 +541,13 @@ fn check_parallel(o: &Options, c: &mut Checker, ds: &[Decl], rep: &mut Report) {
     rep.f_stats = out.f_stats;
     rep.steps = c.steps + out.steps;
     rep.interns = c.st.interns() + out.interns;
+    let (a, b) = (c.st.probe_stats(), out.probes);
+    rep.probes = rulean_store::ProbeStats {
+        walks: a.walks + b.walks,
+        slots: a.slots + b.slots,
+        compares: a.compares + b.compares,
+        hits: a.hits + b.hits,
+    };
     rep.s_stats = out.s_stats;
     rep.s_entries = out.s_entries as usize;
     if out.full || c.st.is_full() {

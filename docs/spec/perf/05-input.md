@@ -47,20 +47,15 @@ The id of each kind (`ie`, `in`, `il`) goes up by one from line to line in each 
 
 The input nodes are already shared by lean4export: two equal nodes have one id in most cases [U]. The parse still interns each node, because the store needs one handle for each distinct term (spec 04.2).
 
-The cost of the probe today is about 1300 instructions for each line (30.5% of 28.1 G, for 6.5 M lines). One step of the walk costs about 15 instructions. So the walk is long, or the comparison of a node is expensive [U]. The first work item is to count the steps of the walk and the comparisons of each probe, on Init. The possible causes are:
+The report has the counts of the walks of the expression tables (`probes` in the JSON report). On Init, on 2026-11-26:
 
-- **Clustering.** The table uses linear probing at a load of at most 1/2. A bad mix of the hashes makes long runs of full slots.
-- **Equal hashes.** The hash does not mix the binder name or the binder info (spec 04.2.3). So two binders that differ only in the name have the same hash, and the walk compares each of them in full.
-- **Comparison of a node.** `Nodes::get` makes a full `Expr` and the comparison reads the arrays of another kind.
+| Run | Walks | Slots read | Full compares | Hits |
+|---|---|---|---|---|
+| `rulean check --engine R` | 218683678 | 253078632 | 113477406 | 110761375 |
 
-The fix depends on the count. The candidates are:
+So a walk reads 1.16 slots on average, and only 2.7 M full compares do not find the node. The table does not cluster, and equal hashes are rare. The probe is in the time profile of 03.3 because each walk reads a random slot of a large table, and this read often misses the cache. The Arena counts instructions, not cycles. So a change of the table does not give a large gain on the Arena measure. The instructions of the parse are in the scan of JSON (05.3). The parse of Init uses 27.97 G instructions and 9.03 G cycles, which is 3.1 instructions in each cycle.
 
-1. Compare the side record (hash and flags) before the node, and keep the kind in the slot, so most failed comparisons read only the slot.
-2. Mix the binder name into the hash of the table, and keep the hash without the name for alpha-equivalence.
-3. Store the nodes of one kind in one array of 8 or 12 bytes, so a comparison reads one cache line.
-4. Prefetch the slot for the next line, because the hash of a line depends only on its children.
-
-Each candidate is a separate PR with a count before and after.
+A change of the table is still useful for the wall time (G5). The candidates are a prefetch of the slot for the next line, and nodes of one kind in one array of 8 or 12 bytes. These are not in M8.
 
 ## 05.6 Read and hash
 

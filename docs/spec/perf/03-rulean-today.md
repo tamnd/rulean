@@ -31,7 +31,7 @@ Results:
 
 ## 03.3 Profiles
 
-The profiles come from `sample` on macOS, with the samples grouped by the function at the top of the stack (`/tmp` script `topgroup.py`, 07.3).
+The profiles come from `sample` on macOS, with the samples grouped by the function at the top of the stack. A sample is a point in time, so these shares are shares of the cycles and not of the instructions. A function that waits for memory, such as the probe of the intern table, has a larger share of the cycles than of the instructions (05.5). The instruction profiles come from the workflow `profile` with cachegrind.
 
 **Engine F on Init** (23050 samples):
 
@@ -78,20 +78,22 @@ From `rulean check --engine f --report` on Init:
 
 | Counter | Value | Meaning |
 |---|---|---|
-| `f_queries` | 44159 | conversion queries that engine F started |
+| `f_queries` | 44159 | queries of the engine R paths that engine F tried first |
 | `f_equal` | 42855 | queries where engine F said "equal" |
 | `f_fallback` | 1270 | queries where engine F said "not equal" and engine R decided |
 | `f_faults` | 34 | queries where engine F stopped, for example on a full arena |
 | `r_confirmed` | 13205 | "equal" answers that engine R confirmed |
 | `r_disagree` | 0 | answers where engine R did not agree |
-| `f_infer` | 115872 | inference calls of finfer |
-| `f_infer_ok` | 114129 | inference calls that finfer finished |
-| steps | 969540284 | reduction steps |
-| interns | 358402697 | calls to intern a term |
+| `f_infer` | 115872 | type checks and value checks of declarations that finfer tried |
+| `f_infer_ok` | 114129 | type checks and value checks that finfer accepted |
+| steps | 969540284 | calls of `enter`, with each step of `eval` |
+| interns | 358402697 | calls of `intern_expr` |
 | session hits | 881010 | |
 | session entries | 71226 | |
 
-Today a "not equal" answer, a fault or a confirmation makes engine R check the whole declaration again (the header of `finfer.rs`). So 14509 queries (32.9% of all queries) cause a full check with engine R. This is why engine F costs more than engine R. Also, finfer makes 358 M interns, which is about 6100 for each declaration. So engine F still makes terms, against principle A1 of 04.
+In finfer, a "not equal" answer or a fault makes engine R check the whole declaration again (the header of `finfer.rs`). This happened for 1743 of the 115872 checks (1.5%). A confirmation runs engine R on one query, on the terms that engine F reads back, and engine F then continues. So the fallback to engine R is not the main cost of engine F.
+
+The main cost is the work of engine F itself. With engine R, the same export has 56396829 steps and 200900317 interns. Engine F has 17 times the steps and 1.8 times the interns. A step of engine F is not the same unit as a step of engine R, because `eval` calls `enter` for each node that it evaluates [U for the ratio of the work]. But the count shows that engine F evaluates much more than engine R needs. Engine F evaluates each argument when it evaluates an application, and it reads values back into terms for the confirmations and for the types of lambdas. Principles A1, A5 and A7 of 04 are for this cost.
 
 ## 03.5 The Arena `perf/` tests
 
@@ -148,6 +150,6 @@ The in-process kernel uses engine R. A check runs in passes (`add_decl` in `rule
 The causes are:
 
 1. The check makes and interns new terms. More than half of the samples of engine F are intern, substitution, node reads and `malloc`.
-2. Engine F gives the whole declaration to engine R on a third of its queries.
+2. Engine F evaluates much more than the check needs (17 times the steps of engine R), and it still makes terms (1.8 times the interns of engine R).
 3. The parse reads each byte in a general JSON scanner, with about 4300 instructions for each line.
 4. In-process, a lookup that misses or is stale, or a pass at its limit, causes a full check again.

@@ -283,20 +283,40 @@ fn has_scratch_field(node: Expr) -> bool {
     }
 }
 
-/// The walk for a node in the table of one tier. The result is (found, value, position): the value is the handle if found is true, and the position is the free slot where the walk stopped if found is false.
-fn probe(nodes: &Nodes, node: Expr, h: u32) -> (bool, Raw, usize) {
+/// The counts of the walks of `probe` (spec perf/05.5).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProbeStats {
+    /// The calls of `probe`.
+    pub walks: u64,
+    /// The slots that the walks read, with the last slot of each walk.
+    pub slots: u64,
+    /// The comparisons of a full node, after the hash and the kind of a slot matched.
+    pub compares: u64,
+    /// The walks that found the node.
+    pub hits: u64,
+}
+
+/// The walk for a node in the table of one tier. The result is (found, value, position): the value is the handle if found is true, and the position is the free slot where the walk stopped if found is false. The walk adds its counts to `stats`.
+fn probe(nodes: &Nodes, node: Expr, h: u32, stats: &mut ProbeStats) -> (bool, Raw, usize) {
     let kind = node.kind();
     let mut pos = nodes.table.start(h);
     // `ExprId(0)` is a valid handle (bound variable node 0), so a flag says if the walk found the node.
     let mut hit = false;
     let mut found: Raw = 0;
     let mut walking = true;
+    let mut slots: u64 = 0;
+    let mut compares: u64 = 0;
     while walking {
+        slots += 1;
         match nodes.table.get(pos) {
             Probe::Free => walking = false,
             Probe::Full(hh, v) => {
                 let id = ExprId(v);
-                if hh == h && id.kind() == kind && nodes.get(kind, id.index()) == node {
+                let same_hash = hh == h && id.kind() == kind;
+                if same_hash {
+                    compares += 1;
+                }
+                if same_hash && nodes.get(kind, id.index()) == node {
                     hit = true;
                     found = v;
                     walking = false;
@@ -305,6 +325,12 @@ fn probe(nodes: &Nodes, node: Expr, h: u32) -> (bool, Raw, usize) {
                 }
             }
         }
+    }
+    stats.walks += 1;
+    stats.slots += slots;
+    stats.compares += compares;
+    if hit {
+        stats.hits += 1;
     }
     (hit, found, pos)
 }
@@ -456,7 +482,7 @@ impl Store {
         let scratch_field = has_scratch_field(node);
         let mut fpos: usize = 0;
         if !scratch_field {
-            let (hit, found, pos) = probe(&self.exprs, node, h);
+            let (hit, found, pos) = probe(&self.exprs, node, h, &mut self.probes);
             if hit {
                 return ExprId(found);
             }
@@ -469,7 +495,7 @@ impl Store {
                 push_node(&mut self.exprs, Tier::Frozen, node, h, info, fpos)
             }
         } else {
-            let (hit, found, pos) = probe(&self.scratch, node, h);
+            let (hit, found, pos) = probe(&self.scratch, node, h, &mut self.probes);
             if hit {
                 return ExprId(found);
             }

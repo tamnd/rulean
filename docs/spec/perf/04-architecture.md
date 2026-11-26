@@ -24,7 +24,7 @@ The profiles of 03.3 give the shares on Init:
 | `malloc` and `free` | 8.4% | small |
 | evaluation (the useful work of NbE) | 19.7% | none |
 
-So more than half of the time of engine F is overhead. Engine F also gives a query or a whole declaration to engine R in many cases (03.4), so engine F pays for engine R too. This is why engine F uses more instructions than engine R on Init.
+So more than half of the time of engine F is overhead. Also, engine F evaluates much more than the check needs: it has 17 times the steps of engine R on Init (03.4), because it evaluates each argument of an application. This is why engine F uses more instructions than engine R on Init. The fallback to engine R for a whole declaration is rare (1.5% of the checks).
 
 The fix is not a faster hash table. The fix is to not make the terms.
 
@@ -34,7 +34,7 @@ The fix is not a faster hash table. The fix is to not make the terms.
 
 **A2. A query that goes to engine R is one query.** When engine F cannot answer a query, engine R decides that query, and engine F continues with the answer. Engine R does not check the declaration again from the start. Engine R needs terms, so the query is read back into the scratch tier first. This is the only read-back on the normal path.
 
-**A3. The confirm set is small and exact.** Engine R confirms an "equal" answer of engine F only when the rules of the query can give an answer that the official order does not give (spec 05.1). Each rule pair in the confirm set has a reason in the reordering table (spec 05.7.3) or an Arena test. A pair with no reason is removed. The target is engine R on less than 1% of the queries of Init, against 30% today (03.4).
+**A3. The confirm set is small and exact.** Engine R confirms an "equal" answer of engine F only when the rules of the query can give an answer that the official order does not give (spec 05.1). Each rule pair in the confirm set has a reason in the reordering table (spec 05.7.3) or an Arena test. A pair with no reason is removed. Today engine R confirms 13205 answers on Init, and each confirmation reads the two values back into terms (03.4). The target is at most 1000 confirmations on Init.
 
 **A4. The arena has marks.** A query sets a mark in the arena at its start. At its end, the arena goes back to the mark, and only the values that a cache or the caller keeps stay. These values move down to the mark (promotion). So the arena of a declaration holds the live values and not all the values that the declaration made. This removes the limit `MAX_NODES` as a cause of a fallback (spec 08.7.3).
 

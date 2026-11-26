@@ -4,12 +4,16 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- Engine F evaluates an application argument that is an application, a projection or a `let` only when a rule reads it (spec perf/04.3 A5). On Init the check uses 340.0 G instructions in place of 343.8 G.
+- The checker keeps the free variable term of each level of the local context, and the read-back of engine F uses it in place of a new intern (spec perf/04.3 A9). On the Init export, engine F uses 342.1 G instructions in place of 348.9 G, and its answers do not change.
+- In an iota step, engine F reads the major premise back for structure eta only if the inductive type is a structure without recursion and indices (spec perf/04.3 A3). On the Init export, engine F uses 348.9 G instructions in place of 359.9 G, and its answers do not change.
+
 ## [0.8.0] - 2026-11-26
 
 ### Changed
 
-- The checker keeps the free variable term of each level of the local context, and the read-back of engine F uses it in place of a new intern (spec perf/04.3 A9). On the Init export, engine F uses 342.1 G instructions in place of 348.9 G, and its answers do not change.
-- In an iota step, engine F reads the major premise back for structure eta only if the inductive type is a structure without recursion and indices (spec perf/04.3 A3). On the Init export, engine F uses 348.9 G instructions in place of 359.9 G, and its answers do not change.
 - Each declaration keeps the result of the level instantiation of a term of a constant in the cache `c_lps` (spec perf/04.3). The iota step of a recursor and `infer_constant` use it in both engines. On the Init export, engine F uses 359.9 G instructions in place of 402.3 G, and its answers do not change.
 - Engine F reads the arguments of a spine onto one stack of the worker, and not into a new `Vec` for each spine (spec perf/04.3 A9). On the Init export, engine F uses 402.3 G instructions in place of 428.3 G, and its answers do not change.
 - In the inference of engine F, a "not equal" answer of a `conv` query is a hint (spec perf/04.3 A2). Engine R decides that query on the read-back terms, and engine F continues if engine R gives "equal". Before, engine R checked the full declaration again. On the Init export, engine F now accepts 114907 of 115872 checks in place of 114129, and the run uses 428.3 G instructions in place of 428.9 G.

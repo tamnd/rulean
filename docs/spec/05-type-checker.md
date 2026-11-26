@@ -121,7 +121,7 @@ Env   ::= persistent list of ValueId (in the arena)
 2. Bool shortcut (A§1.7).
 3. Proof irrelevance. Its position depends on the profile flag `proof_irrel_first` (05.7.1).
 4. Head reduction without delta (`force_core`).
-5. Lazy delta on glued heads: same head and levels, compare the arguments; if that fails, unfold the side with the greater height, or both if the heights are equal (A§1.8 step 5). If the side with the smaller height has the other side as an argument, that side unfolds first, for at most 32 steps (row O8). If one side is a definition and the other side is a neutral projection, the projection is reduced first, and the definition unfolds only if the projection does not reduce (row O9). Nat offset and Nat reduction are tried here with the fvar guard of A§1.7.
+5. Lazy delta on glued heads: same head and levels, compare the arguments; if that fails, unfold the side with the greater height, or both if the heights are equal (A§1.8 step 5). If the side with the smaller height has the other side as an argument, that side unfolds first, for at most 32 steps (row O8). If one side is a definition and the other side is a neutral projection, the projection is reduced first, and the definition unfolds only if the projection does not reduce (row O9). If the heads are different and only one side is a binary `Nat` operation that waits, the other side unfolds first (row O10). Nat offset and Nat reduction are tried here with the fvar guard of A§1.7.
 6. Same constant with equivalent levels; same free variable.
 7. Projections against projections.
 8. Full projection reduction and a recursive call.
@@ -199,6 +199,7 @@ Engine F may change the order of steps only as listed here. Each row has a twin 
 | O7 | Compare two values by their form before any step, and stop lazy delta when both sides have the same form | official step 1 compares two terms by their structure; two values of the same form read back to the same term | `same_true`, `lazyDelta_same` |
 | O8 | In lazy delta, when the side with the smaller height has the other side as an argument, unfold that side first, for at most 32 steps | each step is a delta step of the official rules, so an "equal" answer is a true equality; a "not equal" answer goes to engine R | not done |
 | O9 | In lazy delta, when one side is a definition and the other side is a neutral projection, reduce the projection before the definition unfolds | the reduction of a projection is an official step (step 8), and lazy delta then continues on the same pair of terms | not done |
+| O10 | In lazy delta, when the heads are different and only one side is a glued binary `Nat` operation with an empty slot and an argument that is not a literal without delta, unfold the other side first | each step is a delta step of the official rules, and only the order of the steps changes; the `Nat` extension still runs if the comparison of the arguments fails, so an "equal" answer is a true equality and a "not equal" answer goes to engine R | not done |
 | O6 | Infer types as values in a context tree (05.4.5) | the typing rules are the official rules, each equality check is a conversion of engine F, and a reject comes from engine R | not done |
 
 Rows are added only with a lemma, an Arena regression test and a corpus run that shows no verdict change.

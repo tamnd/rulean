@@ -22,7 +22,7 @@ use crate::pin;
 use crate::profile::{Flags, Profile};
 use crate::session::{S_INFER, Session};
 use crate::trace::Trace;
-use crate::value::Arena;
+use crate::value::{Arena, ValueId};
 
 /// The default upper bound in bytes of a `Nat` literal (`LEAN_NAT_MAX_SIZE_DEFAULT`). This is semantics and not a resource limit (spec 05.11). The in-process kernel can set another bound in `Checker::nat_max` (spec 09.6).
 pub const NAT_MAX_BYTES: u64 = 128 * 1024 * 1024;
@@ -343,6 +343,8 @@ pub struct Checker {
     pub(crate) x: Scratch,
     /// The value arena of engine F. It is cleared at the start of each declaration.
     pub(crate) va: Arena,
+    /// A stack of the arguments of spines (spec perf/04.3 A9). A function that reads the arguments of a spine pushes them here and removes them before it returns, so the functions that it calls can push more arguments above them. This replaces a new `Vec` for each spine.
+    pub(crate) vstk: Vec<ValueId>,
     /// The contexts and caches of engine F inference. They are cleared together with the arena.
     pub(crate) fi: FInfer,
     /// The number of binders that `quote` of engine F has opened. Their free variables are not in the local context.
@@ -452,6 +454,7 @@ impl Checker {
             lc: LevelCache::new(),
             x: Scratch::new(),
             va: Arena::new(),
+            vstk: Vec::new(),
             fi: FInfer::new(),
             f_under: 0,
             engine: Engine::R,

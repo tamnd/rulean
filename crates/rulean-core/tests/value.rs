@@ -7,6 +7,13 @@ fn sort(a: &mut Arena, l: u32) -> ValueId {
     a.alloc(Value::Sort(LevelId(l)))
 }
 
+/// The arguments of a spine, first argument first.
+fn args(a: &Arena, sp: SpineId) -> Vec<ValueId> {
+    let mut out = Vec::new();
+    a.spine_push_args(sp, &mut out);
+    out
+}
+
 #[test]
 fn values_keep_their_contents() {
     let mut a = Arena::new();
@@ -68,8 +75,22 @@ fn spine_args_are_in_application_order() {
     assert_eq!(a.spine_arg(s2, 0), Some(x));
     assert_eq!(a.spine_arg(s2, 1), Some(y));
     assert_eq!(a.spine_arg(s2, 2), None);
-    assert_eq!(a.spine_args(s2), vec![x, y]);
-    assert_eq!(a.spine_args(SpineId::NIL), vec![]);
+    assert_eq!(args(&a, s2), vec![x, y]);
+    assert_eq!(args(&a, SpineId::NIL), vec![]);
+}
+
+#[test]
+fn spine_push_args_keeps_the_values_below() {
+    let mut a = Arena::new();
+    let x = sort(&mut a, 1);
+    let y = sort(&mut a, 2);
+    let s1 = a.spine_push(SpineId::NIL, x);
+    let s2 = a.spine_push(s1, y);
+    let mut stack = vec![y];
+    assert_eq!(a.spine_push_args(s2, &mut stack), 2);
+    assert_eq!(stack, vec![y, x, y]);
+    assert_eq!(a.spine_push_args(SpineId::NIL, &mut stack), 0);
+    assert_eq!(stack.len(), 3);
 }
 
 #[test]
@@ -87,8 +108,8 @@ fn apply_to_a_neutral_shares_the_spine() {
         (Value::Neu(h1, s1), Value::Neu(h2, s2)) => {
             assert_eq!(h1, Head::Const(NameId(5), LevelListId(0)));
             assert_eq!(h1, h2);
-            assert_eq!(a.spine_args(s1), vec![x, y]);
-            assert_eq!(a.spine_args(s2), vec![x, x]);
+            assert_eq!(args(&a, s1), vec![x, y]);
+            assert_eq!(args(&a, s2), vec![x, x]);
         }
         other => panic!("not neutral: {other:?}"),
     }
@@ -105,7 +126,7 @@ fn apply_to_a_glued_value_gets_a_new_slot() {
             assert_eq!(c1, c2);
             assert_ne!(s1, s2);
             assert_eq!(a.spine_len(sp1), 0);
-            assert_eq!(a.spine_args(sp2), vec![x]);
+            assert_eq!(args(&a, sp2), vec![x]);
         }
         other => panic!("not glued: {other:?}"),
     }

@@ -17,7 +17,7 @@ use crate::pin::{PIN_NAT, PIN_STRING};
 use crate::tc::{Checker, ErrorKind};
 use crate::trace::Rule;
 use crate::value::{Closure, EnvId, Head, SlotId, SpineId, Value, ValueId};
-use crate::whnf::find_rule;
+use crate::whnf::{RecShape, find_rule};
 
 impl Checker {
     /// A value to return after a fault. The caller must check `bad` before it uses the value.
@@ -147,13 +147,16 @@ impl Checker {
 
     /// `f` applied to each argument of the spine `sp`, first argument first.
     fn apply_spine(&mut self, f: ValueId, sp: SpineId, at: ExprId) -> ValueId {
-        let args = self.va.spine_args(sp);
+        let b = self.vstk.len();
+        let n = self.va.spine_push_args(sp, &mut self.vstk);
         let mut r = f;
         let mut i = 0;
-        while i < args.len() && !self.bad() {
-            r = self.apply(r, args[i], at);
+        while i < n && !self.bad() {
+            let a = self.vstk[b + i];
+            r = self.apply(r, a, at);
             i += 1;
         }
+        self.vstk.truncate(b);
         r
     }
 
@@ -361,18 +364,21 @@ impl Checker {
         } else {
             return None;
         }
-        let args = self.va.spine_args(sp);
-        let mut terms: Vec<ExprId> = Vec::with_capacity(args.len());
+        let b = self.vstk.len();
+        let len = self.va.spine_push_args(sp, &mut self.vstk);
+        let mut terms: Vec<ExprId> = Vec::with_capacity(len);
         let mut i = 0;
         let mut ok = true;
-        while ok && i < args.len() {
-            let w = self.force(args[i]);
+        while ok && i < len {
+            let a = self.vstk[b + i];
+            let w = self.force(a);
             match self.nat_lit_term(w) {
                 Some(t) => terms.push(t),
                 None => ok = false,
             }
             i += 1;
         }
+        self.vstk.truncate(b);
         if !ok || self.bad() {
             return None;
         }
@@ -392,11 +398,20 @@ impl Checker {
         } else {
             return None;
         };
-        let args = self.va.spine_args(sp);
-        if args.len() <= mk_pos as usize {
+        let b = self.vstk.len();
+        let n = self.va.spine_push_args(sp, &mut self.vstk);
+        let r = self.quot_value_args(mk_pos as usize, b, n);
+        self.vstk.truncate(b);
+        r
+    }
+
+    /// The body of `quot_value`, with the `n` arguments of the spine on `vstk` from index `b`.
+    fn quot_value_args(&mut self, mk_pos: usize, b: usize, n: usize) -> Option<ValueId> {
+        if n <= mk_pos {
             return None;
         }
-        let mk = self.force(args[mk_pos as usize]);
+        let m0 = self.vstk[b + mk_pos];
+        let mk = self.force(m0);
         if self.bad() {
             return None;
         }
@@ -413,10 +428,12 @@ impl Checker {
             _ => return None,
         };
         let at = self.dummy;
-        let mut r = self.apply(args[3], a, at);
-        let mut i = mk_pos as usize + 1;
-        while i < args.len() && !self.bad() {
-            r = self.apply(r, args[i], at);
+        let f = self.vstk[b + 3];
+        let mut r = self.apply(f, a, at);
+        let mut i = mk_pos + 1;
+        while i < n && !self.bad() {
+            let x = self.vstk[b + i];
+            r = self.apply(r, x, at);
             i += 1;
         }
         Some(r)
@@ -503,13 +520,28 @@ impl Checker {
             Some(r) => r,
             None => return None,
         };
-        let args = self.va.spine_args(sp);
+        let b = self.vstk.len();
+        let n = self.va.spine_push_args(sp, &mut self.vstk);
+        let res = self.iota_value_args(slot, us, r, b, n);
+        self.vstk.truncate(b);
+        res
+    }
+
+    /// The body of `iota_value`, with the `n` arguments of the spine on `vstk` from index `b`. The fields of the major premise go on `vstk` above them, and the caller removes both.
+    fn iota_value_args(
+        &mut self,
+        slot: u32,
+        us: LevelListId,
+        r: RecShape,
+        b: usize,
+        n: usize,
+    ) -> Option<ValueId> {
         let major_idx = r.major_idx as usize;
-        if major_idx >= args.len() {
+        if major_idx >= n {
             return None;
         }
         let induct = self.major_induct(slot, r.major_idx);
-        let mut major = args[major_idx];
+        let mut major = self.vstk[b + major_idx];
         let first = major;
         if r.k {
             major = self.k_major(induct, r.nparams, major);
@@ -553,9 +585,10 @@ impl Checker {
             },
             _ => return None,
         };
-        let margs = self.va.spine_args(msp);
+        let mb = self.vstk.len();
+        let mn = self.va.spine_push_args(msp, &mut self.vstk);
         let nfields = rule.nfields as usize;
-        if nfields > margs.len() {
+        if nfields > mn {
             return None;
         }
         let ls = self.st.level_list_vec(us);
@@ -568,17 +601,20 @@ impl Checker {
         let mut f = self.eval(EnvId::NIL, rhs);
         let mut i = 0;
         while i < r.nprefix as usize && !self.bad() {
-            f = self.apply(f, args[i], at);
+            let x = self.vstk[b + i];
+            f = self.apply(f, x, at);
             i += 1;
         }
-        let mut j = margs.len() - nfields;
-        while j < margs.len() && !self.bad() {
-            f = self.apply(f, margs[j], at);
+        let mut j = mn - nfields;
+        while j < mn && !self.bad() {
+            let x = self.vstk[mb + j];
+            f = self.apply(f, x, at);
             j += 1;
         }
         let mut k2 = major_idx + 1;
-        while k2 < args.len() && !self.bad() {
-            f = self.apply(f, args[k2], at);
+        while k2 < n && !self.bad() {
+            let x = self.vstk[b + k2];
+            f = self.apply(f, x, at);
             k2 += 1;
         }
         Some(f)
@@ -686,14 +722,17 @@ impl Checker {
     }
 
     fn quote_spine(&mut self, base: u32, k: u32, f: ExprId, sp: SpineId) -> ExprId {
-        let args = self.va.spine_args(sp);
-        let mut out: Vec<ExprId> = Vec::with_capacity(args.len());
+        let b = self.vstk.len();
+        let n = self.va.spine_push_args(sp, &mut self.vstk);
+        let mut r = f;
         let mut i = 0;
-        while i < args.len() {
-            let t = self.quote(base, k, args[i]);
-            out.push(t);
+        while i < n {
+            let a = self.vstk[b + i];
+            let t = self.quote(base, k, a);
+            r = self.st.mk_app(r, t);
             i += 1;
         }
-        self.st.mk_apps(f, &out)
+        self.vstk.truncate(b);
+        r
     }
 }

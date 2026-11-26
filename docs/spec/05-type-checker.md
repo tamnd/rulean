@@ -121,7 +121,7 @@ Env   ::= persistent list of ValueId (in the arena)
 2. Bool shortcut (A§1.7).
 3. Proof irrelevance. Its position depends on the profile flag `proof_irrel_first` (05.7.1).
 4. Head reduction without delta (`force_core`).
-5. Lazy delta on glued heads: same head and levels, compare the arguments; if that fails, unfold the side with the greater height, or both if the heights are equal (A§1.8 step 5). Nat offset and Nat reduction are tried here with the fvar guard of A§1.7.
+5. Lazy delta on glued heads: same head and levels, compare the arguments; if that fails, unfold the side with the greater height, or both if the heights are equal (A§1.8 step 5). If the side with the smaller height has the other side as an argument, that side unfolds first, for at most 32 steps (row O8). Nat offset and Nat reduction are tried here with the fvar guard of A§1.7.
 6. Same constant with equivalent levels; same free variable.
 7. Projections against projections.
 8. Full projection reduction and a recursive call.
@@ -137,7 +137,7 @@ Engine F also does the type check and the value check of a declaration (A§1.4, 
 - **Caches.** The type of a term is cached with the key (term, node, mode), where the mode is infer-only or check. The value of a term is cached with the key (term, node). A closed term uses the root node, so its entries are shared by all contexts. The tree and the caches are cleared with the arena at the end of each declaration (04.5).
 - **Rules.** A bound variable gets its type from the environment of the node. A sort, a constant, a pi type and an application follow `infer_type_core`: a pi type gets `imax` of the levels of the domain and of the body, and an application forces the type of the function to a pi value, checks the type of the argument against the domain in check mode, and applies the closure to the value of the argument. A lambda gets the pi value of its domain and of the read-back of the type of its body. A `let` checks in check mode that its type is a sort and that the type of its value is equal to its type. Then the body is inferred in the `let` node. A literal, a projection and a free variable go to `infer_type_core` of engine R, on the term with the locals of the context.
 - **Evaluation.** An application and a `let` are evaluated with the context tree, so each node of a long chain is evaluated once in each context. A closure body without loose bound variables does not use its argument, so the argument is not evaluated.
-- **Stops.** Each equality check uses conversion of engine F (05.4.4). If the answer is "not equal", or if the check meets `eagerReduce`, engine F stops. A fault, for example a full arena, also stops engine F. The fault is removed, and engine R does the full check of the declaration (05.1, rule 2). So a reject always comes from engine R.
+- **Stops.** Each equality check uses conversion of engine F (05.4.4). If the answer is "not equal", engine F stops. An argument of the form `eagerReduce _ _` does not stop engine F: the hint sets the eager mode of engine R for the query, and engine R uses the mode if it confirms the query. A fault, for example a full arena, also stops engine F. The fault is removed, and engine R does the full check of the declaration (05.1, rule 2). So a reject always comes from engine R.
 - **Confirm.** If the answer is in the confirm set (05.1), engine F reads back the two values, and engine R compares the terms. If engine R gives "equal", engine F continues. If engine R gives "not equal", engine F stops, and engine R does the full check of the declaration. On the Init export of v4.36.0, a stop at each answer in the confirm set caused 10,310 of the 11,775 stops of engine F.
 - **Confirm all.** With `--confirm all`, engine R does not confirm each answer in the confirm set, because engine R checks the full declaration again after engine F accepts it. If engine R rejects a declaration that engine F accepted, the JSON report counts it in `r_disagree`.
 
@@ -197,11 +197,12 @@ Engine F may change the order of steps only as listed here. Each row has a twin 
 | O4 | Evaluate `let` lazily | zeta is confluent with all other rules here; the official kernel also substitutes | `zeta_lazy` |
 | O5 | Unfold both sides at once when heights are equal | official step 5 does the same | `lazyDelta_equal_height` |
 | O7 | Compare two values by their form before any step, and stop lazy delta when both sides have the same form | official step 1 compares two terms by their structure; two values of the same form read back to the same term | `same_true`, `lazyDelta_same` |
+| O8 | In lazy delta, when the side with the smaller height has the other side as an argument, unfold that side first, for at most 32 steps | each step is a delta step of the official rules, so an "equal" answer is a true equality; a "not equal" answer goes to engine R | not done |
 | O6 | Infer types as values in a context tree (05.4.5) | the typing rules are the official rules, each equality check is a conversion of engine F, and a reject comes from engine R | not done |
 
 Rows are added only with a lemma, an Arena regression test and a corpus run that shows no verdict change.
 
-Row O6 has no lemma yet. This is an open item of M4. Until the lemma is proved, engine F is not the default engine, and the `arena` CI job runs each Arena test with `--confirm all`.
+Rows O6 and O8 have no lemma yet. O6 is an open item of M4, and O8 is an open item of M9. The lemma of O8 needs a confluence property of the twin, because the official order unfolds the other side first. Until the lemmas are proved, engine F is not the default engine, and the `arena` CI job runs each Arena test with `--confirm all`.
 
 The lemmas of O1 to O5 and O7 are in `proof/RuleanProof/Twin/Order.lean` and `proof/RuleanProof/Twin/Zeta.lean`. They are proved on a twin of the step order. The terms of this twin have no binders and no types, and the twin has no proof irrelevance and no eta. Theorem R1 (10.3) must still connect this twin to the Aeneas model of engine F.
 

@@ -108,6 +108,12 @@ The order of the rules does not change. It is the order of spec 05.7.3, and each
 - **Arguments before unfolding.** When the two sides have the same head constant, compare the arguments first, as the official kernel does. Use the pair cache for each argument pair.
 - **The pair cache.** The successes stay for the declaration. A pair of closed values goes to the session. The failures are for engine R only, as in spec 08.5.
 
+Result of the taken branch, on 2026-11-26 (`rulean check --engine F`, macOS): on `perf/ite-taken-branch`, the three theorems have the form `ite (true = true) piA tA = piA`, where `piA` computes the inverse of a permutation of 300 numbers with a loop. The official order unfolds `piA`, because its height is greater than the height of `ite`. Engine F filled its arena (2^18 nodes, and also 2^24 nodes) on each theorem, and engine R then did the full check with 29 G instructions for each theorem. Now lazy delta unfolds the side with the smaller height first if it has the other side as an argument (row O8 of spec 05.7.3). The branch that the condition takes is `piA`, and the two sides then have the same form. The test uses 1.36 G instructions in place of 87.7 G, and engine F accepts all 2,706 checks of the test.
+
+The same PR lets engine F check an argument of the form `eagerReduce _ _`. Before, engine F stopped and engine R checked the full declaration. Now the hint sets the eager mode of engine R for the query, which engine R uses if it confirms the answer. On `perf/grind-ring-5`, engine F accepts 4,414 of 4,417 checks in place of 4,411, but the test uses 8.57 G instructions in place of 8.43 G.
+
+A note on the measure: `/usr/bin/time -l` counts the instructions of the operating system for the process too. When other jobs use the memory of the machine, the page faults add many instructions. On `perf/magma-list-deep-n36`, two runs of the same binary gave 239 G and 378 G, with the same counts of steps, interns and probes, and 23 s and 98 s of system time. A comparison of two builds must therefore also compare the steps and the interns of the report. On Init, this PR changes the steps by 0.07 percent and the interns by 0.13 percent, and engine F accepts 115,257 checks in place of 115,098.
+
 ## 04.7 The fallback and the confirm set
 
 - A "not equal" answer of engine F is a hint (spec 05.1 rule 2). Engine R decides the query on the read-back terms. If engine R says "equal", the answer is "equal" and engine F goes on. If engine R says "not equal", the answer is "not equal".

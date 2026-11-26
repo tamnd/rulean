@@ -293,3 +293,26 @@ fn two_values_of_the_same_form_are_equal_with_no_delta_step() {
     let s = t.c.f_stats;
     assert_eq!((s.queries, s.equal, s.fallback), (1, 1, 0));
 }
+
+#[test]
+fn a_taken_branch_is_unfolded_before_the_other_side() {
+    let mut t = T::new();
+    let a = t.axiom("a", t.a_ty);
+    let ty = t.a_ty;
+    // `big` has the height 3 and `sel` has the height 1. The official order unfolds `big` first.
+    let k2 = t.def("k2", ty, a, 2);
+    let big = t.def("big", ty, k2, 3);
+    let b1 = t.bv(1);
+    let inner = t.lam("y", t.a_ty, b1);
+    let sv = t.lam("x", t.a_ty, inner);
+    let a_a = t.a_to_a();
+    let sty = t.pi("x", t.a_ty, a_a);
+    let sel = t.def("sel", sty, sv, 1);
+    // `sel big a` has `big` as an argument, so lazy delta unfolds `sel` and gets `big` with no unfolding of `big` (row O8 of spec 05.7.3).
+    let x = t.app(sel, &[big, a]);
+    t.c.trace_on = true;
+    assert!(t.eq(x, big));
+    assert_eq!(t.c.trace.counts[Rule::Delta.index()], 1);
+    let s = t.c.f_stats;
+    assert_eq!((s.queries, s.equal, s.fallback), (1, 1, 0));
+}

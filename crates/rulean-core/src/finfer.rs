@@ -443,11 +443,15 @@ impl Checker {
                     }
                 };
                 if !infer_only {
-                    if self.is_eager_reduce(a) {
-                        return self.f_stop(e);
-                    }
                     let at = self.f_infer(c, a, infer_only);
-                    if !self.f_conv_top(at, dom) {
+                    // The `eagerReduce` hint lets engine R use the `Nat` extension and the `Bool` reflection on terms with free variables. Engine F has no such limit, so the hint changes only the query that engine R confirms.
+                    let saved = self.eager;
+                    if self.is_eager_reduce(a) {
+                        self.eager = true;
+                    }
+                    let ok = self.f_conv_top(at, dom);
+                    self.eager = saved;
+                    if !ok {
                         return self.v_dummy();
                     }
                 }

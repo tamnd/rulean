@@ -448,7 +448,9 @@ impl Parser {
         let ty = c.num(b);
         c.lit(b, b",\"value\":");
         let v = c.num(b);
-        c.lit(b, b"}}");
+        // Not `b"}}"`, because Aeneas cannot read an array constant of one repeated byte.
+        c.lit(b, b"}");
+        c.lit(b, b"}");
         let nn = self.fast_name_ref(&mut c, n);
         let tt = self.fast_expr_ref(&mut c, ty);
         let vv = self.fast_expr_ref(&mut c, v);
@@ -469,7 +471,9 @@ impl Parser {
         let e = c.num(b);
         c.lit(b, b",\"typeName\":");
         let n = c.num(b);
-        c.lit(b, b"}}");
+        // Not `b"}}"`, because Aeneas cannot read an array constant of one repeated byte.
+        c.lit(b, b"}");
+        c.lit(b, b"}");
         let nn = self.fast_name_ref(&mut c, n);
         let ee = self.fast_expr_ref(&mut c, e);
         let go = c.end(b) && i <= u32::MAX as u64;
@@ -552,7 +556,9 @@ impl Parser {
             let p = c.num(b);
             c.lit(b, b",\"str\":\"");
             let (s, e) = c.text(b);
-            c.lit(b, b"}}");
+            // Not `b"}}"`, because Aeneas cannot read an array constant of one repeated byte.
+            c.lit(b, b"}");
+            c.lit(b, b"}");
             let pre = self.fast_name_ref(&mut c, p);
             if c.end(b) && self.fast_free(Record::Name, k) {
                 id = store.name_str_bytes(pre, &b[s..e]);
@@ -564,7 +570,9 @@ impl Parser {
             let i = c.num(b);
             c.lit(b, b",\"pre\":");
             let p = c.num(b);
-            c.lit(b, b"}}");
+            // Not `b"}}"`, because Aeneas cannot read an array constant of one repeated byte.
+            c.lit(b, b"}");
+            c.lit(b, b"}");
             let pre = self.fast_name_ref(&mut c, p);
             if c.end(b) && self.fast_free(Record::Name, k) {
                 id = store.name_num(pre, i);

@@ -71,6 +71,8 @@ pub enum Value {
     Neu(Head, SpineId),
     /// A definition applied to its arguments, in folded form, with a slot for its unfolding.
     Glued(NameId, LevelListId, SpineId, SlotId),
+    /// An argument that is not evaluated yet: the environment, the term and a slot for its value (spec perf/04.3 A5). The first read evaluates the term and puts the value in the slot, so the term is evaluated at most once. A value of this form is never in weak head normal form: each read of the form of a value goes through `Checker::vget`, which evaluates it first.
+    Susp(EnvId, ExprId, SlotId),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -103,6 +105,8 @@ pub struct Arena {
     envs: Vec<EnvNode>,
     spines: Vec<SpineNode>,
     slots: Vec<Option<ValueId>>,
+    /// The bits of `f_bits` that the evaluation of a suspended argument set, one entry for each slot. A read of a filled slot sets them again.
+    sbits: Vec<u8>,
     full: bool,
 }
 
@@ -114,6 +118,7 @@ impl Arena {
             envs: Vec::new(),
             spines: Vec::new(),
             slots: Vec::new(),
+            sbits: Vec::new(),
             full: false,
         }
     }
@@ -129,6 +134,7 @@ impl Arena {
             + self.envs.capacity() * core::mem::size_of::<EnvNode>()
             + self.spines.capacity() * core::mem::size_of::<SpineNode>()
             + self.slots.capacity() * core::mem::size_of::<Option<ValueId>>()
+            + self.sbits.capacity()
     }
 
     /// The number of nodes in each array.
@@ -147,6 +153,7 @@ impl Arena {
         self.envs.truncate(0);
         self.spines.truncate(0);
         self.slots.truncate(0);
+        self.sbits.truncate(0);
         self.full = false;
     }
 
@@ -309,7 +316,18 @@ impl Arena {
             return SlotId(0);
         }
         self.slots.push(None);
+        self.sbits.push(0);
         SlotId(i)
+    }
+
+    /// The bits that `slot_set_bits` put on a slot, or 0.
+    pub fn slot_bits(&self, s: SlotId) -> u32 {
+        u32::from(self.sbits[s.0 as usize])
+    }
+
+    /// Puts the bits `b` on a slot. Only the low 8 bits are kept, and the flags of `f_bits` use fewer.
+    pub fn slot_set_bits(&mut self, s: SlotId, b: u32) {
+        self.sbits[s.0 as usize] = (b & 0xff) as u8;
     }
 
     /// The unfolding in a slot, if it was computed.
@@ -334,6 +352,12 @@ impl Arena {
     /// A neutral value with no arguments.
     pub fn neutral(&mut self, h: Head) -> ValueId {
         self.alloc(Value::Neu(h, SpineId::NIL))
+    }
+
+    /// A suspended argument: the term `e` in the environment `env`, with an empty slot.
+    pub fn susp(&mut self, env: EnvId, e: ExprId) -> ValueId {
+        let s = self.slot_new();
+        self.alloc(Value::Susp(env, e, s))
     }
 
     /// A glued value with no arguments and an empty slot.

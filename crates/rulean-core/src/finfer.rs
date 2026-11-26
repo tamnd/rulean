@@ -435,7 +435,7 @@ impl Checker {
                 if self.bad() {
                     return self.v_dummy();
                 }
-                let (dom, clo) = match self.va.get(pv) {
+                let (dom, clo) = match self.vget(pv) {
                     Value::Pi(_, _, d, clo) => (d, clo),
                     _ => {
                         self.fail(ErrorKind::FunctionExpected, e);
@@ -499,7 +499,7 @@ impl Checker {
         if self.bad() {
             return self.st.level_zero();
         }
-        match self.va.get(w) {
+        match self.vget(w) {
             Value::Sort(l) => l,
             _ => {
                 self.fail(ErrorKind::TypeExpected, at);

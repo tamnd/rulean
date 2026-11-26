@@ -384,3 +384,39 @@ fn quotient_lift() {
     let want = t.app(f, &[x]);
     assert_eq!(t.whnf_f(e), want);
 }
+
+#[test]
+fn an_unused_argument_is_not_evaluated() {
+    let mut t = T::new();
+    let s1 = t.sort(1);
+    let a = t.axiom("A", s1);
+    let x = t.axiom("x", a);
+    // (fun (y : A) (z : A) => y) x (Sort 0 applied to Sort 0). The second argument is a "function expected" fault if it is evaluated, and the body does not use it.
+    let s0 = t.sort(0);
+    let bad = t.app(s0, &[s0]);
+    let b1 = t.bv(1);
+    let inner = t.lam("z", a, b1);
+    let k = t.lam("y", a, inner);
+    let e = t.app(k, &[x, bad]);
+    assert_eq!(t.whnf_f(e), x);
+}
+
+#[test]
+fn a_used_argument_reads_back_as_its_term() {
+    let mut t = T::new();
+    let s1 = t.sort(1);
+    let a = t.axiom("A", s1);
+    let x = t.axiom("x", a);
+    let aa = t.pi("_", a, a);
+    let g = t.axiom("g", aa);
+    let aaa = t.pi("_", a, aa);
+    let f = t.axiom("f", aaa);
+    // (fun (y : A) => f y y) (g x) reads back as f (g x) (g x).
+    let gx = t.app(g, &[x]);
+    let b0 = t.bv(0);
+    let body = t.app(f, &[b0, b0]);
+    let lam = t.lam("y", a, body);
+    let e = t.app(lam, &[gx]);
+    let want = t.app(f, &[gx, gx]);
+    assert_eq!(t.whnf_f(e), want);
+}

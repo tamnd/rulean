@@ -203,7 +203,7 @@ impl Checker {
 
     /// True if the type of `v` is not a proposition for each value of the level parameters. A sort, a literal and a Pi type are never proofs. An application of a constant is never a proof if the type of the constant ends in a sort, or in an inductive type whose sort is never zero (`const_never_proof`). For other values the result is false, and the step reads the values back.
     fn never_proof(&mut self, v: ValueId) -> bool {
-        match self.va.get(v) {
+        match self.vget(v) {
             Value::Sort(_) | Value::Lit(_) | Value::Pi(..) => true,
             Value::Neu(Head::Const(c, _), _) => self.const_never_proof(c),
             Value::Neu(Head::FVar(l, _), _) => self.fvar_never_proof(l),
@@ -354,7 +354,7 @@ impl Checker {
         if a == b {
             return LBool::True;
         }
-        match (self.va.get(a), self.va.get(b)) {
+        match (self.vget(a), self.vget(b)) {
             (Value::Sort(l1), Value::Sort(l2)) => {
                 to_lbool(level::is_equivalent(&mut self.st, &mut self.lc, l1, l2))
             }
@@ -410,7 +410,7 @@ impl Checker {
 
     /// The glued head of a value: the constant, its levels, the spine and the hint.
     fn glued_head(&mut self, v: ValueId) -> Option<(NameId, LevelListId, SpineId, Hints)> {
-        match self.va.get(v) {
+        match self.vget(v) {
             Value::Glued(c, us, sp, _) => {
                 let slot = self.env.find(c);
                 let h = if slot == 0 {
@@ -426,7 +426,7 @@ impl Checker {
 
     /// One delta step: the `Nat` extension if it applies, else unfold the glued head. Then reduce without delta.
     fn conv_delta(&mut self, v: ValueId) -> ValueId {
-        match self.va.get(v) {
+        match self.vget(v) {
             Value::Glued(c, us, sp, s) => {
                 let u = match self.glued_nat(c, us, sp, s) {
                     Some(n) => n,
@@ -503,7 +503,22 @@ impl Checker {
             return false;
         }
         *budget -= 1;
-        match (self.va.get(a), self.va.get(b)) {
+        // Two suspended arguments of the same term are equal without an evaluation when they have the same environment, or when the term has no loose bound variable (spec perf/04.3 A6).
+        let (xa, xb) = (self.va.get(a), self.va.get(b));
+        if let (Value::Susp(e1, t1, _), Value::Susp(e2, t2, _)) = (xa, xb) {
+            if t1 == t2 && (e1 == e2 || self.st.loose_range(t1) == 0) {
+                return true;
+            }
+        }
+        let xa = match xa {
+            Value::Susp(..) => self.vget(a),
+            x => x,
+        };
+        let xb = match xb {
+            Value::Susp(..) => self.vget(b),
+            x => x,
+        };
+        match (xa, xb) {
             (Value::Sort(l1), Value::Sort(l2)) => l1 == l2,
             (Value::Lit(x), Value::Lit(y)) => x == y,
             (Value::Lam(_, _, d1, c1), Value::Lam(_, _, d2, c2))
@@ -597,7 +612,7 @@ impl Checker {
 
     /// The steps after lazy delta: the same head with equal arguments, then function eta.
     fn conv_whnf(&mut self, a: ValueId, b: ValueId) -> bool {
-        match (self.va.get(a), self.va.get(b)) {
+        match (self.vget(a), self.vget(b)) {
             (Value::Neu(h1, s1), Value::Neu(h2, s2)) => {
                 self.conv_heads(h1, h2) && self.conv_spines(s1, s2)
             }

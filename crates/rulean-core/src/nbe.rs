@@ -4,11 +4,13 @@
 //!
 //! `force` does iota, the quotient rules and the `Nat` and `String` extensions too. K-like reduction and structure eta need the type of the major premise. For these two rules `force` reads the major premise back and uses engine R, as spec 10.4.1 says for the type-directed rules. Under a binder that `quote` opened, these two rules are not tried. A projection reduces when its structure forces to a constructor application, and it is stuck otherwise.
 //!
+//! An argument of an application that is an application, a projection or a `let` is suspended (spec perf/04.3 A5). `vget` and `resolve` evaluate it at its first read and keep the value in its slot, so each other function sees only values in the forms of spec 05.4.1.
+//!
 //! Free variables of the local context keep their level. `quote` gives the free variables that it makes under a binder the levels from the length of the local context up, and it reads them back as bound variables.
 
 use alloc::vec::Vec;
 use rulean_store::ids::{low, raw};
-use rulean_store::{Expr, ExprId, LevelListId, Literal, NameId};
+use rulean_store::{Expr, ExprId, Kind, LevelListId, Literal, NameId};
 
 use crate::conv::{F_DELTA, F_TYPED};
 use crate::env::ConstKind;
@@ -58,7 +60,7 @@ impl Checker {
             Expr::Const(n, us) => self.eval_const(e, n, us),
             Expr::App(f, a) => {
                 let vf = self.eval(env, f);
-                let va = self.eval(env, a);
+                let va = self.eval_arg(env, a);
                 self.apply(vf, va, e)
             }
             Expr::Lam(b) => {
@@ -89,6 +91,74 @@ impl Checker {
                 }
             },
         }
+    }
+
+    /// The value of an argument `a` of an application (spec perf/04.3 A5). An application, a projection and a `let` become a suspended value, and the first read evaluates them. The other terms are cheap to evaluate, so they are evaluated now. Under a binder that `quote` opened, the argument is evaluated now too, because the read-back reads each argument, and because `force` skips the type-directed rules there (`f_under`) but not at a later read outside the binder.
+    #[inline(always)]
+    fn eval_arg(&mut self, env: EnvId, a: ExprId) -> ValueId {
+        // The kind is in the handle, so this test reads no node.
+        if self.f_under == 0 && matches!(a.kind(), Kind::App | Kind::Proj | Kind::Let) {
+            let r = self.va.susp(env, a);
+            if self.va.full() {
+                self.fail(ErrorKind::ArenaFull, a);
+            }
+            r
+        } else {
+            self.eval(env, a)
+        }
+    }
+
+    /// `v`, with a suspended argument evaluated. The result is never of the form `Value::Susp`. The value of a suspended argument goes into its slot, and the bits of `f_bits` that the evaluation set go on the slot too. A later read of the slot sets these bits again, as a slot hit in `unfold_glued` sets `F_DELTA`, because the query that reads the value depends on the same steps.
+    #[inline(always)]
+    pub(crate) fn resolve(&mut self, v: ValueId) -> ValueId {
+        match self.va.get(v) {
+            Value::Susp(..) => self.resolve_susp(v),
+            _ => v,
+        }
+    }
+
+    /// The form of `v` after `resolve`. Engine F reads the form of a value only with this function, so that it never sees `Value::Susp`.
+    #[inline(always)]
+    pub(crate) fn vget(&mut self, v: ValueId) -> Value {
+        match self.va.get(v) {
+            Value::Susp(..) => {
+                let w = self.resolve_susp(v);
+                self.va.get(w)
+            }
+            x => x,
+        }
+    }
+
+    /// The slow path of `resolve`: `v` is a suspended argument.
+    #[inline(never)]
+    fn resolve_susp(&mut self, v: ValueId) -> ValueId {
+        let mut w = v;
+        let mut done = false;
+        while !done && !self.bad() {
+            match self.va.get(w) {
+                Value::Susp(env, e, s) => w = self.susp_value(env, e, s),
+                _ => done = true,
+            }
+        }
+        w
+    }
+
+    /// The value of the suspended argument `e` in `env` with the slot `s`: the content of the slot, or else the evaluation, which then goes into the slot. After a fault the slot stays empty, and the caller must check `bad`.
+    fn susp_value(&mut self, env: EnvId, e: ExprId, s: SlotId) -> ValueId {
+        if let Some(x) = self.va.slot_get(s) {
+            self.f_bits |= self.va.slot_bits(s);
+            return x;
+        }
+        let saved = self.f_bits;
+        self.f_bits = 0;
+        let x = self.eval(env, e);
+        let got = self.f_bits;
+        self.f_bits = saved | got;
+        if !self.bad() {
+            self.va.slot_set(s, x);
+            self.va.slot_set_bits(s, got);
+        }
+        x
     }
 
     pub(crate) fn env_push(&mut self, env: EnvId, v: ValueId) -> EnvId {
@@ -125,6 +195,7 @@ impl Checker {
         if self.bad() {
             return self.v_dummy();
         }
+        let f = self.resolve(f);
         match self.va.get(f) {
             Value::Lam(_, _, _, clo) => {
                 let env2 = self.env_push(clo.env, a);
@@ -201,6 +272,7 @@ impl Checker {
     ///
     /// The bits of `f_bits` that the steps set go into `c_force` at key (value, 2). A cache hit sets these bits again, because the cache lives across the queries of a declaration, and the query that has the hit depends on the same steps.
     pub fn force(&mut self, v0: ValueId) -> ValueId {
+        let v0 = self.resolve(v0);
         let cached = self.force_cached(v0);
         if cached {
             if let Some(w) = self.c_force.get(raw(v0.0), 0) {
@@ -214,7 +286,7 @@ impl Checker {
         let mut done = false;
         while !done && !self.bad() {
             match self.force_step(v) {
-                Some(w) => v = w,
+                Some(w) => v = self.resolve(w),
                 None => done = true,
             }
         }
@@ -235,16 +307,17 @@ impl Checker {
     }
 
     /// True if `force` and `force_core` keep the result of `v` in `c_force`: a glued value or a neutral application of a constant. The other values are already in weak head normal form.
-    fn force_cached(&self, v: ValueId) -> bool {
+    fn force_cached(&mut self, v: ValueId) -> bool {
         matches!(
-            self.va.get(v),
+            self.vget(v),
             Value::Glued(..) | Value::Neu(Head::Const(..), _)
         )
     }
 
     /// `force` without delta: iota, the quotient rules and the `Nat` extension on heads that do not unfold (`whnf_core` of engine R). Engine F uses it in `conv`, so that lazy delta can compare two folded definitions before it unfolds them. As in `force`, the bits of the steps go into `c_force`, here at key (value, 3).
     pub(crate) fn force_core(&mut self, v0: ValueId) -> ValueId {
-        let cached = matches!(self.va.get(v0), Value::Neu(Head::Const(..), _));
+        let v0 = self.resolve(v0);
+        let cached = matches!(self.vget(v0), Value::Neu(Head::Const(..), _));
         if cached {
             if let Some(w) = self.c_force.get(raw(v0.0), 1) {
                 self.force_bits(v0, 3);
@@ -256,7 +329,7 @@ impl Checker {
         let mut v = v0;
         let mut done = false;
         while !done && !self.bad() {
-            let r = match self.va.get(v) {
+            let r = match self.vget(v) {
                 Value::Neu(Head::Const(c, us), sp) => {
                     let n = self.nat_value(c, us, sp);
                     if n.is_some() || self.bad() {
@@ -268,7 +341,7 @@ impl Checker {
                 _ => None,
             };
             match r {
-                Some(w) => v = w,
+                Some(w) => v = self.resolve(w),
                 None => done = true,
             }
         }
@@ -283,7 +356,7 @@ impl Checker {
 
     /// One step of `force`, or `None` if `v` is in weak head normal form. As in `whnf` of the official kernel, the `Nat` extension comes before delta.
     fn force_step(&mut self, v: ValueId) -> Option<ValueId> {
-        match self.va.get(v) {
+        match self.vget(v) {
             Value::Glued(c, us, sp, s) => {
                 let r = self.glued_nat(c, us, sp, s);
                 if r.is_some() || self.bad() {
@@ -304,7 +377,7 @@ impl Checker {
 
     /// The term of a `Nat` literal value, or of `Nat.zero` (`is_nat_lit_ext`).
     fn nat_lit_term(&mut self, w: ValueId) -> Option<ExprId> {
-        match self.va.get(w) {
+        match self.vget(w) {
             Value::Lit(Literal::Nat(n)) => Some(self.st.mk_nat_lit(n)),
             Value::Neu(Head::Const(z, _), sp) => {
                 if z == self.b.nat_zero && sp == SpineId::NIL {
@@ -415,7 +488,7 @@ impl Checker {
         if self.bad() {
             return None;
         }
-        let a = match self.va.get(mk) {
+        let a = match self.vget(mk) {
             Value::Neu(Head::Const(m, _), msp) => {
                 if m != self.b.quot_mk || self.va.spine_len(msp) != 3 {
                     return None;
@@ -478,7 +551,7 @@ impl Checker {
         if self.f_under > 0 {
             return major;
         }
-        if let Value::Neu(Head::Const(c, _), _) = self.va.get(major) {
+        if let Value::Neu(Head::Const(c, _), _) = self.vget(major) {
             if self.ctor_shape(c).is_some() {
                 return major;
             }
@@ -569,7 +642,7 @@ impl Checker {
         if self.bad() {
             return None;
         }
-        major = match self.va.get(major) {
+        major = match self.vget(major) {
             Value::Lit(Literal::Nat(n)) if self.pin_on(PIN_NAT) => {
                 let v = self.st.nat(n).clone();
                 let t = self.nat_lit_to_constructor(&v);
@@ -585,7 +658,7 @@ impl Checker {
         if self.bad() {
             return None;
         }
-        let (k, msp) = match self.va.get(major) {
+        let (k, msp) = match self.vget(major) {
             Value::Neu(Head::Const(k, _), msp) => (k, msp),
             _ => return None,
         };
@@ -635,14 +708,14 @@ impl Checker {
         if self.bad() {
             return self.v_dummy();
         }
-        if let Value::Lit(Literal::Str(s)) = self.va.get(w) {
+        if let Value::Lit(Literal::Str(s)) = self.vget(w) {
             if self.pin_on(PIN_STRING) {
                 let t = self.string_lit_to_constructor(s);
                 let x = self.eval(EnvId::NIL, t);
                 w = self.force(x);
             }
         }
-        if let Value::Neu(Head::Const(c, _), sp) = self.va.get(w) {
+        if let Value::Neu(Head::Const(c, _), sp) = self.vget(w) {
             if let Some((induct, nparams, _)) = self.ctor_shape(c) {
                 if induct == sname {
                     if let Some(a) = self.va.spine_arg(sp, nparams + idx) {
@@ -672,7 +745,18 @@ impl Checker {
     }
 
     fn quote_node(&mut self, base: u32, k: u32, v: ValueId) -> ExprId {
-        match self.va.get(v) {
+        // A suspended argument with no loose bound variable reads back as its term (spec perf/04.3 A1). The environment cannot change the value of such a term, and the term is in the store already, so the read-back makes no new term.
+        let x = match self.va.get(v) {
+            Value::Susp(_, t, _) if self.st.loose_range(t) == 0 => {
+                return t;
+            }
+            Value::Susp(..) => {
+                let w = self.resolve_susp(v);
+                self.va.get(w)
+            }
+            x => x,
+        };
+        match x {
             Value::Sort(l) => self.st.mk_sort(l),
             Value::Lit(Literal::Nat(n)) => self.st.mk_nat_lit(n),
             Value::Lit(Literal::Str(s)) => self.st.mk_str_lit(s),
@@ -694,6 +778,8 @@ impl Checker {
                 let f = self.st.mk_const(c, us);
                 self.quote_spine(base, k, f, sp)
             }
+            // `vget` never gives this form.
+            Value::Susp(..) => self.fail(ErrorKind::Unsupported, self.dummy),
         }
     }
 

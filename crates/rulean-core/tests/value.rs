@@ -165,3 +165,26 @@ fn reset_removes_all_nodes() {
     assert!(!a.full());
     assert_eq!(sort(&mut a, 4), ValueId(0));
 }
+
+#[test]
+fn a_suspended_argument_has_an_empty_slot_with_no_bits() {
+    let mut a = Arena::new();
+    let v = a.susp(EnvId::NIL, ExprId(5));
+    let s = match a.get(v) {
+        Value::Susp(env, e, s) => {
+            assert_eq!(env, EnvId::NIL);
+            assert_eq!(e, ExprId(5));
+            s
+        }
+        other => panic!("not suspended: {other:?}"),
+    };
+    assert_eq!(a.slot_get(s), None);
+    assert_eq!(a.slot_bits(s), 0);
+    let x = sort(&mut a, 1);
+    assert!(a.slot_set(s, x));
+    a.slot_set_bits(s, 3);
+    assert_eq!(a.slot_get(s), Some(x));
+    assert_eq!(a.slot_bits(s), 3);
+    a.reset();
+    assert_eq!(a.counts(), Counts::default());
+}

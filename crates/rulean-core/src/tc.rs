@@ -166,6 +166,10 @@ pub struct Builtins {
     pub quot_lift: NameId,
     pub quot_ind: NameId,
     pub eq: NameId,
+    /// `HAdd.hAdd`, `Add.add` and `OfNat.ofNat`, the heads that the offset view of engine F unfolds (row O11 of spec 05.7.3). They are not pinned, because the view only unfolds them, and an unfolding is a delta step of the official rules.
+    pub hadd_hadd: NameId,
+    pub add_add: NameId,
+    pub of_nat_of_nat: NameId,
     /// The type annotations that `consume_type_annotations` removes.
     pub opt_param: NameId,
     pub auto_param: NameId,
@@ -251,6 +255,9 @@ impl Builtins {
         let quot_lift = name2(st, b"Quot", b"lift");
         let quot_ind = name2(st, b"Quot", b"ind");
         let eq = name1(st, b"Eq");
+        let hadd_hadd = name2(st, b"HAdd", b"hAdd");
+        let add_add = name2(st, b"Add", b"add");
+        let of_nat_of_nat = name2(st, b"OfNat", b"ofNat");
         let opt_param = name1(st, b"optParam");
         let auto_param = name1(st, b"autoParam");
         let out_param = name1(st, b"outParam");
@@ -305,6 +312,9 @@ impl Builtins {
             quot_lift,
             quot_ind,
             eq,
+            hadd_hadd,
+            add_add,
+            of_nat_of_nat,
             opt_param,
             auto_param,
             out_param,

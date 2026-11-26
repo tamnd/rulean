@@ -11,9 +11,10 @@ use rulean_store::{BinderInfo, Expr, ExprId, LevelListId, NameId, SATURATED};
 use crate::env::compare_hints;
 use crate::expr;
 use crate::level;
+use crate::pin::PIN_NAT;
 use crate::tc::{Checker, ErrorKind, LBool, to_lbool};
 use crate::trace::Rule;
-use crate::value::{Closure, EnvId, Head, SpineId, Value, ValueId};
+use crate::value::{Closure, EnvId, Head, SpineId, Value, ValueId, small_get};
 
 /// The engine of the definitional equality queries.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -51,6 +52,12 @@ const SAME_BUDGET: u32 = 64;
 
 /// The largest number of delta steps on the side of a taken branch in `conv_lazy_delta` (row O8 of spec 05.7.3).
 const TAKEN_STEPS: u32 = 32;
+
+/// The steps of the offset view of one value (row O11 of spec 05.7.3): an unfolding of a head, a reduced projection, or a peeled offset. The view stops after these steps, and the value that it has then is the base.
+const OFFSET_STEPS: u32 = 16;
+
+/// The depth of the offset view in the second argument of `Nat.add`, which must be a literal.
+const OFFSET_DEPTH: u32 = 2;
 
 /// A bit of `Checker::f_bits`: the query used a delta step.
 pub(crate) const F_DELTA: u32 = 1;
@@ -468,7 +475,13 @@ impl Checker {
         let mut lead = 0;
         let mut taken = 0;
         while !done && !self.bad() {
+            // The offset rule runs before each step, as `is_def_eq_offset` in the official kernel (row O11).
+            let offset = self.conv_offset(x, y);
             match (self.glued_head(x), self.glued_head(y)) {
+                _ if offset => {
+                    r = LBool::True;
+                    done = true;
+                }
                 (None, None) => done = true,
                 (Some(_), None) => {
                     let y2 = self.proj_unfold(y);
@@ -541,6 +554,135 @@ impl Checker {
             }
         }
         (r, x, y)
+    }
+
+    /// The offset rule of engine F (row O11 of spec 05.7.3): true if `a` is `x + k` and `b` is `y + k` for the same literal `k > 0`, and `x` and `y` are equal. The view of a value (`nat_offset`) unfolds `HAdd.hAdd`, `Add.add` and `OfNat.ofNat`, and it peels `Nat.add x n` for a literal `n`, `Nat.succ x` and literals.
+    ///
+    /// The official kernel peels only `Nat.succ` and literals (`is_def_eq_offset`). It does not peel `x + 1`, so on `perf/unfold-before-literal-fallback` it compares `(slowA + 1) + (1 + 0)` with `slowA + (2 + 0)` by the evaluation of `slowA` to a literal. The rule is sound because `Nat.add x n` is `Nat.succ` applied `n` times to `x` by the definition of `Nat.add`, which is pinned. The rule gives only "equal". If the offsets or the bases are different, the normal steps decide the query.
+    fn conv_offset(&mut self, a: ValueId, b: ValueId) -> bool {
+        let on = self.pin_on(PIN_NAT) && self.pin_on(1);
+        let heads = on && self.offset_head(a) && self.offset_head(b);
+        if !heads {
+            return false;
+        }
+        let (xa, ka) = self.nat_offset(a, OFFSET_DEPTH);
+        let (xb, kb) = self.nat_offset(b, OFFSET_DEPTH);
+        match (xa, xb) {
+            (Some(x), Some(y)) if ka == kb && ka > 0 && !self.bad() => self.conv(x, y),
+            _ => false,
+        }
+    }
+
+    /// True if `v` is an addition of type `Nat` or `Nat.succ x`, with no evaluation of an argument. This check comes first, so the offset rule costs little on the other queries.
+    fn offset_head(&mut self, v: ValueId) -> bool {
+        match self.vget(v) {
+            Value::Glued(c, us, sp, _) => {
+                let n = self.va.spine_len(sp);
+                let add = c == self.b.nat_op_names[0] && us == LevelListId(0) && n == 2;
+                let hadd = c == self.b.hadd_hadd && n == 6;
+                let add2 = c == self.b.add_add && n == 4;
+                add || ((hadd || add2) && self.nat_type_arg(self.va.spine_arg(sp, 0)))
+            }
+            Value::Neu(Head::Const(c, _), sp) => c == self.b.nat_succ && self.va.spine_len(sp) == 1,
+            _ => false,
+        }
+    }
+
+    /// True if the argument `a` is the type `Nat`, with no evaluation.
+    fn nat_type_arg(&mut self, a: Option<ValueId>) -> bool {
+        match a {
+            Some(x) => match self.va.get(x) {
+                Value::Neu(Head::Const(c, _), sp) => c == self.b.nat && sp == SpineId::NIL,
+                Value::Susp(_, t, _) => {
+                    matches!(self.st.node(t), Expr::Const(c, _) if c == self.b.nat)
+                }
+                _ => false,
+            },
+            None => false,
+        }
+    }
+
+    /// The offset view of `v` (row O11 of spec 05.7.3): a base `x` and a number `k` such that `v` is `Nat.succ` applied `k` times to `x`. The base is `None` if `v` is the literal `k`. The view unfolds `HAdd.hAdd`, `Add.add` and `OfNat.ofNat`, reduces projections, and peels `Nat.add x n` if the view of `n` at depth `depth - 1` is a literal. In the literal argument of `Nat.add`, where `depth` is less than `OFFSET_DEPTH`, the view also unfolds other definitions, as the `List.foldr` of `List.sum`, but not a `Nat` operation, because the `Nat` extension would evaluate its arguments. The base of the top view is not unfolded. The view does at most `OFFSET_STEPS` steps.
+    fn nat_offset(&mut self, v: ValueId, depth: u32) -> (Option<ValueId>, u64) {
+        let mut w = v;
+        let mut k: u64 = 0;
+        let mut lit = false;
+        let mut go = true;
+        let mut steps = 0;
+        while go && steps < OFFSET_STEPS && !self.bad() {
+            steps += 1;
+            match self.vget(w) {
+                Value::Glued(c, ..)
+                    if c == self.b.hadd_hadd
+                        || c == self.b.add_add
+                        || c == self.b.of_nat_of_nat =>
+                {
+                    w = self.conv_delta(w);
+                }
+                Value::Neu(Head::Proj(..), _) => {
+                    let w2 = self.proj_unfold(w);
+                    if w2 == w {
+                        go = false;
+                    } else {
+                        w = self.force_core(w2);
+                    }
+                }
+                Value::Glued(c, us, sp, s)
+                    if c == self.b.nat_op_names[0]
+                        && us == LevelListId(0)
+                        && self.va.spine_len(sp) == 2 =>
+                {
+                    match self.va.slot_get(s) {
+                        Some(n) => w = n,
+                        None => {
+                            let n = match (depth, self.va.spine_arg(sp, 1)) {
+                                (d, Some(y)) if d > 0 => self.nat_offset(y, d - 1),
+                                _ => (Some(w), 0),
+                            };
+                            let sum = k.checked_add(n.1);
+                            match (n.0, sum, self.va.spine_arg(sp, 0)) {
+                                (None, Some(s2), Some(x)) => {
+                                    k = s2;
+                                    w = x;
+                                }
+                                _ => go = false,
+                            }
+                        }
+                    }
+                }
+                Value::Neu(Head::Const(c, _), sp)
+                    if c == self.b.nat_succ && self.va.spine_len(sp) == 1 =>
+                {
+                    match (k.checked_add(1), self.va.spine_arg(sp, 0)) {
+                        (Some(s2), Some(x)) => {
+                            k = s2;
+                            w = x;
+                        }
+                        _ => go = false,
+                    }
+                }
+                Value::Neu(Head::Const(c, _), sp) if c == self.b.nat_zero && sp == SpineId::NIL => {
+                    lit = true;
+                    go = false;
+                }
+                Value::Small(lo, hi) => match k.checked_add(small_get(lo, hi)) {
+                    Some(s2) => {
+                        k = s2;
+                        lit = true;
+                        go = false;
+                    }
+                    None => go = false,
+                },
+                Value::Glued(c, ..)
+                    if depth < OFFSET_DEPTH
+                        && self.nat_op_name_index(c) >= self.b.nat_op_names.len() =>
+                {
+                    w = self.conv_delta(w);
+                }
+                _ => go = false,
+            }
+        }
+        if lit { (None, k) } else { (Some(w), k) }
     }
 
     /// True if an argument of the spine `sp` has the form of `v`, a glued value of the constant `c` (row O8 of spec 05.7.3). Only an argument with the head `c` is compared, so the check evaluates no other argument.

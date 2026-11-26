@@ -101,6 +101,8 @@ struct EnvNode {
     value: ValueId,
     parent: EnvId,
     len: u32,
+    /// The value key of the environment (spec 04.12), or 0 if it is not computed.
+    key: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -108,6 +110,8 @@ struct SpineNode {
     arg: ValueId,
     parent: SpineId,
     len: u32,
+    /// The value key of the spine (spec 04.12), or 0 if it is not computed.
+    key: u32,
 }
 
 /// The number of nodes in each array of the arena.
@@ -123,6 +127,8 @@ pub struct Counts {
 #[derive(Clone, Debug, Default)]
 pub struct Arena {
     values: Vec<Value>,
+    /// The value key of each value (spec 04.12), or 0 if it is not computed.
+    vkeys: Vec<u32>,
     envs: Vec<EnvNode>,
     spines: Vec<SpineNode>,
     slots: Vec<Option<ValueId>>,
@@ -144,6 +150,7 @@ impl Arena {
     pub fn new() -> Arena {
         Arena {
             values: Vec::new(),
+            vkeys: Vec::new(),
             envs: Vec::new(),
             spines: Vec::new(),
             slots: Vec::new(),
@@ -183,6 +190,7 @@ impl Arena {
     /// Removes all nodes. The arrays keep their capacity for the next declaration.
     pub fn reset(&mut self) {
         self.values.truncate(0);
+        self.vkeys.truncate(0);
         self.envs.truncate(0);
         self.spines.truncate(0);
         self.slots.truncate(0);
@@ -238,6 +246,7 @@ impl Arena {
         }
         self.freed += self.values.len() - m.values;
         self.values.truncate(m.values);
+        self.vkeys.truncate(m.values);
         self.envs.truncate(m.envs);
         self.spines.truncate(m.spines);
         self.slots.truncate(m.slots);
@@ -266,7 +275,38 @@ impl Arena {
             return ValueId(0);
         }
         self.values.push(v);
+        self.vkeys.push(0);
         ValueId(i)
+    }
+
+    /// The value key of a value (spec 04.12), or 0 if it is not computed.
+    pub fn vkey(&self, v: ValueId) -> u32 {
+        self.vkeys[v.0 as usize]
+    }
+
+    /// Keeps the value key of a value.
+    pub fn set_vkey(&mut self, v: ValueId, k: u32) {
+        self.vkeys[v.0 as usize] = k;
+    }
+
+    /// The value key of an environment node, or 0 if it is not computed.
+    pub fn env_key(&self, e: EnvId) -> u32 {
+        self.envs[e.0 as usize].key
+    }
+
+    /// Keeps the value key of an environment node.
+    pub fn set_env_key(&mut self, e: EnvId, k: u32) {
+        self.envs[e.0 as usize].key = k;
+    }
+
+    /// The value key of a spine node, or 0 if it is not computed.
+    pub fn spine_key(&self, s: SpineId) -> u32 {
+        self.spines[s.0 as usize].key
+    }
+
+    /// Keeps the value key of a spine node.
+    pub fn set_spine_key(&mut self, s: SpineId, k: u32) {
+        self.spines[s.0 as usize].key = k;
     }
 
     /// The value of a handle. The handle must come from this arena after the last `reset`.
@@ -290,6 +330,7 @@ impl Arena {
             value: v,
             parent: env,
             len,
+            key: 0,
         });
         EnvId(i)
     }
@@ -345,6 +386,7 @@ impl Arena {
             arg,
             parent: sp,
             len,
+            key: 0,
         });
         SpineId(i)
     }

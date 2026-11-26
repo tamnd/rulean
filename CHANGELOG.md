@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- The regions of the engine F arena can remove at most 2^13 values in one declaration, in place of 2^18. Engine F then stops sooner on a declaration that it cannot finish, and engine R checks it. On Init with `--engine F` and one thread, the run uses 249.5 G instructions in place of 264.9 G.
+
 ## [0.8.5] - 2026-11-27
 
 ### Changed

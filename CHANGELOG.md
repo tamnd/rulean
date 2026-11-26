@@ -12,6 +12,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `f_conv_top` uses one cache for the read-back of the two values of a query, so a sub-value that both values share is read back once. On Init with `--engine F` and one thread, the run uses 242.9 G instructions in place of 243.5 G.
 - The table of value keys keeps each key and its number in the slot of the hash table, so a lookup reads one place in memory in place of two. On Init with `--engine F` and one thread, the run uses 236.5 G instructions in place of 242.9 G.
 - The caches of the checker (`Memo`) keep each key and its value in the slot of the hash table, so a lookup reads one place in memory in place of two. On Init with `--engine F` and one thread, the run uses 225.9 G instructions in place of 236.5 G, and the perf suite uses 510.1 G in place of 525.1 G.
+- `c_unfold_key` and `c_force` keep a result and its bits of `f_bits` in one entry, in place of two, and `unfold_glued` looks up its cache before it makes the body of the definition. On Init with `--engine F` and one thread, the run uses 223.5 G instructions in place of 225.9 G.
 
 ## [0.8.5] - 2026-11-27
 

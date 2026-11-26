@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 - The regions of the engine F arena can remove at most 2^13 values in one declaration, in place of 2^18. Engine F then stops sooner on a declaration that it cannot finish, and engine R checks it. On Init with `--engine F` and one thread, the run uses 249.5 G instructions in place of 264.9 G.
 - A new value key walks the table of value keys one time, in place of two times (a lookup and then an insert). On Init with `--engine F` and one thread, the run uses 246.1 G instructions in place of 249.4 G.
+- The read-back of engine F (`quote`) keeps the term of each value in a cache for one top-level call, so a value that a term uses at many places is read back once. On Init with `--engine F` and one thread, the run uses 243.5 G instructions in place of 246.1 G.
 
 ## [0.8.5] - 2026-11-27
 

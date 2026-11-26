@@ -17,7 +17,7 @@ use crate::env::{ConstKind, Env};
 use crate::expr::{self, Scratch};
 use crate::finfer::FInfer;
 use crate::level::{self, LevelCache};
-use crate::memo::Memo;
+use crate::memo::{Lossy, Memo};
 use crate::pin;
 use crate::profile::{Flags, Profile};
 use crate::session::{S_INFER, Session};
@@ -366,6 +366,10 @@ pub struct Checker {
     pub(crate) fi: FInfer,
     /// The number of binders that `quote` of engine F has opened. Their free variables are not in the local context.
     pub(crate) f_under: u32,
+    /// The read-backs of one top-level `quote`, at key (value, `base` and `k`). It is cleared at the start of each top-level `quote`, because a release of the arena between two calls can give an old value id to a new value.
+    pub(crate) c_quote: Lossy,
+    /// The number of `quote` calls that are open.
+    pub(crate) q_depth: u32,
     /// The engine of the definitional equality queries (`--engine`).
     pub engine: Engine,
     /// `--confirm all`: engine R confirms each "equal" answer of engine F.
@@ -487,6 +491,8 @@ impl Checker {
             estk: Vec::new(),
             fi: FInfer::new(),
             f_under: 0,
+            c_quote: Lossy::new(),
+            q_depth: 0,
             engine: Engine::R,
             confirm_all: false,
             f_stats: FStats::default(),

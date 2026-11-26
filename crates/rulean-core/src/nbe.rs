@@ -1155,7 +1155,29 @@ impl Checker {
         if !self.enter(self.dummy) {
             return self.dummy;
         }
-        let r = self.quote_node(base, k, v);
+        if self.q_depth == 0 {
+            self.c_quote.clear();
+        }
+        // The key keeps `base` and `k` exactly, so a read-back with other levels is never a hit.
+        let small = base < (1 << 16) && k < (1 << 16);
+        let key = raw((base << 16) | (k & 0xffff));
+        let hit = if small {
+            self.c_quote.get(raw(v.0), key)
+        } else {
+            None
+        };
+        let r = match hit {
+            Some(t) => ExprId(t),
+            None => {
+                self.q_depth += 1;
+                let t = self.quote_node(base, k, v);
+                self.q_depth -= 1;
+                if small && !self.bad() {
+                    self.c_quote.put(raw(v.0), key, t.0);
+                }
+                t
+            }
+        };
         self.leave();
         r
     }

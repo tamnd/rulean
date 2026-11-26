@@ -33,6 +33,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "ndjson_fast"
+path = "fuzz_targets/ndjson_fast.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "rlb"
 path = "fuzz_targets/rlb.rs"
 test = false

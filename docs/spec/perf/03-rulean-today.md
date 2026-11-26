@@ -99,6 +99,7 @@ The main cost is the work of engine F itself. With engine R, the same export has
 
 Source: the nightly run 45535065648 (2026-11-25), counter cachegrind, with a limit of 5 s for cachegrind. A run longer than that limit has no count.
 
+- valgrind does not give the SHA extensions of the CPU to the program. So under cachegrind, the hash of the input uses the portable SHA-256 of `rulean_core::sha256`, at about 8800 instructions for each block of 64 bytes, which is about 137 instructions for each byte. A real machine with SHA-NI or the SHA2 extension of aarch64 does not use this code. On the Init export, the profile run 45734830016 has 47.7 G instructions in `rulean_core::sha256::compress`, of 292.7 G in total. So a cachegrind count is higher than the Arena count by about 137 instructions for each byte of the input [U for the Arena machine].
 - The gate for correct verdicts passes on all 230 tests.
 - The gate for `perf/` (at most 1 virtual second, 6.0 G) fails on 20 of the 43 tests in the local corpus. 10 tests have a count above 6.0 G, and 10 tests have no count because they ran longer than the limit of cachegrind.
 - On the 40 tests of G3, rulean has a count on 32 tests, with a sum of 207.3 G. Of the other 8 tests, 6 have no count and 2 are not in the local corpus. The target G3 is 67.3 G for all 40 tests.

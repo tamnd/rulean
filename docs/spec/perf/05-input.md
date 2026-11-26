@@ -39,6 +39,10 @@ Strings use the fast path only when they have no escape. A string with a backsla
 
 A test reads each line of the corpus of spec 11 with the two parsers and compares the results. A fuzz target compares the two parsers on random lines.
 
+A line that must grow an index table goes to the general parser too. The general parser checks the memory budget after the store call, and the store call changes the size of the store. So the fast path cannot do the same check before the call. This occurs about 50 times on Init, once for each doubling of one of the three tables.
+
+Result on Init, on 2026-11-26 (`rulean check --parse-only`, macOS, `/usr/bin/time -l`): 27.97 G instructions and 9.03 G cycles before, 10.85 G instructions and 5.27 G cycles with the fast path. The counts of nodes, names and levels do not change.
+
 ## 05.4 Ids
 
 The id of each kind (`ie`, `in`, `il`) goes up by one from line to line in each export that we know. The index from an export id to a store handle (`Index` in `ndjson.rs`) stays an array. The fast path adds one check: if the id is the next id, the handle goes at the end of the array, with no check of the array length. An id that is not the next id uses the general path, which is valid for each order.

@@ -996,7 +996,7 @@ impl Checker {
         }
     }
 
-    /// The steps after lazy delta: the same head with equal arguments, then the projections of folded structures, then function eta, then structure eta.
+    /// The steps after lazy delta: the same head with equal arguments, then the projections of folded structures, then function eta, then structure eta, then the rule for unit-like types.
     ///
     /// As in the official kernel, two projections are first compared by their structures, and only then are the structures unfolded (`is_def_eq_proj`, then `whnf_core` with full projections). `force_core` keeps a projection of a folded structure (`proj_value_core`), so a projection that is still neutral here can reduce after delta on its structure.
     fn conv_whnf(&mut self, a: ValueId, b: ValueId) -> bool {
@@ -1017,7 +1017,11 @@ impl Checker {
         match (va, vb) {
             (Value::Lam(_, _, d, c), _) => self.conv_eta(d, c, b),
             (_, Value::Lam(_, _, d, c)) => self.conv_eta(d, c, a),
-            _ => self.conv_eta_struct(a, b) || self.conv_eta_struct(b, a),
+            _ => {
+                self.conv_eta_struct(a, b)
+                    || self.conv_eta_struct(b, a)
+                    || self.conv_unit_like(a, b)
+            }
         }
     }
 
@@ -1057,6 +1061,32 @@ impl Checker {
             i += 1;
         }
         ok && !self.bad()
+    }
+
+    /// The rule for unit-like types (`is_def_eq_unit_like`): two values of a structure with one constructor and no fields are equal if their types are equal. The rule needs the types, so it reads both values back and uses engine R, and it sets `F_TYPED`. A sort, a literal, a pi type and a lambda never have such a type, so these values are not read back. Without this rule, engine F found two locals of type `PUnit` not equal.
+    fn conv_unit_like(&mut self, a: ValueId, b: ValueId) -> bool {
+        if self.never_unit(a) || self.never_unit(b) {
+            return false;
+        }
+        let base = self.lctx_ty.len() as u32;
+        let ta = self.quote(base, base, a);
+        let tb = self.quote(base, base, b);
+        if self.bad() {
+            return false;
+        }
+        let r = self.is_def_eq_unit_like(ta, tb);
+        if r {
+            self.f_bits |= F_TYPED;
+        }
+        r && !self.bad()
+    }
+
+    /// True if `v` is a sort, a literal, a pi type or a lambda. These values never have a unit-like type.
+    fn never_unit(&mut self, v: ValueId) -> bool {
+        matches!(
+            self.vget(v),
+            Value::Sort(_) | Value::Lit(_) | Value::Small(..) | Value::Pi(..) | Value::Lam(..)
+        )
     }
 
     /// True if `n` is an inductive type with one constructor, no indices and no recursion. A name that is not in the environment gives false, so the rule does not apply.

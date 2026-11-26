@@ -602,7 +602,7 @@ impl Checker {
     }
 
     /// `is_def_eq_unit_like`: two terms of a structure with one constructor and no fields.
-    fn is_def_eq_unit_like(&mut self, t: ExprId, s: ExprId) -> bool {
+    pub(crate) fn is_def_eq_unit_like(&mut self, t: ExprId, s: ExprId) -> bool {
         let ty = self.infer(t);
         let t_type = self.whnf(ty);
         if self.bad() {

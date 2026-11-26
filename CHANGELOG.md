@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-26
+
 ### Changed
 
 - Engine F has an offset rule in lazy delta (row O11 of spec 05.7.3). It views each side as `x + k` for a literal `k`, and two sides with the same offset and equal bases are equal. On `perf/unfold-before-literal-fallback`, engine F accepts all 68 checks with 0.036 G instructions in place of 89.5 G, because `(slowA + 1) + (1 + 0)` and `slowA + (2 + 0)` both have the base `slowA` and the offset 2. On the Init export, engine F accepts 4 more checks, and the steps are 691.3 million in place of 692.4 million.
@@ -401,7 +403,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/tamnd/rulean/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/tamnd/rulean/compare/v0.0.19...v0.8.0
 [0.0.19]: https://github.com/tamnd/rulean/compare/v0.0.18...v0.0.19
 [0.0.18]: https://github.com/tamnd/rulean/compare/v0.0.17...v0.0.18

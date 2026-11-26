@@ -24,12 +24,13 @@ on:
         type: string
         default: ""
       engine:
-        description: The engine of rulean check
+        description: The engine of rulean check, or parse for rulean check --parse-only
         type: choice
         default: R
         options:
           - R
           - F
+          - parse
 
 permissions:
   contents: read

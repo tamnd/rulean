@@ -40,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [olean, ndjson, rlb]
+        target: [olean, ndjson, ndjson_fast, rlb]
         shard: ${{ fromJSON(github.event_name == 'pull_request' && '[1]' || '[1, 2]') }}
     env:
       # A pull request only checks that the target builds and runs. The weekly run takes 4 hours for each shard.
@@ -69,6 +69,10 @@ jobs:
           cp crates/rulean-cli/tests/data/*.ndjson fuzz/corpus/ndjson/
           scripts/arena-fetch.sh _tmp/arena
           find _tmp/arena/tests -path '*tutorial*' -name '*.ndjson' -size -64k -exec cp {} fuzz/corpus/ndjson/ \;
+          if [ "$TARGET" = ndjson_fast ]; then
+            mkdir -p fuzz/corpus/ndjson_fast
+            cp fuzz/corpus/ndjson/*.ndjson fuzz/corpus/ndjson_fast/
+          fi
           if [ "$TARGET" = rlb ]; then
             cargo build --locked --release -p rulean-cli
             for f in fuzz/corpus/ndjson/*.ndjson; do

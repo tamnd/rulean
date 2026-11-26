@@ -44,4 +44,4 @@ pub use decl::{
     Safety, Thm,
 };
 pub use error::{Error, ErrorKind};
-pub use ndjson::{Export, Parser, Stream, parse, parse_export};
+pub use ndjson::{Export, Parser, Stream, parse, parse_export, parse_export_with};

@@ -15,6 +15,8 @@ use crate::error::{Error, ErrorKind};
 use crate::json::{NONE, Obj, Range, Scanner, at, skip_ws, utf8_valid};
 use crate::keys;
 
+mod fast;
+
 /// The newest minor version of format 3 that the parser knows.
 pub const KNOWN_MINOR: u64 = 1;
 
@@ -62,6 +64,12 @@ pub struct Parser {
     lean_version: Vec<u8>,
     /// The `format.version` string of the meta line.
     format_version: Vec<u8>,
+    /// True if the parser tries the template fast path first (spec perf/05.3).
+    fast: bool,
+    /// The number of lines that the fast path read.
+    fast_lines: u64,
+    /// The levels of a `const` record on the fast path.
+    us: Vec<LevelId>,
 }
 
 impl Default for Parser {
@@ -91,6 +99,9 @@ impl Parser {
             line: 0,
             lean_version: Vec::new(),
             format_version: Vec::new(),
+            fast: true,
+            fast_lines: 0,
+            us: Vec::new(),
         };
         p.names.slots.push(0);
         p.levels.slots.push(0);
@@ -107,11 +118,26 @@ impl Parser {
         self.line
     }
 
+    /// Turns the template fast path on or off. It is on by default. The two settings give the same result on each input. The tests use this to compare the fast path with the general parser.
+    pub fn set_fast(&mut self, on: bool) {
+        self.fast = on;
+    }
+
+    /// The number of lines that the template fast path read.
+    pub fn fast_lines(&self) -> u64 {
+        self.fast_lines
+    }
+
     /// Reads one line, without its newline. The result is the declaration of the line, if the line is a declaration record.
     pub fn line(&mut self, store: &mut Store, b: &[u8]) -> Result<Option<Decl>, Error> {
         self.line += 1;
         self.scan.fault = None;
-        let d = self.record(store, b);
+        // Line 1 must be the meta line, and the fast path has no form for it.
+        let d = if self.fast && self.line != 1 && self.fast_line(store, b) {
+            None
+        } else {
+            self.record(store, b)
+        };
         if store.is_full() {
             self.scan.fail(ErrorKind::StoreFull);
         }
@@ -918,7 +944,13 @@ pub fn parse(store: &mut Store, input: &[u8]) -> Result<Vec<Decl>, Error> {
 
 /// Parses a whole NDJSON export into `store`, as `parse` does, and also gives the facts of the meta line.
 pub fn parse_export(store: &mut Store, input: &[u8]) -> Result<Export, Error> {
+    parse_export_with(store, input, true)
+}
+
+/// Parses a whole NDJSON export, as `parse_export` does. If `fast` is false, the parser does not use the template fast path (spec perf/05.3). The result is the same for each value of `fast`. The tests and the fuzz target use this to compare the two paths.
+pub fn parse_export_with(store: &mut Store, input: &[u8], fast: bool) -> Result<Export, Error> {
     let mut s = Stream::new();
+    s.set_fast(fast);
     let mut tail = false;
     let mut start = 0;
     while s.ok() && start < input.len() {
@@ -968,6 +1000,16 @@ impl Stream {
     /// False after the first error. The parse ignores the lines after an error.
     pub fn ok(&self) -> bool {
         !self.failed
+    }
+
+    /// Turns the template fast path of the parser on or off (`Parser::set_fast`).
+    pub fn set_fast(&mut self, on: bool) {
+        self.p.set_fast(on);
+    }
+
+    /// The number of lines that the template fast path read.
+    pub fn fast_lines(&self) -> u64 {
+        self.p.fast_lines()
     }
 
     /// The bytes of the index tables and of the list of declarations, without the allocator overhead and without the vectors inside the declarations.

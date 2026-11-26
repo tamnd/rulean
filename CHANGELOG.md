@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-11-27
+
 ### Changed
 
 - Engine F uses the levels of an application in `never_proof`. A constant whose type ends in a bound variable of type `Sort u`, such as `PSigma.fst`, `ite` or a `casesOn`, is never a proof when `u` with these levels is never zero, and proof irrelevance does not read it back. On Init with `--engine F` and one thread, the run uses 264.9 G instructions in place of 274.7 G.
@@ -436,7 +438,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.4...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.5...HEAD
+[0.8.5]: https://github.com/tamnd/rulean/compare/v0.8.4...v0.8.5
 [0.8.4]: https://github.com/tamnd/rulean/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/tamnd/rulean/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/tamnd/rulean/compare/v0.8.1...v0.8.2

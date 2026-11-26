@@ -1,7 +1,7 @@
 /-!
 # The order of the conversion steps (spec 05.7.3)
 
-This file is a twin of the conversion loop of A§1.8 at the level of its step order. It has the quick check, the head reduction without delta (`whnf_core`), lazy delta with heights and the congruence of applications. It proves the reordering lemmas O1, O2, O3, O5 and O7 of the table in spec 05.7.3. Lemma O4 is in `Twin/Zeta.lean`.
+This file is a twin of the conversion loop of A§1.8 at the level of its step order. It has the quick check, the head reduction without delta (`whnf_core`), lazy delta with heights and the congruence of applications. It proves the reordering lemmas O1, O2, O3, O5, O7 and O12 of the table in spec 05.7.3. Lemma O4 is in `Twin/Zeta.lean`.
 
 The twin is a model, not the Aeneas model of the Rust code. The terms have no binders and no types, and `whnf_core` is a parameter. The lemmas show that each reordering of engine F gives the answer of the official order on this model. The link to the Rust code comes with the Aeneas model (spec 10.4.1).
 
@@ -340,6 +340,36 @@ theorem lazyDelta_same (K : Kernel) (t : Tm) : lazyDelta K (conv K 1) t t = some
   cases h : K.height t with
   | none => simp [congr_same]
   | some a => simp [congr_same]
+
+/-- O12: for the same head with a definition, engine F unfolds both sides before it compares the arguments, and two unfoldings of the same form are equal. The official order compares the arguments first. If they are equal, it gives "equal". If they are not equal, it unfolds both sides, and the quick check gives "equal" on the two same unfoldings. So the official order gives "equal" whenever its comparison of the arguments gives an answer with the fuel `n + 1`. The hypothesis `hc` is needed: if the comparison of the arguments has no answer with any fuel, the official order has no answer, and engine F gives "equal". This is a difference of termination, not a different answer. -/
+theorem lazyDelta_same_unfold (K : Kernel) (n : Nat) (t s : Tm) (a : Nat)
+    (ht : K.height t = some a) (hh : headConst t = headConst s)
+    (hu : K.unfold t = K.unfold s) (hc : congr (conv K (n + 1)) t s ≠ none) :
+    lazyDelta K (conv K (n + 1)) t s = some true := by
+  have hs : K.height s = some a := by rw [← height_of_head hh, ht]
+  unfold lazyDelta
+  simp only [ht, hs, Nat.lt_irrefl, ite_false, hh, ite_true]
+  cases h : congr (conv K (n + 1)) t s with
+  | none => exact absurd h hc
+  | some x =>
+    cases x with
+    | true => rfl
+    | false => simp [hu, conv, offStep]
+
+/-- O12 with the fuel of the official order. If the comparison of the arguments gives an answer with some fuel, the official order gives "equal" with more fuel. -/
+theorem conv_same_unfold (K : Kernel) (t s : Tm) (a : Nat)
+    (ht : K.height t = some a) (hh : headConst t = headConst s)
+    (hu : K.unfold t = K.unfold s) (hw : K.whnfCore t = t) (hw' : K.whnfCore s = s)
+    (hc : ∃ n, congr (conv K (n + 1)) t s ≠ none) :
+    ∃ m, conv K m t s = some true := by
+  obtain ⟨n, hn⟩ := hc
+  refine ⟨n + 2, ?_⟩
+  show offStep K (conv K (n + 1)) t s = some true
+  unfold offStep
+  by_cases hts : t = s
+  · simp [hts]
+  · simp only [hts, ite_false, hw, hw']
+    exact lazyDelta_same_unfold K n t s a ht hh hu hn
 
 /-- The main theorem: each answer of engine F is an answer of the official order. -/
 theorem convF_conv {K : Kernel} {C : Tm → Tm → Bool} (hC : CacheTrue K C) :

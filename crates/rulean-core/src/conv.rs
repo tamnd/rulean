@@ -459,7 +459,7 @@ impl Checker {
         }
     }
 
-    /// Lazy delta on glued heads (spec 05.4.4 step 5, A§1.8 step 5). It unfolds the side with the greater height, or both sides if the heights are equal. Before it unfolds two applications of the same regular definition, it compares the levels and the arguments.
+    /// Lazy delta on glued heads (spec 05.4.4 step 5, A§1.8 step 5). It unfolds the side with the greater height, or both sides if the heights are equal. For two applications of the same regular definition that is not a `Nat` operation, it unfolds both sides, and two unfoldings of the same form are equal (row O12 of spec 05.7.3). If they do not have the same form, it compares the levels and the arguments, and then it goes on with the unfoldings. On `perf/short-circuit-and`, `false && a` and `false && b` both unfold to `false`, and the open terms `a` and `b` are not compared.
     ///
     /// If the heads are different and one side is an application of a binary `Nat` operation with an argument that is not a literal without delta, the other side unfolds first (row O10 of spec 05.7.3). The `Nat` extension would unfold that argument to a literal, and the other side can reach the same operation with the same argument. On `perf/unfold-before-literal`, `[slowA, 1].sum` and `slowA + (1 + 0)` both reach `Nat.add slowA _`, and the arguments are then compared before the `Nat` extension evaluates `slowA`.
     ///
@@ -530,14 +530,30 @@ impl Checker {
                         let regular = matches!(h1, Hints::Regular(_));
                         // Two sides of the same form are equal (row O7). Else, for a regular definition, the arguments are compared before the unfolding.
                         let same = c1 == c2 && self.same_value(x, y);
-                        if same
-                            || (regular
-                                && c1 == c2
+                        let args = regular && c1 == c2 && !same;
+                        // For the same regular head, both sides unfold first, and two unfoldings of the same form are equal (row O12). Else the arguments are compared, and lazy delta goes on with the unfoldings. A `Nat` operation does not unfold first, because the `Nat` extension evaluates its arguments.
+                        let first = args && self.nat_op_name_index(c1) == self.b.nat_op_names.len();
+                        let bits = self.f_bits;
+                        let x2 = if first { self.conv_delta(x) } else { x };
+                        let y2 = if first { self.conv_delta(y) } else { y };
+                        let unfolded = same || (first && !self.bad() && self.same_value(x2, y2));
+                        // An equality of the arguments does not use the two unfoldings, so their bits of `f_bits` are added only if lazy delta goes on with them. Else the query goes to the confirm set with no need.
+                        let delta = self.f_bits;
+                        if !unfolded {
+                            self.f_bits = bits;
+                        }
+                        if unfolded
+                            || (args
+                                && !self.bad()
                                 && self.is_def_eq_levels(us1, us2)
                                 && self.conv_spines(sp1, sp2))
                         {
                             r = LBool::True;
                             done = true;
+                        } else if first {
+                            self.f_bits |= delta;
+                            x = x2;
+                            y = y2;
                         } else {
                             x = self.conv_delta(x);
                             y = self.conv_delta(y);

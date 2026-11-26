@@ -432,3 +432,29 @@ fn two_additions_with_the_same_offset_compare_the_bases() {
     let s = t.c.f_stats;
     assert_eq!((s.queries, s.equal, s.fallback), (1, 1, 0));
 }
+
+#[test]
+fn the_same_regular_head_unfolds_before_the_arguments_are_compared() {
+    let mut t = T::new();
+    let a = t.a_ty;
+    let x = t.axiom("x", a);
+    let y = t.axiom("y", a);
+    // `k a b := a` drops its second argument, as `false && b` drops `b`.
+    let b1 = t.bv(1);
+    let inner = t.lam("b", a, b1);
+    let k_v = t.lam("a", a, inner);
+    let aa = t.pi("b", a, a);
+    let aaa = t.pi("a", a, aa);
+    let k = t.def("k", aaa, k_v, 4);
+    // The second arguments are different, and their comparison costs two delta steps.
+    let e1 = t.def("e1", a, x, 1);
+    let e2 = t.def("e2", a, y, 1);
+    let lhs = t.app(k, &[x, e1]);
+    let rhs = t.app(k, &[x, e2]);
+    // Both sides unfold to `x` first, so the query compares no argument and does two delta steps in place of four.
+    t.c.trace_on = true;
+    assert!(t.eq(lhs, rhs));
+    assert_eq!(t.c.trace.counts[Rule::Delta.index()], 2);
+    let s = t.c.f_stats;
+    assert_eq!((s.queries, s.equal, s.fallback), (1, 1, 0));
+}

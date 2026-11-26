@@ -4,7 +4,7 @@
 //!
 //! A context is a node of a tree. Each node has its parent, one more entry and the environment of values for `eval`. Two binders with the same parent node and the same domain term get the same node, so a shared subterm under two such binders has one cache key. The cache keys of inference and evaluation are a term and a node. A term without loose bound variables uses the root node.
 //!
-//! A binder node has a free variable in the local context, with the level of the next free variable. The local context only grows during a declaration, so the levels of the nodes stay valid. A `let` node keeps the value in the environment and has no free variable. A projection, a literal or a free variable goes to engine R, on the term with the free variables of the nodes in place of its loose bound variables. A `let` node gets its free variable only when engine R needs it.
+//! A binder node has a free variable in the local context, with the level of the next free variable. The local context only grows during a declaration, so the levels of the nodes stay valid. A `let` node keeps the value in the environment and has no free variable. A literal and a free variable get their type in engine F. A projection does too. For a structure in `Prop`, engine R decides `is_prop` of each field type as one query on its read-back. A projection whose type has a form that engine F does not read goes to engine R, on the term with the free variables of the nodes in place of its loose bound variables. A `let` node gets its free variable only when engine R needs it.
 //!
 //! The result of inference is a value. A lambda gets a pi type whose body is the read-back of the type of its body (spec 05.4.3).
 //!
@@ -475,7 +475,132 @@ impl Checker {
                 let c2 = self.f_let(c, l.name, l.ty, l.value, tv, vv);
                 self.f_infer(c2, l.body, infer_only)
             }
-            Expr::Lit(_) | Expr::Proj(_) | Expr::FVar(..) => self.f_infer_r(c, e, infer_only),
+            Expr::Lit(l) => {
+                let t = self.infer_lit(e, l);
+                self.f_eval(ROOT, t)
+            }
+            Expr::FVar(lvl, ty) => {
+                if (lvl as usize) < self.lctx_ty.len() {
+                    self.f_eval(ROOT, ty)
+                } else {
+                    self.fail(ErrorKind::UnknownFVar, e);
+                    self.v_dummy()
+                }
+            }
+            Expr::Proj(p) => self.f_infer_proj(c, e, p.struct_name, p.index, p.expr, infer_only),
+        }
+    }
+
+    /// `infer_proj` in engine F: the type of the field `idx` of `s`, a term of a structure `sname`. The type of `s` must force to `sname` applied to its parameters. The type of the constructor gets the parameters, and each field before `idx` gets its projection of `s`. Engine R does the inference in each other case, so the faults and their order are the faults of engine R. For a structure in `Prop`, each field must be a proof. Engine F cannot infer the type of a type, so `f_is_prop` asks engine R one query on the read-back of the field type, at the same points as engine R.
+    fn f_infer_proj(
+        &mut self,
+        c: u32,
+        e: ExprId,
+        sname: NameId,
+        idx: u32,
+        s: ExprId,
+        infer_only: bool,
+    ) -> ValueId {
+        let st = self.f_infer(c, s, infer_only);
+        let w = self.force(st);
+        if self.bad() {
+            return self.v_dummy();
+        }
+        let (n, us, sp) = match self.vget(w) {
+            Value::Neu(Head::Const(n, us), sp) if n == sname => (n, us, sp),
+            _ => return self.f_infer_r(c, e, infer_only),
+        };
+        let slot = self.env.find(n);
+        let shape = if slot == 0 {
+            None
+        } else {
+            self.induct_shape(slot)
+        };
+        let (np, ni, ctor) = match shape {
+            Some((np, ni, 1, ctor)) if self.va.spine_len(sp) == np + ni => (np, ni, ctor),
+            _ => return self.f_infer_r(c, e, infer_only),
+        };
+        let cslot = self.env.find(ctor);
+        let ls = self.st.level_list_vec(us);
+        let is_prop_type = match self.f_struct_prop(slot, np + ni, &ls) {
+            Some(b) if cslot != 0 => b,
+            _ => return self.f_infer_r(c, e, infer_only),
+        };
+        let t = self.instantiate_type_lparams(cslot, &ls);
+        let mut v = self.f_eval(ROOT, t);
+        let mut ok = true;
+        let mut i = 0;
+        while ok && i < np && !self.bad() {
+            let p = self.force(v);
+            match (self.vget(p), self.va.spine_arg(sp, i)) {
+                (Value::Pi(_, _, _, clo), Some(a)) => {
+                    let env = self.env_push(clo.env, a);
+                    v = self.eval(env, clo.body);
+                }
+                _ => ok = false,
+            }
+            i += 1;
+        }
+        let mut j = 0;
+        while ok && j < idx && !self.bad() {
+            let p = self.force(v);
+            match self.vget(p) {
+                Value::Pi(_, _, d, clo) => {
+                    // A body without loose bound variables does not use the field, so the projection is not made.
+                    let a = if self.st.loose_range(clo.body) == 0 {
+                        self.v_dummy()
+                    } else {
+                        ok = !is_prop_type || self.f_is_prop(d);
+                        let sv = self.f_eval(c, s);
+                        self.proj_value(sname, j, sv)
+                    };
+                    let env = self.env_push(clo.env, a);
+                    v = self.eval(env, clo.body);
+                }
+                _ => ok = false,
+            }
+            j += 1;
+        }
+        if self.bad() {
+            return self.v_dummy();
+        }
+        let p = if ok { self.force(v) } else { v };
+        let d = match (ok, self.vget(p)) {
+            (true, Value::Pi(_, _, d, _)) => d,
+            _ => return self.f_infer_r(c, e, infer_only),
+        };
+        if is_prop_type && !self.f_is_prop(d) && !self.bad() {
+            return self.f_infer_r(c, e, infer_only);
+        }
+        d
+    }
+
+    /// `is_prop` of engine R on the read-back of the type `d`: one query of engine R (spec perf/04.3 A2). Engine F cannot infer the type of a type, and a field of a structure in `Prop` must be a proof.
+    fn f_is_prop(&mut self, d: ValueId) -> bool {
+        let base = self.lctx_ty.len() as u32;
+        let t = self.quote(base, base, d);
+        !self.bad() && self.is_prop(t)
+    }
+
+    /// True if the inductive type of `slot` with the levels `ls` is a proposition: the level of its sort after the instantiation is zero. `None` if its type is not `n` pi binders and a sort. Engine R gets the same level from `is_prop` on the type of the major premise, because the sort of an inductive type does not depend on its arguments.
+    fn f_struct_prop(&mut self, slot: u32, n: u32, ls: &[rulean_store::LevelId]) -> Option<bool> {
+        let mut t = self.env.at(slot).ty;
+        let mut ok = true;
+        let mut k = 0;
+        while ok && k < n {
+            match self.st.node(t) {
+                Expr::Pi(b) => t = b.body,
+                _ => ok = false,
+            }
+            k += 1;
+        }
+        match (ok, self.st.node(t)) {
+            (true, Expr::Sort(l)) => {
+                let cst = self.env.at(slot);
+                let l2 = level::instantiate(&mut self.st, l, &cst.lparams, ls);
+                Some(level::normalizes_to_zero(&self.st, l2))
+            }
+            _ => None,
         }
     }
 

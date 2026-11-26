@@ -1419,7 +1419,7 @@ impl Checker {
     }
 
     /// `infer_lit`.
-    fn infer_lit(&mut self, e: ExprId, l: Literal) -> ExprId {
+    pub(crate) fn infer_lit(&mut self, e: ExprId, l: Literal) -> ExprId {
         match l {
             Literal::Nat(n) => {
                 let bytes = Checker::nat_size(self.st.nat(n));

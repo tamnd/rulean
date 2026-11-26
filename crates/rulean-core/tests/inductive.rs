@@ -649,3 +649,138 @@ fn a_fault_has_only_the_free_variables_in_scope() {
             .collect();
     assert_eq!(names, vec![w, w]);
 }
+
+/// Adds `name : ty := value` and gives the kind of the fault, if any.
+fn add_def(t: &mut T, name: &str, ty: ExprId, value: ExprId) -> Option<ErrorKind> {
+    let name = t.name(name);
+    let d = Decl::Defn(Defn {
+        name,
+        lparams: Vec::new(),
+        ty,
+        value,
+        hints: Hints::Regular(1),
+        safety: Safety::Safe,
+        all: vec![name],
+    });
+    t.c.add_decl(&d).map(|f| f.kind)
+}
+
+// Engine F infers the type of a projection itself (spec perf/04.5). Engine R does it when the structure can be a proposition or the form is not valid, so the verdicts are the verdicts of engine R.
+
+#[test]
+fn engine_f_accepts_a_projection_of_a_structure() {
+    let mut t = confirm_env();
+    let a = t.k("A");
+    let bx = t.k("Bx");
+    let bx_a = t.app(bx, &[a]);
+    let n = t.name("Bx");
+    let v0 = t.bv(0);
+    let p = t.c.st.mk_proj(n, 0, v0);
+    let value = t.lam("x", bx_a, p);
+    let ty = t.pi("x", bx_a, a);
+    let before = t.c.f_stats;
+    assert_eq!(add_def(&mut t, "p", ty, value), None);
+    let s = t.c.f_stats;
+    assert_eq!(s.infer - before.infer, 2);
+    assert_eq!(s.infer_ok - before.infer_ok, 2);
+}
+
+#[test]
+fn engine_f_gives_an_invalid_field_index_to_engine_r() {
+    let mut t = confirm_env();
+    let a = t.k("A");
+    let bx = t.k("Bx");
+    let bx_a = t.app(bx, &[a]);
+    let n = t.name("Bx");
+    let v0 = t.bv(0);
+    let p = t.c.st.mk_proj(n, 1, v0);
+    let value = t.lam("x", bx_a, p);
+    let ty = t.pi("x", bx_a, a);
+    assert_eq!(
+        add_def(&mut t, "p", ty, value),
+        Some(ErrorKind::InvalidProj)
+    );
+}
+
+/// Adds `inductive P : Prop | mk : (y : a) -> P` with its recursor, and gives `P`. If `large` is true, `a` is a proposition, and the recursor has the motive `P -> Sort u`. Else the motive is `P -> Prop`.
+fn add_prop_struct(t: &mut T, a: ExprId, large: bool) -> ExprId {
+    let prop = t.sort(0);
+    let pk = t.k("P");
+    let ity = t.ind_type("P", prop, 0, &["P.mk"]);
+    let mk_ty = t.pi("y", a, pk);
+    let c = t.ctor("P.mk", mk_ty, "P", 0, 0, 1);
+    // P.rec : {motive : P -> Prop} -> ((y : A) -> motive (P.mk y)) -> (t : P) -> motive t, or with `Sort u` for a large recursor.
+    let (u, su) = sort_u(t);
+    let msort = if large { su } else { prop };
+    let lparams = if large { vec![u] } else { Vec::new() };
+    let motive_ty = t.pi("t", pk, msort);
+    let pmk = t.k("P.mk");
+    let (v0, v1, v2) = (t.bv(0), t.bv(1), t.bv(2));
+    let mk_y = t.app(pmk, &[v0]);
+    let m_mk = t.app(v1, &[mk_y]);
+    let minor = t.pi("y", a, m_mk);
+    let m_t = t.app(v2, &[v0]);
+    let body = t.pi("t", pk, m_t);
+    let body = t.pi("mk", minor, body);
+    let rec_ty = t.ipi("motive", motive_ty, body);
+    let mk_v = t.app(v1, &[v0]);
+    let rhs = t.lam("y", a, mk_v);
+    let rhs = t.lam("mk", minor, rhs);
+    let rhs = t.lam("motive", motive_ty, rhs);
+    let rec = Rec {
+        name: t.name("P.rec"),
+        lparams,
+        ty: rec_ty,
+        all: vec![t.name("P")],
+        num_params: 0,
+        num_indices: 0,
+        num_motives: 1,
+        num_minors: 1,
+        k: false,
+        rules: vec![RecRule {
+            ctor: t.name("P.mk"),
+            nfields: 1,
+            rhs,
+        }],
+        safety: Safety::Safe,
+    };
+    assert_eq!(t.add(vec![ity], vec![c], vec![rec]), None);
+    pk
+}
+
+#[test]
+fn engine_f_gives_a_field_of_a_proposition_to_engine_r() {
+    // The field is not a proof, so `x.0` is not valid.
+    let mut t = confirm_env();
+    let a = t.k("A");
+    let pk = add_prop_struct(&mut t, a, false);
+    let n = t.name("P");
+    let v0 = t.bv(0);
+    let p = t.c.st.mk_proj(n, 0, v0);
+    let value = t.lam("x", pk, p);
+    let ty = t.pi("x", pk, a);
+    assert_eq!(
+        add_def(&mut t, "q", ty, value),
+        Some(ErrorKind::InvalidProj)
+    );
+}
+
+#[test]
+fn engine_f_accepts_a_proof_field_of_a_proposition() {
+    // `H : Prop` is an axiom, and the field of `P` is a proof of `H`, so `x.0 : H`.
+    let mut t = confirm_env();
+    let prop = t.sort(0);
+    add_const(&mut t, "H", prop, None);
+    let h = t.k("H");
+    let pk = add_prop_struct(&mut t, h, true);
+    let n = t.name("P");
+    let v0 = t.bv(0);
+    let p = t.c.st.mk_proj(n, 0, v0);
+    let value = t.lam("x", pk, p);
+    let ty = t.pi("x", pk, h);
+    let before = t.c.f_stats;
+    assert_eq!(add_def(&mut t, "q", ty, value), None);
+    let s = t.c.f_stats;
+    assert_eq!(s.infer - before.infer, 2);
+    assert_eq!(s.infer_ok - before.infer_ok, 2);
+}

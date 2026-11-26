@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ### Changed
 
+- Engine F uses the levels of an application in `never_proof`. A constant whose type ends in a bound variable of type `Sort u`, such as `PSigma.fst`, `ite` or a `casesOn`, is never a proof when `u` with these levels is never zero, and proof irrelevance does not read it back. On Init with `--engine F` and one thread, the run uses 264.9 G instructions in place of 274.7 G.
 - Engine F gives each value a structural key (spec 04.12), and two glued values with the same key share one unfolding. On Init with `--engine F` and one thread, the run uses 274.7 G instructions in place of 291.4 G.
 
 ## [0.8.4] - 2026-11-27

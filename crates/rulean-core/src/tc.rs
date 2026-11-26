@@ -419,7 +419,7 @@ pub struct Checker {
     pub(crate) k_nodes: Memo,
     /// Engine F: the unfolding of a glued value at key (value key, 0), and the bits of `f_bits` that its evaluation set at key (value key, 1) (spec 04.12). It holds value handles, so it is truncated together with `c_force`.
     pub(crate) c_unfold_key: Memo,
-    /// Engine F: `const_never_proof` of a constant at key (constant, 0), 1 for true and 2 for false.
+    /// Engine F: `const_never_proof` of a constant at key (constant, 0), and `const_never_proof_at` with the levels `us` at key (constant, `us` + 1). The value is 1 for true and 2 for false.
     pub(crate) c_never_proof: Memo,
     /// `instantiate_lparams` of a term of a constant at key (term, levels), where the parameters are the level parameters of the constant (spec 04.8). The iota rule of a recursor and the type of a constant get the same levels many times in one declaration. The table `c_lps_owner` has the slot of the constant at key (term, 0), and a term that two constants share does not use the cache for the second one, because the parameters of the two constants can be different.
     pub(crate) c_lps: Memo,

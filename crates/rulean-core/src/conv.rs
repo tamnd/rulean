@@ -6,7 +6,7 @@
 
 use rulean_format::Hints;
 use rulean_store::ids::raw;
-use rulean_store::{BinderInfo, Expr, ExprId, LevelListId, NameId, SATURATED};
+use rulean_store::{BinderInfo, Expr, ExprId, LevelId, LevelListId, NameId, SATURATED};
 
 use crate::env::compare_hints;
 use crate::expr;
@@ -218,9 +218,9 @@ impl Checker {
     fn never_proof(&mut self, v: ValueId) -> bool {
         match self.vget(v) {
             Value::Sort(_) | Value::Lit(_) | Value::Small(..) | Value::Pi(..) => true,
-            Value::Neu(Head::Const(c, _), _) => self.const_never_proof(c),
+            Value::Neu(Head::Const(c, us), _) => self.const_never_proof_at(c, us),
             Value::Neu(Head::FVar(l, _), _) => self.fvar_never_proof(l),
-            Value::Glued(c, _, _, _) => self.const_never_proof(c),
+            Value::Glued(c, us, _, _) => self.const_never_proof_at(c, us),
             _ => false,
         }
     }
@@ -258,14 +258,46 @@ impl Checker {
         } else {
             let ty = self.env.at(slot).ty;
             let t = self.pi_codomain(ty);
-            self.codomain_never_prop(t) || self.bvar_codomain_never_prop(ty)
+            self.codomain_never_prop(t)
+                || match self.bvar_codomain_sort(ty) {
+                    Some(l) => level::is_not_zero(&self.st, l),
+                    None => false,
+                }
         };
         self.c_never_proof.put(raw(c.0), 0, if r { 1 } else { 2 });
         r
     }
 
-    /// True if the type `ty` of a constant ends in a bound variable `α` of its own Pi binders, maybe applied, and the type of `α` ends in a sort with a level that is never zero. This is the case of a projection function such as `HAdd.hAdd : {α β γ : Type} → [HAdd α β γ] → α → β → γ`. The type of `α` can be `outParam (Type u)` or another application of a definition whose value is `fun x => x`, and then the step uses the argument.
-    fn bvar_codomain_never_prop(&mut self, ty: ExprId) -> bool {
+    /// `const_never_proof` for an application of `c` with the levels `us`, with a memo in `c_never_proof` at key (constant, levels + 1). If the type of `c` ends in a bound variable `α` whose type ends in `Sort u`, the step instantiates `u` with `us`. This is the case of `PSigma.fst`, `Subtype.val`, `ite`, `dite` and `casesOn` with a motive into `Sort u`, where `u` is a parameter that can be zero but the levels of the application are not zero. On Init, these heads were most of the values that proof irrelevance read back.
+    fn const_never_proof_at(&mut self, c: NameId, us: LevelListId) -> bool {
+        if self.const_never_proof(c) {
+            return true;
+        }
+        let key = raw(us.0) + 1;
+        if let Some(x) = self.c_never_proof.get(raw(c.0), key) {
+            return x == 1;
+        }
+        let slot = self.env.find(c);
+        let r = if slot == 0 {
+            false
+        } else {
+            let ty = self.env.at(slot).ty;
+            match self.bvar_codomain_sort(ty) {
+                Some(l) => {
+                    let ls = self.st.level_list_vec(us);
+                    let cst = self.env.at(slot);
+                    let l2 = level::instantiate(&mut self.st, l, &cst.lparams, &ls);
+                    level::is_not_zero(&self.st, l2)
+                }
+                None => false,
+            }
+        };
+        self.c_never_proof.put(raw(c.0), key, if r { 1 } else { 2 });
+        r
+    }
+
+    /// The level `l` if the type `ty` of a constant ends in a bound variable `α` of its own Pi binders, maybe applied, and the type of `α` ends in `Sort l`. If `l` is never zero, an application of the constant is never a proof. This is the case of a projection function such as `HAdd.hAdd : {α β γ : Type} → [HAdd α β γ] → α → β → γ`. The type of `α` can be `outParam (Type u)` or another application of a definition whose value is `fun x => x`, and then the step uses the argument.
+    fn bvar_codomain_sort(&mut self, ty: ExprId) -> Option<LevelId> {
         let mut n: u32 = 0;
         let mut cur = ty;
         let mut walking = true;
@@ -280,10 +312,10 @@ impl Checker {
         }
         let i = match self.st.node(expr::app_fn(&self.st, cur)) {
             Expr::BVar(i) => i,
-            _ => return false,
+            _ => return None,
         };
         if i >= n {
-            return false;
+            return None;
         }
         // The binder of `α` is binder n - 1 - i, counted from 0 at the outside.
         let mut k = n - 1 - i;
@@ -306,8 +338,8 @@ impl Checker {
         }
         let d = self.strip_identity_def(d);
         match self.st.node(self.pi_codomain(d)) {
-            Expr::Sort(l) => level::is_not_zero(&self.st, l),
-            _ => false,
+            Expr::Sort(l) => Some(l),
+            _ => None,
         }
     }
 

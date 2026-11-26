@@ -169,6 +169,23 @@ impl Checker {
         if self.bad() {
             return false;
         }
+        let forced = self.c_force.len();
+        let stack = self.vstk.len();
+        let m = self.va.mark();
+        let r = self.f_conv_top_in(a, b);
+        if let Some(m) = m {
+            if self.bad() || self.vstk.len() != stack || !self.va.crowded() {
+                self.va.unmark();
+            } else {
+                self.va.release(m);
+                self.c_force.truncate(forced);
+            }
+        }
+        r
+    }
+
+    /// The body of `f_conv_top`.
+    fn f_conv_top_in(&mut self, a: ValueId, b: ValueId) -> bool {
         self.f_bits = 0;
         self.c_conv_failure.clear();
         self.c_conv_success.clear();

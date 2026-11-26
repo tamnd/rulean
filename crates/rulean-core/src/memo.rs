@@ -68,7 +68,11 @@ impl Memo {
                 Probe::Free => walking = false,
                 Probe::Full(hh, v) => {
                     let i = v as usize;
-                    if hh == h && self.entries[i].a == a && self.entries[i].b == b {
+                    if hh == h
+                        && i < self.entries.len()
+                        && self.entries[i].a == a
+                        && self.entries[i].b == b
+                    {
                         found = i + 1;
                         walking = false;
                     } else {
@@ -114,6 +118,23 @@ impl Memo {
     pub fn clear(&mut self) {
         self.entries.truncate(0);
         self.table.clear();
+    }
+
+    /// Keeps the first `n` entries and removes the others. The table keeps its slots for the removed entries, and `find` skips a slot whose entry index is past the end. A later entry can take the index of a removed entry, but a lookup compares the full key, so a hit is always correct.
+    ///
+    /// When the table has more than twice as many slots in use as there are entries, the table is made again from the entries. Each slot of a removed entry comes from one `put`, so the cost is O(1) for each `put` on average.
+    pub fn truncate(&mut self, n: usize) {
+        self.entries.truncate(n);
+        if self.table.len() > 2 * self.entries.len() + 1024 {
+            self.table.clear();
+            let k = self.entries.len();
+            let mut j = 0;
+            while j < k {
+                let e = self.entries[j];
+                self.table.put_new(pair_hash(e.a, e.b), j as Raw);
+                j += 1;
+            }
+        }
     }
 }
 

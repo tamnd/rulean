@@ -1,6 +1,6 @@
 //! Tests of the caches of `memo`.
 
-use rulean_core::memo::Lossy;
+use rulean_core::memo::{Lossy, Memo};
 use rulean_store::Raw;
 
 #[test]
@@ -41,4 +41,27 @@ fn a_lossy_cache_never_gives_a_wrong_value() {
     }
     assert!(kept > 0);
     assert!(kept < n);
+}
+
+#[test]
+fn a_memo_truncate_removes_the_new_entries_and_keeps_the_old_entries() {
+    let mut m = Memo::new();
+    m.put(1, 0, 10);
+    m.put(2, 0, 20);
+    let n = m.len();
+    m.put(3, 0, 30);
+    m.put(4, 0, 40);
+    m.truncate(n);
+    assert_eq!(m.get(1, 0), Some(10));
+    assert_eq!(m.get(2, 0), Some(20));
+    assert_eq!(m.get(3, 0), None);
+    assert_eq!(m.get(4, 0), None);
+    // A new entry takes the index of a removed entry. The table keeps the slot of the removed key, but a lookup compares the full key.
+    m.put(5, 0, 50);
+    assert_eq!(m.get(5, 0), Some(50));
+    assert_eq!(m.get(3, 0), None);
+    m.put(3, 0, 31);
+    assert_eq!(m.get(3, 0), Some(31));
+    assert_eq!(m.get(5, 0), Some(50));
+    assert_eq!(m.len(), 4);
 }

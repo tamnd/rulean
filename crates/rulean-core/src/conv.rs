@@ -454,6 +454,8 @@ impl Checker {
 
     /// Lazy delta on glued heads (spec 05.4.4 step 5, A§1.8 step 5). It unfolds the side with the greater height, or both sides if the heights are equal. Before it unfolds two applications of the same regular definition, it compares the levels and the arguments.
     ///
+    /// If the heads are different and one side is an application of a binary `Nat` operation with an argument that is not a literal without delta, the other side unfolds first (row O10 of spec 05.7.3). The `Nat` extension would unfold that argument to a literal, and the other side can reach the same operation with the same argument. On `perf/unfold-before-literal`, `[slowA, 1].sum` and `slowA + (1 + 0)` both reach `Nat.add slowA _`, and the arguments are then compared before the `Nat` extension evaluates `slowA`.
+    ///
     /// If one side is a definition and the other side is a projection of a folded structure, the projection is reduced first, and the definition is unfolded only if the projection does not reduce. Without this step, the definition is unfolded to its weak head normal form before the projection gives a value with the same head, and the checks of the same head and of reflexivity cannot stop the unfolding early.
     ///
     /// If the side with the smaller height has the other side as an argument, as in `ite c a b =?= a`, that side is unfolded first, for at most `TAKEN_STEPS` steps (row O8 of spec 05.7.3). A branch that the condition takes then gives the other side with no unfolding of it. On `perf/ite-taken-branch`, the official order unfolds `a`, which computes an array of 300 numbers with a loop, and engine F filled its arena on each of the three theorems.
@@ -496,6 +498,16 @@ impl Checker {
                     if lead != 0 {
                         c = lead;
                         taken += 1;
+                    }
+                    // A `Nat` operation that waits unfolds after the other side (row O10).
+                    if c1 != c2 {
+                        let wx = self.nat_waits(x);
+                        let wy = self.nat_waits(y);
+                        if wx && !wy {
+                            c = 1;
+                        } else if wy && !wx {
+                            c = -1;
+                        }
                     }
                     if c < 0 {
                         x = self.conv_delta(x);

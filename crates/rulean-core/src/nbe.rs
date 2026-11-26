@@ -541,6 +541,41 @@ impl Checker {
         }
     }
 
+    /// True if `v` is a glued application of a binary `Nat` operation that waits (row O10 of spec 05.7.3): the slot is empty, and an argument is a glued value or a neutral projection, so the `Nat` extension must unfold that argument to get a literal. The check reads the arguments and evaluates none of them. A suspended argument waits when its term is an application of a constant or a projection.
+    pub(crate) fn nat_waits(&mut self, v: ValueId) -> bool {
+        let (c, us, sp, s) = match self.vget(v) {
+            Value::Glued(c, us, sp, s) => (c, us, sp, s),
+            _ => return false,
+        };
+        if !self.pin_on(PIN_NAT) || us != LevelListId(0) || self.va.spine_len(sp) != 2 {
+            return false;
+        }
+        let op = self.nat_op_name_index(c);
+        if op >= self.b.nat_op_names.len() || self.va.slot_get(s).is_some() {
+            return false;
+        }
+        let a0 = self.va.spine_arg(sp, 0);
+        let a1 = self.va.spine_arg(sp, 1);
+        let w0 = self.nat_arg_waits(a0);
+        let w1 = self.nat_arg_waits(a1);
+        w0 | w1
+    }
+
+    /// True if the argument `a` of a `Nat` operation is not a literal without delta (see `nat_waits`).
+    fn nat_arg_waits(&mut self, a: Option<ValueId>) -> bool {
+        match a {
+            Some(x) => match self.va.get(x) {
+                Value::Glued(..) | Value::Neu(Head::Proj(..), _) => true,
+                Value::Susp(_, t, _) => matches!(
+                    self.st.node(expr::app_fn(&self.st, t)),
+                    Expr::Const(..) | Expr::Proj(..)
+                ),
+                _ => false,
+            },
+            None => false,
+        }
+    }
+
     /// The index of the binary `Nat` operation with the name `c` in `nat_op_names`, or the length of the table.
     fn nat_op_name_index(&self, c: NameId) -> usize {
         let names = &self.b.nat_op_names;

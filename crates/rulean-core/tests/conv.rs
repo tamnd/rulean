@@ -367,3 +367,38 @@ fn two_projections_compare_the_structures_before_they_unfold_them() {
     let p4 = t.c.st.mk_proj(pr_n, 1, g2);
     assert!(!t.eq(p4, x));
 }
+
+#[test]
+fn a_nat_operation_that_waits_unfolds_after_the_other_side() {
+    let mut t = T::new();
+    let a = t.a_ty;
+    let aa = t.pi("b", a, a);
+    let aaa = t.pi("a", a, aa);
+    // A stand-in for `Nat.add` with a height greater than the height of `sum`, so that the official order unfolds `Nat.add` first.
+    let b1 = t.bv(1);
+    let inner = t.lam("b", a, b1);
+    let add_v = t.lam("a", a, inner);
+    let add = t.def("Nat.add", aaa, add_v, 5);
+    let n2 = t.c.st.intern_nat(rulean_nat::Nat::from_u64(2));
+    let n3 = t.c.st.intern_nat(rulean_nat::Nat::from_u64(3));
+    let two = t.c.st.mk_nat_lit(n2);
+    let three = t.c.st.mk_nat_lit(n3);
+    let slow_v = t.app(add, &[two, three]);
+    let slow = t.def("slow", a, slow_v, 2);
+    // `sum a b` unfolds to `Nat.add a b`.
+    let (x0, x1) = (t.bv(1), t.bv(0));
+    let body = t.app(add, &[x0, x1]);
+    let inner = t.lam("b", a, body);
+    let sum_v = t.lam("a", a, inner);
+    let sum = t.def("sum", aaa, sum_v, 1);
+    let n1 = t.c.st.intern_nat(rulean_nat::Nat::from_u64(1));
+    let one = t.c.st.mk_nat_lit(n1);
+    let lhs = t.app(sum, &[slow, one]);
+    let rhs = t.app(add, &[slow, one]);
+    // `Nat.add slow 1` waits, because `slow` is not a literal without delta. So `sum` unfolds first, both sides are `Nat.add slow 1`, and the `Nat` extension never computes `slow`.
+    t.c.trace_on = true;
+    assert!(t.eq(lhs, rhs));
+    assert_eq!(t.c.trace.counts[Rule::Nat.index()], 0);
+    let s = t.c.f_stats;
+    assert_eq!((s.queries, s.equal, s.fallback), (1, 1, 0));
+}

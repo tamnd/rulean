@@ -40,8 +40,10 @@ impl SpineId {
 /// The limit is a budget for engine F on one declaration. When engine F fills the arena, the work that it did is lost, and engine R does the query again. A larger limit lets engine F waste more work on a declaration that it cannot finish. On the 42 Arena perf tests, the total count of instructions was 1537 G with 2^22, 1348 G with 2^20 and 1326 G with 2^18. The test `grind-ring-5` went from 121 G to 28 G, and `gf3-matrix-product` went from 49 G with 2^20 to 68 G with 2^18. A reset of the arena at each query was worse: `grind-ring-5` took 698 G with 2^22.
 pub const MAX_NODES: u32 = 1 << 18;
 
-/// The number of values that the regions of one declaration can remove (spec perf/04.3 A4). After that, the arena fills as without regions, and engine R checks the declaration.
-pub const FREE_BUDGET: usize = 1 << 18;
+/// The number of values that the regions of one declaration can remove (spec perf/04.3 A4), 2^13. After that, the arena fills as without regions, and engine R checks the declaration.
+///
+/// The budget is also a limit for engine F on a declaration that it cannot finish. On Init, each check that engine F did not finish with a budget of 2^18 stopped with a full arena after the regions removed all of the budget. Engine F used 3.6 s on these 168 checks before the stop, and engine R then used 3.0 s on them. On Init (one thread, `--engine F`), the run used 264.9 G instructions with 2^18, 257.4 G with 2^17, 251.1 G with 2^15, 249.5 G with 2^13 and 249.1 G with 2^10, and a budget of 2^22 used 303.2 G. With 2^13, engine F gives 281 checks to engine R in place of 168. The 42 Arena perf tests used 525.0 G with 2^18 and 526.2 G with 2^13, and no test changed by more than the noise.
+pub const FREE_BUDGET: usize = 1 << 13;
 
 /// The bound of the inline `Nat` numbers of `Value::Small`: 2^63. The sum of two inline numbers fits in a `u64`.
 pub const SMALL_NAT_LIMIT: u64 = 1 << 63;

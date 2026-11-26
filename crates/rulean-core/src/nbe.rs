@@ -50,6 +50,9 @@ const KEY_NIL_SPINE: u32 = 1;
 const KEY_NIL_ENV: u32 = 2;
 /// The recursion depth after which a value gets a new key.
 const KEY_DEPTH: u32 = 64;
+/// An entry of `c_unfold_key` and of `c_force` has the value in the low `UNFOLD_BITS` bits and the bits of `f_bits` above them.
+const UNFOLD_BITS: u32 = 28;
+const UNFOLD_VALUE: u32 = (1 << UNFOLD_BITS) - 1;
 
 impl Checker {
     /// The key of the node (tag, a, b) in `k_nodes` (spec 04.12). The same node gives the same key, and two different nodes give different keys.
@@ -471,6 +474,16 @@ impl Checker {
                 u
             }
             None => {
+                // The key is a lookup in the cache, so a hit does not make the body of the definition again.
+                let kc = self.key_node(KEY_CONST, raw(c.0), raw(us.0));
+                let ks = self.spine_key(sp, 0);
+                let k = self.key_node(KEY_APP, raw(kc), raw(ks));
+                if let Some(w) = self.c_unfold_key.get(raw(k), 0) {
+                    let u = ValueId(low(w) & UNFOLD_VALUE);
+                    self.f_bits |= F_DELTA | (low(w) >> UNFOLD_BITS);
+                    self.va.slot_set(s, u);
+                    return u;
+                }
                 let e = self.st.mk_const(c, us);
                 let body = match self.unfold_definition_core(e) {
                     Some(b) => b,
@@ -480,26 +493,19 @@ impl Checker {
                     }
                 };
                 self.f_bits |= F_DELTA;
-                let kc = self.key_node(KEY_CONST, raw(c.0), raw(us.0));
-                let ks = self.spine_key(sp, 0);
-                let k = self.key_node(KEY_APP, raw(kc), raw(ks));
-                if let Some(w) = self.c_unfold_key.get(raw(k), 0) {
-                    let u = ValueId(low(w));
-                    let bits = self.c_unfold_key.get(raw(k), 1).map_or(0, low);
-                    self.f_bits |= bits;
-                    self.va.slot_set(s, u);
-                    return u;
-                }
                 let saved = self.f_bits;
                 self.f_bits = 0;
                 let h = self.eval(EnvId::NIL, body);
                 let u = self.apply_spine(h, sp, e);
                 let got = self.f_bits;
                 self.f_bits = saved | got;
+                // The value and the bits go in one entry. An entry that does not fit is not kept, and the next unfolding of the key evaluates the body again.
                 if !self.bad() {
                     self.va.slot_set(s, u);
-                    self.c_unfold_key.put(raw(k), 0, raw(u.0));
-                    self.c_unfold_key.put(raw(k), 1, raw(got));
+                    if u.0 <= UNFOLD_VALUE && got < (1 << (32 - UNFOLD_BITS)) {
+                        self.c_unfold_key
+                            .put(raw(k), 0, raw(u.0 | (got << UNFOLD_BITS)));
+                    }
                 }
                 u
             }
@@ -510,14 +516,13 @@ impl Checker {
     ///
     /// The result goes into the cache `c_force`. A neutral application of a recursor has no slot, and without the cache each `force` of the same value does the iota steps again. For example, `N.add (ldepth2 l) 1` with `N.add` by recursion on its first argument forces the value below it once for each level above it, and the time is quadratic in the depth.
     ///
-    /// The bits of `f_bits` that the steps set go into `c_force` at key (value, 2). A cache hit sets these bits again, because the cache lives across the queries of a declaration, and the query that has the hit depends on the same steps.
+    /// The bits of `f_bits` that the steps set go into `c_force` at key (value, 0), in the same entry as the result. A cache hit sets these bits again, because the cache lives across the queries of a declaration, and the query that has the hit depends on the same steps.
     pub fn force(&mut self, v0: ValueId) -> ValueId {
         let v0 = self.resolve(v0);
         let cached = self.force_cached(v0);
         if cached {
-            if let Some(w) = self.c_force.get(raw(v0.0), 0) {
-                self.force_bits(v0, 2);
-                return ValueId(low(w));
+            if let Some(w) = self.force_hit(v0, 0) {
+                return w;
             }
         }
         let saved = self.f_bits;
@@ -536,16 +541,27 @@ impl Checker {
         let got = self.f_bits;
         self.f_bits = saved | got;
         if cached && !self.bad() {
-            self.c_force.put(raw(v0.0), 0, raw(v.0));
-            self.c_force.put(raw(v0.0), 2, raw(got));
+            self.force_put(v0, 0, v, got);
         }
         v
     }
 
-    /// Sets the bits of `f_bits` that `c_force` keeps for `v` at key (v, `k`).
-    fn force_bits(&mut self, v: ValueId, k: u32) {
-        if let Some(b) = self.c_force.get(raw(v.0), raw(k)) {
-            self.f_bits |= low(b);
+    /// The result that `c_force` keeps for `v` at key (v, `k`). A hit also sets the bits of `f_bits` that the entry keeps.
+    fn force_hit(&mut self, v: ValueId, k: u32) -> Option<ValueId> {
+        match self.c_force.get(raw(v.0), raw(k)) {
+            Some(w) => {
+                self.f_bits |= low(w) >> UNFOLD_BITS;
+                Some(ValueId(low(w) & UNFOLD_VALUE))
+            }
+            None => None,
+        }
+    }
+
+    /// Keeps the result `w` of `v` and the bits `got` of `f_bits` in one entry of `c_force` at key (v, `k`). An entry that does not fit is not kept, and the next call does the steps again.
+    fn force_put(&mut self, v: ValueId, k: u32, w: ValueId, got: u32) {
+        if w.0 <= UNFOLD_VALUE && got < (1 << (32 - UNFOLD_BITS)) {
+            self.c_force
+                .put(raw(v.0), raw(k), raw(w.0 | (got << UNFOLD_BITS)));
         }
     }
 
@@ -557,14 +573,13 @@ impl Checker {
         )
     }
 
-    /// `force` without delta: iota, the quotient rules and the `Nat` extension on heads that do not unfold (`whnf_core` of engine R). Engine F uses it in `conv`, so that lazy delta can compare two folded definitions before it unfolds them. As in `force`, the bits of the steps go into `c_force`, here at key (value, 3).
+    /// `force` without delta: iota, the quotient rules and the `Nat` extension on heads that do not unfold (`whnf_core` of engine R). Engine F uses it in `conv`, so that lazy delta can compare two folded definitions before it unfolds them. As in `force`, the bits of the steps go into `c_force`, here at key (value, 1).
     pub(crate) fn force_core(&mut self, v0: ValueId) -> ValueId {
         let v0 = self.resolve(v0);
         let cached = matches!(self.vget(v0), Value::Neu(Head::Const(..), _));
         if cached {
-            if let Some(w) = self.c_force.get(raw(v0.0), 1) {
-                self.force_bits(v0, 3);
-                return ValueId(low(w));
+            if let Some(w) = self.force_hit(v0, 1) {
+                return w;
             }
         }
         let saved = self.f_bits;
@@ -591,8 +606,7 @@ impl Checker {
         let got = self.f_bits;
         self.f_bits = saved | got;
         if cached && !self.bad() {
-            self.c_force.put(raw(v0.0), 1, raw(v.0));
-            self.c_force.put(raw(v0.0), 3, raw(got));
+            self.force_put(v0, 1, v, got);
         }
         v
     }
@@ -1118,15 +1132,14 @@ impl Checker {
 
     /// `v` with its head projection reduced, if `v` is a neutral projection that reduces after `force` of its structure. Other values do not change. The arguments of the spine are applied to the field.
     ///
-    /// The result goes into `c_force` at key (v, 4), and the bits of `f_bits` of the step at key (v, 5). Conversion can meet the same neutral projection in many queries. Without the cache, each call applies the spine again and makes new values, so the caches of conversion, whose keys are values, do not find the earlier answers. On Init, engine F then filled its arena on 89 more declarations, most of them proofs by `omega`.
+    /// The result and the bits of `f_bits` of the step go into `c_force` at key (v, 2). Conversion can meet the same neutral projection in many queries. Without the cache, each call applies the spine again and makes new values, so the caches of conversion, whose keys are values, do not find the earlier answers. On Init, engine F then filled its arena on 89 more declarations, most of them proofs by `omega`.
     pub(crate) fn proj_unfold(&mut self, v: ValueId) -> ValueId {
         let (s, i, x, sp) = match self.vget(v) {
             Value::Neu(Head::Proj(s, i, x), sp) => (s, i, x, sp),
             _ => return v,
         };
-        if let Some(w) = self.c_force.get(raw(v.0), 4) {
-            self.force_bits(v, 5);
-            return ValueId(low(w));
+        if let Some(w) = self.force_hit(v, 2) {
+            return w;
         }
         let saved = self.f_bits;
         self.f_bits = 0;
@@ -1137,8 +1150,7 @@ impl Checker {
         let got = self.f_bits;
         self.f_bits = saved | got;
         if !self.bad() {
-            self.c_force.put(raw(v.0), 4, raw(w.0));
-            self.c_force.put(raw(v.0), 5, raw(got));
+            self.force_put(v, 2, w, got);
         }
         w
     }

@@ -417,11 +417,11 @@ pub struct Checker {
     pub(crate) c_conv_failure: Memo,
     /// Engine F: the pairs of values that `conv` found equal in the current top-level query (row O2 of spec 05.7.3).
     pub(crate) c_conv_success: Memo,
-    /// Engine F: the result of `force` of a value at key (value, 0), and of `force_core` at key (value, 1). The bits of `f_bits` that these steps set are at keys (value, 2) and (value, 3). It is cleared together with the arena.
+    /// Engine F: the result of `force` of a value at key (value, 0), of `force_core` at key (value, 1), and of `proj_unfold` at key (value, 2). The bits of `f_bits` that these steps set are in the high bits of the same entry. It is cleared together with the arena.
     pub(crate) c_force: Memo,
     /// Engine F: the hash-consed nodes of the value keys (spec 04.12). A node (a, b) has the key at its entry. It is cleared together with the arena, and a release of a region does not change it, because a key does not contain a value handle.
     pub(crate) k_nodes: Intern,
-    /// Engine F: the unfolding of a glued value at key (value key, 0), and the bits of `f_bits` that its evaluation set at key (value key, 1) (spec 04.12). It holds value handles, so it is truncated together with `c_force`.
+    /// Engine F: the unfolding of a glued value at key (value key, 0), with the bits of `f_bits` that its evaluation set in the high bits of the entry (spec 04.12). It holds value handles, so it is truncated together with `c_force`.
     pub(crate) c_unfold_key: Memo,
     /// Engine F: `const_never_proof` of a constant at key (constant, 0), and `const_never_proof_at` with the levels `us` at key (constant, `us` + 1). The value is 1 for true and 2 for false.
     pub(crate) c_never_proof: Memo,

@@ -722,7 +722,7 @@ impl Checker {
     }
 
     /// The value of the projection `v.idx` of the structure `sname`. It reduces when `v` forces to an application of a constructor of `sname` with enough arguments. Otherwise it is a stuck projection.
-    fn proj_value(&mut self, sname: NameId, idx: u32, v: ValueId) -> ValueId {
+    pub(crate) fn proj_value(&mut self, sname: NameId, idx: u32, v: ValueId) -> ValueId {
         let mut w = self.force(v);
         if self.bad() {
             return self.v_dummy();

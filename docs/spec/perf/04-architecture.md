@@ -88,10 +88,12 @@ The value types of spec 05.4.1 stay. Three changes:
 
 Inference works on a term and a context node (finfer, spec 05.4.5). The result is a value. The changes:
 
-- Projections, literals and free variables are inferred in engine F. Today they go to engine R (finfer.rs header), and engine R needs a term with the free variables in place.
+- Projections, literals and free variables are inferred in engine F. For a structure in `Prop`, each field must be a proof, and engine F cannot infer the type of a type. So engine R decides `is_prop` of the field type as one query on its read-back (A2), at the same points as in `infer_proj` of engine R. A projection goes to engine R only when the type of the structure has a form that engine F does not read, and engine R then gives the same faults in the same order.
 - The type of a lambda is a pi value whose body is a closure of the inference. Today the body is read back into a term (finfer.rs header), and the read-back makes new terms.
 - A check of an argument type is a `conv` query on two values, as today.
 - The cache key is the term and the context node. A closed term uses the root node, so its entry is valid in each context and goes to the session.
+
+Result of the inference of projections, literals and free variables in engine F, on Init, on 2026-11-26 (`rulean check --threads 1 --engine F`, macOS): before, these three forms went to engine R on a term with the free variables of the context in place, and a sample gave this path 0.3% of the samples. Now only `is_prop` of a field of a structure in `Prop` goes to engine R. Now engine F accepts 115085 of 115872 checks in place of 115082, and engine R has 17189 shared queries in place of 20486, because fewer declarations go back to engine R. The run uses 286.0 G instructions in place of 285.9 G, which is inside the noise of about 2 G. So the gain of this item is that engine F does not need engine R for these forms, and not speed.
 
 ## 04.6 Conversion
 

@@ -498,7 +498,7 @@ fn push_node(
 
 impl Store {
     /// The node of an expression.
-    #[inline]
+    #[inline(always)]
     pub fn node(&self, e: ExprId) -> Expr {
         match e.tier() {
             Tier::Frozen => self.exprs.get(e.kind(), e.index()),

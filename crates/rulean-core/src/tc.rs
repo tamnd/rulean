@@ -378,6 +378,8 @@ pub struct Checker {
     pub(crate) lctx_name: Vec<NameId>,
     pub(crate) lctx_info: Vec<BinderInfo>,
     pub(crate) lctx_ty: Vec<ExprId>,
+    /// The free variable term of each level, `mk_fvar(level, lctx_ty[level])`. The read-back of a free variable uses it, so it does not intern the term again.
+    pub(crate) lctx_fv: Vec<ExprId>,
     pub(crate) lctx_val: Vec<Option<ExprId>>,
     /// The levels of the free variables in scope, in the order of `mk_local`. The C++ kernel removes the local declarations of a binder when `infer_lambda`, `infer_pi`, `infer_let` and `is_def_eq_binding` return (`flet<local_ctx>`). The checker keeps all the free variables, because the caches can refer to them, but it removes their levels from this list. After a fault, the list does not change, so it has the scope of the fault.
     pub(crate) scope: Vec<u32>,
@@ -477,6 +479,7 @@ impl Checker {
             lctx_name: Vec::new(),
             lctx_info: Vec::new(),
             lctx_ty: Vec::new(),
+            lctx_fv: Vec::new(),
             lctx_val: Vec::new(),
             scope: Vec::new(),
             c_infer: Memo::new(),
@@ -525,6 +528,7 @@ impl Checker {
         self.lctx_name.truncate(0);
         self.lctx_info.truncate(0);
         self.lctx_ty.truncate(0);
+        self.lctx_fv.truncate(0);
         self.lctx_val.truncate(0);
         self.scope.truncate(0);
         self.clear_caches();
@@ -638,6 +642,7 @@ impl Checker {
         let lctx = self.lctx_name.capacity() * core::mem::size_of::<NameId>()
             + self.lctx_info.capacity() * core::mem::size_of::<BinderInfo>()
             + self.lctx_ty.capacity() * core::mem::size_of::<ExprId>()
+            + self.lctx_fv.capacity() * core::mem::size_of::<ExprId>()
             + self.lctx_val.capacity() * core::mem::size_of::<Option<ExprId>>();
         let memos = self.c_infer.bytes()
             + self.c_whnf_core.bytes()
@@ -735,7 +740,9 @@ impl Checker {
         if !self.bad() {
             self.scope.push(lvl);
         }
-        self.st.mk_fvar(lvl, ty)
+        let fv = self.st.mk_fvar(lvl, ty);
+        self.lctx_fv.push(fv);
+        fv
     }
 
     /// The length of the scope list. Give it to `leave_scope` when the binders of the caller go out of scope.

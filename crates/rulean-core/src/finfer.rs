@@ -8,7 +8,7 @@
 //!
 //! The result of inference is a value. A lambda gets a pi type whose body is the read-back of the type of its body (spec 05.4.3).
 //!
-//! Engine F tries the value check of a declaration first. Each check of an argument type, a `let` value type and the declared type is a `conv` query of engine F. If a query is "not equal", if it needs engine R to confirm it (spec 05.1), or if engine F stops with a fault, the fault is removed and engine R checks the declaration again from the start. So a reject needs engine R (spec 05.1, rule 2).
+//! Engine F tries the value check of a declaration first. Each check of an argument type, a `let` value type and the declared type is a `conv` query of engine F. If a query is "not equal", or if it needs engine R to confirm it (spec 05.1), engine R decides that query on the read-back terms, and engine F continues if engine R gives "equal" (spec perf/04.3 A2). If engine R gives "not equal", or if engine F stops with a fault, the fault is removed and engine R checks the declaration again from the start. So a reject needs engine R (spec 05.1, rule 2).
 
 use alloc::vec::Vec;
 use rulean_store::ids::{low, raw};
@@ -161,7 +161,8 @@ impl Checker {
         }
     }
 
-    /// A top-level `conv` query of engine F inside inference. A "not equal" answer stops the inference with a fault. For an "equal" answer in the confirm set of spec 05.1, engine R confirms the query: both values are read back, and engine R compares the terms. If engine R also gives "equal", the inference continues. Else the inference stops with a fault, and engine R checks the full declaration. With `confirm_all`, engine R checks the full declaration again after engine F accepts it, so the query is not confirmed here.
+    /// A top-level `conv` query of engine F inside inference. A "not equal" answer of engine F is a hint (spec perf/04.7): both values are read back, and engine R decides the query on the terms. An "equal" answer in the confirm set of spec 05.1 goes to engine R in the same way. If engine R gives "equal", the inference continues. Else the inference stops with a fault, and engine R checks the full declaration, so a reject always comes from engine R. With `confirm_all`, engine R checks the full declaration again after engine F accepts it, so an "equal" answer is not confirmed here.
+    ///
     ///
     /// Before this change, each answer in the confirm set stopped the inference, and engine R checked the full declaration again. On Init this was 10,310 of 11,775 stops of engine F, and engine F used 607 G instructions. With a confirm of the query, engine F used 543 G instructions and stopped on 1,885 values.
     fn f_conv_top(&mut self, a: ValueId, b: ValueId) -> bool {
@@ -177,13 +178,12 @@ impl Checker {
         if self.bad() {
             return false;
         }
-        if !r {
-            self.fail(ErrorKind::Unsupported, self.dummy);
-            return false;
-        }
         let confirm = !self.confirm_all && self.f_bits == F_DELTA | F_TYPED;
-        if !confirm {
+        if r && !confirm {
             return true;
+        }
+        if !r {
+            self.f_stats.fallback += 1;
         }
         let base = self.lctx_ty.len() as u32;
         let ta = self.quote(base, base, a);
@@ -196,10 +196,14 @@ impl Checker {
             return false;
         }
         if ok {
-            self.f_stats.confirmed += 1;
+            if r {
+                self.f_stats.confirmed += 1;
+            }
             return true;
         }
-        self.f_stats.disagree += 1;
+        if r {
+            self.f_stats.disagree += 1;
+        }
         self.fail(ErrorKind::Unsupported, self.dummy);
         false
     }

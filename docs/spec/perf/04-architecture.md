@@ -82,6 +82,8 @@ The order of the rules does not change. It is the order of spec 05.7.3, and each
 - A fault of engine F (for example an arena that is full after A4) sends the query to engine R in the same way.
 - The bench harness counts the queries of each kind (08.7.3 counters). The report already has `f_fallback`, `f_faults` and `r_confirmed` (03.4).
 
+Result of A2 on Init, on 2026-11-26 (`rulean check --engine F`, macOS): before, a "not equal" answer in the inference of engine F stopped the inference, and engine R checked the declaration again. Then engine F accepted 114129 of 115872 checks, engine R had 44159 shared queries, and the run used 428.9 G instructions. With A2, engine F accepts 114907 checks, engine R has 20099 shared queries, and the run uses 428.3 G instructions. So the full checks again were not a large cost. The cost of engine F is in its evaluation (04.2), and A5 and A1 must give the gain of M9.
+
 ## 04.8 Literals
 
 - A Nat literal below 2^63 is an inline number in the value, and the extension operations (spec 05.8) on two such numbers use machine arithmetic with an overflow check. A result that overflows becomes a big number.

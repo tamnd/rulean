@@ -10,6 +10,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ### Added
 
+- The fast path of the NDJSON parser reads a number of at most 7 digits from one word of 8 bytes (spec perf/05.3), and it checks the next id first (spec perf/05.4). On the Init export, the parse uses 7.84 G instructions in place of 8.86 G.
 - The fast path of the NDJSON parser compares its fixed texts 8 bytes at a time (spec perf/05.3). On the Init export, the parse uses 8.86 G instructions in place of 9.69 G.
 - The new call `Store::reserve_exprs` makes room in the table of the frozen expressions before a parse, and `rulean check` gives it an estimate from the size of the input file (spec perf/05.5). The digit loop of the fast path is shorter too (spec perf/05.3). On the Init export, the parse uses 9.69 G instructions in place of 10.85 G, and the bytes of the store do not change.
 - The NDJSON parser reads the name, level and expression lines of lean4export on a template fast path (spec perf/05.3). Each line that does not have the exact form goes to the general parser, so the result does not change. On the Init export, the parse uses 10.85 G instructions in place of 27.97 G. The function `parse_export_with` and `Stream::set_fast` turn the fast path off, a test and the fuzz target `ndjson_fast` compare the two paths, and the profile workflow has the engine choice `parse` for a profile of the parse alone.

@@ -16,9 +16,14 @@ use crate::conv::{F_DELTA, F_TYPED};
 use crate::env::ConstKind;
 use crate::expr;
 use crate::pin::{PIN_NAT, PIN_STRING};
-use crate::tc::{Checker, ErrorKind};
+use crate::tc::{
+    Checker, ErrorKind, NAT_ADD, NAT_BEQ, NAT_BLE, NAT_DIV, NAT_GCD, NAT_LAND, NAT_LOR, NAT_MOD,
+    NAT_MUL, NAT_SHR, NAT_SUB, NAT_XOR,
+};
 use crate::trace::Rule;
-use crate::value::{Closure, EnvId, Head, SlotId, SpineId, Value, ValueId};
+use crate::value::{
+    Closure, EnvId, Head, SMALL_NAT_LIMIT, SlotId, SpineId, Value, ValueId, small, small_get,
+};
 use crate::whnf::{RecShape, find_rule};
 
 impl Checker {
@@ -78,7 +83,7 @@ impl Checker {
                 let env2 = self.env_push(env, v);
                 self.eval(env2, l.body)
             }
-            Expr::Lit(l) => self.v_alloc(Value::Lit(l)),
+            Expr::Lit(l) => self.lit_value(l),
             Expr::Proj(p) => {
                 let v = self.eval(env, p.expr);
                 self.proj_value(p.struct_name, p.index, v)
@@ -91,6 +96,19 @@ impl Checker {
                 }
             },
         }
+    }
+
+    /// The value of a literal. A `Nat` literal below `SMALL_NAT_LIMIT` becomes an inline number (spec perf/04.8).
+    fn lit_value(&mut self, l: Literal) -> ValueId {
+        if let Literal::Nat(id) = l {
+            if let Nat::Small(x) = self.st.nat(id) {
+                if *x < SMALL_NAT_LIMIT {
+                    let v = small(*x);
+                    return self.v_alloc(v);
+                }
+            }
+        }
+        self.v_alloc(Value::Lit(l))
     }
 
     /// The value of an argument `a` of an application (spec perf/04.3 A5). An application, a projection and a `let` become a suspended value, and the first read evaluates them. The other terms are cheap to evaluate, so they are evaluated now. Under a binder that `quote` opened, the argument is evaluated now too, because the read-back reads each argument, and because `force` skips the type-directed rules there (`f_under`) but not at a later read outside the binder.
@@ -445,7 +463,7 @@ impl Checker {
         }
         let b = self.vstk.len();
         let len = self.va.spine_push_args(sp, &mut self.vstk);
-        let mut lits: [Option<NatId>; 2] = [None, None];
+        let mut lits: [NatV; 2] = [NatV::Small(0), NatV::Small(0)];
         let mut i = 0;
         let mut ok = true;
         while ok && i < len {
@@ -461,17 +479,54 @@ impl Checker {
         if !ok || self.bad() {
             return None;
         }
+        // An inline number has 8 bytes, so the size check of `sized` passes when `nat_max` is at least 8.
+        if self.nat_max >= 8 {
+            if let (NatV::Small(x), NatV::Small(y)) = (lits[0], lits[1]) {
+                let fast = if n == 1 {
+                    Some(SmallOut::Num(x + 1))
+                } else {
+                    small_op(op, x, y)
+                };
+                if let Some(out) = fast {
+                    return Some(self.small_out(out));
+                }
+            }
+        }
+        let n1 = self.nat_handle(lits[0]);
+        let n2 = self.nat_handle(lits[1]);
         let d = self.dummy;
         let r = if n == 1 {
             let zero = Nat::zero();
-            let v = self.nat_ref(lits[0], &zero).succ();
+            let v = self.nat_ref(n1, &zero).succ();
             self.sized(d, v)
         } else {
-            self.nat_bin(d, op, lits[0], lits[1])
+            self.nat_bin(d, op, n1, n2)
         };
         match r {
             Some(t) if !self.bad() => Some(self.eval(EnvId::NIL, t)),
             _ => None,
+        }
+    }
+
+    /// The value of a result of `small_op`.
+    fn small_out(&mut self, out: SmallOut) -> ValueId {
+        match out {
+            SmallOut::Num(r) if r < SMALL_NAT_LIMIT => self.v_alloc(small(r)),
+            SmallOut::Num(r) => {
+                let id = self.st.intern_nat(Nat::from_u64(r));
+                self.v_alloc(Value::Lit(Literal::Nat(id)))
+            }
+            SmallOut::Bool(true) => self.eval(EnvId::NIL, self.b.e_bool_true),
+            SmallOut::Bool(false) => self.eval(EnvId::NIL, self.b.e_bool_false),
+        }
+    }
+
+    /// The handle of a literal of `nat_lit_of_value` for the operations of engine R, with `None` for zero.
+    fn nat_handle(&mut self, x: NatV) -> Option<NatId> {
+        match x {
+            NatV::Small(0) => None,
+            NatV::Small(v) => Some(self.st.intern_nat(Nat::from_u64(v))),
+            NatV::Big(id) => Some(id),
         }
     }
 
@@ -485,12 +540,13 @@ impl Checker {
         i
     }
 
-    /// The literal of a value in weak head normal form, as in `nat_lit_id` of engine R: `Some(Some(n))` for a literal, `Some(None)` for `Nat.zero`, and `None` for any other value.
-    fn nat_lit_of_value(&mut self, w: ValueId) -> Option<Option<NatId>> {
+    /// The literal of a value in weak head normal form, as in `nat_lit_id` of engine R. `Nat.zero` is the inline number 0. Any other value gives `None`.
+    fn nat_lit_of_value(&mut self, w: ValueId) -> Option<NatV> {
         match self.vget(w) {
-            Value::Lit(Literal::Nat(n)) => Some(Some(n)),
+            Value::Small(lo, hi) => Some(NatV::Small(small_get(lo, hi))),
+            Value::Lit(Literal::Nat(n)) => Some(NatV::Big(n)),
             Value::Neu(Head::Const(z, _), sp) if z == self.b.nat_zero && sp == SpineId::NIL => {
-                Some(None)
+                Some(NatV::Small(0))
             }
             _ => None,
         }
@@ -580,6 +636,15 @@ impl Checker {
         }
     }
 
+    /// The inline number `x` as a constructor application, as `nat_lit_to_constructor` of engine R: `Nat.zero`, or `Nat.succ` of the inline number `x - 1`. It makes no term.
+    fn small_to_constructor(&mut self, x: u64) -> ValueId {
+        if x == 0 {
+            return self.eval(EnvId::NIL, self.b.e_nat_zero);
+        }
+        let f = self.eval(EnvId::NIL, self.b.e_nat_succ);
+        let a = self.v_alloc(small(x - 1));
+        self.apply(f, a, self.b.e_nat_succ)
+    }
     /// The major premise for structure eta (`to_cnstr_when_structure`). As `k_major`, it reads the value back and uses engine R.
     fn struct_major(&mut self, rec_slot: u32, induct: NameId, major: ValueId) -> ValueId {
         if self.f_under > 0 {
@@ -677,6 +742,9 @@ impl Checker {
             return None;
         }
         major = match self.vget(major) {
+            Value::Small(lo, hi) if self.pin_on(PIN_NAT) => {
+                self.small_to_constructor(small_get(lo, hi))
+            }
             Value::Lit(Literal::Nat(n)) if self.pin_on(PIN_NAT) => {
                 let v = self.st.nat(n).clone();
                 let t = self.nat_lit_to_constructor(&v);
@@ -792,6 +860,7 @@ impl Checker {
         };
         match x {
             Value::Sort(l) => self.st.mk_sort(l),
+            Value::Small(lo, hi) => self.mk_nat(Nat::from_u64(small_get(lo, hi))),
             Value::Lit(Literal::Nat(n)) => self.st.mk_nat_lit(n),
             Value::Lit(Literal::Str(s)) => self.st.mk_str_lit(s),
             Value::Lam(name, info, d, clo) => {
@@ -863,4 +932,48 @@ impl Checker {
         self.vstk.truncate(b);
         r
     }
+}
+
+/// A literal argument of the `Nat` extension of engine F: an inline number, or the handle of a literal of at least `SMALL_NAT_LIMIT`.
+#[derive(Clone, Copy)]
+enum NatV {
+    Small(u64),
+    Big(NatId),
+}
+
+/// A result of `small_op`.
+enum SmallOut {
+    Num(u64),
+    Bool(bool),
+}
+
+/// The binary operation `op` of `reduce_nat` on two inline numbers below `SMALL_NAT_LIMIT`, with machine arithmetic. It gives `None` when the result does not fit in a `u64`, and for `Nat.pow` and `Nat.shiftLeft`, which check a count first. Then the operation of engine R computes the result. The rules are the rules of `Nat`: `x - y` is 0 when `y > x`, `x / 0` is 0 and `x % 0` is `x`.
+fn small_op(op: usize, x: u64, y: u64) -> Option<SmallOut> {
+    match op {
+        NAT_ADD => Some(SmallOut::Num(x + y)),
+        NAT_SUB => Some(SmallOut::Num(x.saturating_sub(y))),
+        NAT_MUL => x.checked_mul(y).map(SmallOut::Num),
+        NAT_GCD => Some(SmallOut::Num(gcd(x, y))),
+        NAT_MOD => Some(SmallOut::Num(if y == 0 { x } else { x % y })),
+        NAT_DIV => Some(SmallOut::Num(x.checked_div(y).unwrap_or(0))),
+        NAT_BEQ => Some(SmallOut::Bool(x == y)),
+        NAT_BLE => Some(SmallOut::Bool(x <= y)),
+        NAT_LAND => Some(SmallOut::Num(x & y)),
+        NAT_LOR => Some(SmallOut::Num(x | y)),
+        NAT_XOR => Some(SmallOut::Num(x ^ y)),
+        NAT_SHR => Some(SmallOut::Num(if y >= 64 { 0 } else { x >> y })),
+        _ => None,
+    }
+}
+
+/// The greatest common divisor, with `gcd(0, y) = y`.
+fn gcd(x: u64, y: u64) -> u64 {
+    let mut a = x;
+    let mut b = y;
+    while b != 0 {
+        let t = a % b;
+        a = b;
+        b = t;
+    }
+    a
 }

@@ -413,22 +413,29 @@ impl Lossy {
     }
 
     /// Puts the value `v` for the pair `(a, b)` in its slot.
-    #[inline]
+    #[inline(always)]
     pub fn put(&mut self, a: Raw, b: Raw, v: Raw) {
         if self.slots.is_empty() {
-            let n = 1usize << LOSSY_BITS;
-            self.slots = Vec::with_capacity(n);
-            while self.slots.len() < n {
-                self.slots.push(LossySlot {
-                    epoch: 0,
-                    a: 0,
-                    b: 0,
-                    v: 0,
-                });
-            }
+            self.alloc();
         }
         let epoch = self.epoch;
         self.slots[Lossy::pos(a, b)] = LossySlot { epoch, a, b, v };
+    }
+
+    /// Allocates the slots. It is out of line, so the code of `put` stays small and the compiler can inline it.
+    #[cold]
+    #[inline(never)]
+    fn alloc(&mut self) {
+        let n = 1usize << LOSSY_BITS;
+        self.slots = Vec::with_capacity(n);
+        while self.slots.len() < n {
+            self.slots.push(LossySlot {
+                epoch: 0,
+                a: 0,
+                b: 0,
+                v: 0,
+            });
+        }
     }
 
     /// The bytes of the slots.

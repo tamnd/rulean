@@ -14,7 +14,7 @@ use crate::level;
 use crate::pin::PIN_NAT;
 use crate::tc::{Checker, ErrorKind, LBool, to_lbool};
 use crate::trace::Rule;
-use crate::value::{Closure, EnvId, Head, SpineId, Value, ValueId, small_get};
+use crate::value::{Closure, EnvId, Head, SpineId, Value, ValueId, small, small_get};
 
 /// The engine of the definitional equality queries.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -563,9 +563,18 @@ impl Checker {
         while !done && !self.bad() {
             // The offset rule runs before each step, as `is_def_eq_offset` in the official kernel (row O11).
             let offset = self.conv_offset(x, y);
+            let lit = if offset {
+                LBool::Undef
+            } else {
+                self.conv_nat_ctor(x, y)
+            };
             match (self.glued_head(x), self.glued_head(y)) {
                 _ if offset => {
                     r = LBool::True;
+                    done = true;
+                }
+                _ if lit != LBool::Undef => {
+                    r = lit;
                     done = true;
                 }
                 (None, None) => done = true,
@@ -672,6 +681,42 @@ impl Checker {
         match (xa, xb) {
             (Some(x), Some(y)) if ka == kb && ka > 0 && !self.bad() => self.conv(x, y),
             _ => false,
+        }
+    }
+
+    /// The literal part of `is_def_eq_offset` of engine R: the inline number `0` and `Nat.zero` are equal, and the inline number `n + 1` and `Nat.succ x` are equal if `n` and `x` are equal. The rule applies only if one side is an inline number and the other side is a constructor of `Nat`. Without it, engine F gave "not equal" for `OfNat.ofNat Nat 0 (instOfNatNat 0)` and `Nat.zero`, and engine R had to decide the query. On Init, this was most of the 1,585 "not equal" answers of engine F.
+    fn conv_nat_ctor(&mut self, a: ValueId, b: ValueId) -> LBool {
+        if !self.pin_on(PIN_NAT) {
+            return LBool::Undef;
+        }
+        match (self.vget(a), self.vget(b)) {
+            (Value::Small(lo, hi), Value::Neu(Head::Const(c, _), sp)) => {
+                self.conv_small_ctor(small_get(lo, hi), c, sp)
+            }
+            (Value::Neu(Head::Const(c, _), sp), Value::Small(lo, hi)) => {
+                self.conv_small_ctor(small_get(lo, hi), c, sp)
+            }
+            _ => LBool::Undef,
+        }
+    }
+
+    /// `conv_nat_ctor` for the inline number `n` and the constructor `c` of `Nat` with the spine `sp`.
+    fn conv_small_ctor(&mut self, n: u64, c: NameId, sp: SpineId) -> LBool {
+        if c == self.b.nat_zero && sp == SpineId::NIL {
+            return to_lbool(n == 0);
+        }
+        if c != self.b.nat_succ || self.va.spine_len(sp) != 1 {
+            return LBool::Undef;
+        }
+        if n == 0 {
+            return LBool::False;
+        }
+        match self.va.spine_arg(sp, 0) {
+            Some(x) => {
+                let p = self.v_alloc(small(n - 1));
+                to_lbool(self.conv(p, x))
+            }
+            None => LBool::Undef,
         }
     }
 

@@ -438,17 +438,23 @@ impl Checker {
     fn conv_delta(&mut self, v: ValueId) -> ValueId {
         match self.vget(v) {
             Value::Glued(c, us, sp, s) => {
+                let cheap = self.cheap_proj;
+                self.cheap_proj = true;
                 let u = match self.glued_nat(c, us, sp, s) {
                     Some(n) => n,
                     None => self.unfold_glued(c, us, sp, s),
                 };
-                self.force_core(u)
+                let w = self.force_core(u);
+                self.cheap_proj = cheap;
+                w
             }
             _ => v,
         }
     }
 
     /// Lazy delta on glued heads (spec 05.4.4 step 5, A§1.8 step 5). It unfolds the side with the greater height, or both sides if the heights are equal. Before it unfolds two applications of the same regular definition, it compares the levels and the arguments.
+    ///
+    /// If one side is a definition and the other side is a projection of a folded structure, the projection is reduced first, and the definition is unfolded only if the projection does not reduce. Without this step, the definition is unfolded to its weak head normal form before the projection gives a value with the same head, and the checks of the same head and of reflexivity cannot stop the unfolding early.
     ///
     /// If the side with the smaller height has the other side as an argument, as in `ite c a b =?= a`, that side is unfolded first, for at most `TAKEN_STEPS` steps (row O8 of spec 05.7.3). A branch that the condition takes then gives the other side with no unfolding of it. On `perf/ite-taken-branch`, the official order unfolds `a`, which computes an array of 300 numbers with a loop, and engine F filled its arena on each of the three theorems.
     fn conv_lazy_delta(&mut self, a: ValueId, b: ValueId) -> (LBool, ValueId, ValueId) {
@@ -462,8 +468,22 @@ impl Checker {
         while !done && !self.bad() {
             match (self.glued_head(x), self.glued_head(y)) {
                 (None, None) => done = true,
-                (Some(_), None) => x = self.conv_delta(x),
-                (None, Some(_)) => y = self.conv_delta(y),
+                (Some(_), None) => {
+                    let y2 = self.proj_unfold(y);
+                    if y2 != y {
+                        y = self.force_core(y2);
+                    } else {
+                        x = self.conv_delta(x);
+                    }
+                }
+                (None, Some(_)) => {
+                    let x2 = self.proj_unfold(x);
+                    if x2 != x {
+                        x = self.force_core(x2);
+                    } else {
+                        y = self.conv_delta(y);
+                    }
+                }
                 (Some((c1, us1, sp1, h1)), Some((c2, us2, sp2, h2))) => {
                     let mut c = compare_hints(h1, h2);
                     if c1 == c2 || taken >= TAKEN_STEPS {
@@ -675,12 +695,26 @@ impl Checker {
         }
     }
 
-    /// The steps after lazy delta: the same head with equal arguments, then function eta.
+    /// The steps after lazy delta: the same head with equal arguments, then the projections of folded structures, then function eta.
+    ///
+    /// As in the official kernel, two projections are first compared by their structures, and only then are the structures unfolded (`is_def_eq_proj`, then `whnf_core` with full projections). `force_core` keeps a projection of a folded structure (`proj_value_core`), so a projection that is still neutral here can reduce after delta on its structure.
     fn conv_whnf(&mut self, a: ValueId, b: ValueId) -> bool {
-        match (self.vget(a), self.vget(b)) {
-            (Value::Neu(h1, s1), Value::Neu(h2, s2)) => {
-                self.conv_heads(h1, h2) && self.conv_spines(s1, s2)
+        let (va, vb) = (self.vget(a), self.vget(b));
+        if let (Value::Neu(h1, s1), Value::Neu(h2, s2)) = (va, vb) {
+            if self.conv_heads(h1, h2) && self.conv_spines(s1, s2) {
+                return true;
             }
+        }
+        let a2 = self.proj_unfold(a);
+        let b2 = self.proj_unfold(b);
+        if self.bad() {
+            return false;
+        }
+        if a2 != a || b2 != b {
+            return self.conv(a2, b2);
+        }
+        match (va, vb) {
+            (Value::Neu(..), Value::Neu(..)) => false,
             (Value::Lam(_, _, d, c), _) => self.conv_eta(d, c, b),
             (_, Value::Lam(_, _, d, c)) => self.conv_eta(d, c, a),
             _ => false,

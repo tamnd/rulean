@@ -86,7 +86,11 @@ impl Checker {
             Expr::Lit(l) => self.lit_value(l),
             Expr::Proj(p) => {
                 let v = self.eval(env, p.expr);
-                self.proj_value(p.struct_name, p.index, v)
+                if self.cheap_proj {
+                    self.proj_value_core(p.struct_name, p.index, v)
+                } else {
+                    self.proj_value(p.struct_name, p.index, v)
+                }
             }
             Expr::FVar(lvl, ty) => match self.fvar_value(lvl) {
                 Some(x) => self.eval(EnvId::NIL, x),
@@ -303,7 +307,7 @@ impl Checker {
         }
     }
 
-    /// `force(v)`: reduces `v` until its head is not a redex: delta on glued heads, iota on recursors, the quotient rules and the `Nat` extension (spec 05.4.2). The result is in weak head normal form.
+    /// `force(v)`: reduces `v` until its head is not a redex: delta on glued heads, iota on recursors, projections of structures that reduce to a constructor, the quotient rules and the `Nat` extension (spec 05.4.2). The result is in weak head normal form.
     ///
     /// The result goes into the cache `c_force`. A neutral application of a recursor has no slot, and without the cache each `force` of the same value does the iota steps again. For example, `N.add (ldepth2 l) 1` with `N.add` by recursion on its first argument forces the value below it once for each level above it, and the time is quadratic in the depth.
     ///
@@ -318,7 +322,9 @@ impl Checker {
             }
         }
         let saved = self.f_bits;
+        let cheap = self.cheap_proj;
         self.f_bits = 0;
+        self.cheap_proj = false;
         let mut v = v0;
         let mut done = false;
         while !done && !self.bad() {
@@ -327,6 +333,7 @@ impl Checker {
                 None => done = true,
             }
         }
+        self.cheap_proj = cheap;
         let got = self.f_bits;
         self.f_bits = saved | got;
         if cached && !self.bad() {
@@ -343,11 +350,11 @@ impl Checker {
         }
     }
 
-    /// True if `force` and `force_core` keep the result of `v` in `c_force`: a glued value or a neutral application of a constant. The other values are already in weak head normal form.
+    /// True if `force` and `force_core` keep the result of `v` in `c_force`: a glued value, a neutral application of a constant, or a neutral projection. The other values are already in weak head normal form.
     fn force_cached(&mut self, v: ValueId) -> bool {
         matches!(
             self.vget(v),
-            Value::Glued(..) | Value::Neu(Head::Const(..), _)
+            Value::Glued(..) | Value::Neu(Head::Const(..) | Head::Proj(..), _)
         )
     }
 
@@ -407,6 +414,10 @@ impl Checker {
                     return r;
                 }
                 self.iota_value(c, us, sp)
+            }
+            Value::Neu(Head::Proj(..), _) => {
+                let w = self.proj_unfold(v);
+                if w == v { None } else { Some(w) }
             }
             _ => None,
         }
@@ -658,8 +669,14 @@ impl Checker {
         // `cnstr_when_structure` gives the term back when the type is not a structure without recursion and indices. Then the read-back is not necessary. A type that is not in the environment goes on, so that the fault stays the same.
         let s = self.env.find(induct);
         if s != 0 {
+            // The three tests use `&` and not `&&`: Aeneas cannot join the contexts of the branches of `&&` while the match holds a borrow of the environment.
             let structure = match &self.env.at(s).kind {
-                ConstKind::Induct(i) => i.ctors.len() == 1 && i.nindices == 0 && !i.is_rec,
+                ConstKind::Induct(i) => {
+                    let one = i.ctors.len() == 1;
+                    let flat = i.nindices == 0;
+                    let plain = !i.is_rec;
+                    one & flat & plain
+                }
                 _ => false,
             };
             if !structure {
@@ -806,10 +823,48 @@ impl Checker {
 
     /// The value of the projection `v.idx` of the structure `sname`. It reduces when `v` forces to an application of a constructor of `sname` with enough arguments. Otherwise it is a stuck projection.
     pub(crate) fn proj_value(&mut self, sname: NameId, idx: u32, v: ValueId) -> ValueId {
-        let mut w = self.force(v);
+        match self.proj_reduce(sname, idx, v) {
+            Some(a) => a,
+            None => {
+                if self.bad() {
+                    return self.v_dummy();
+                }
+                self.v_neutral(Head::Proj(sname, idx, v))
+            }
+        }
+    }
+
+    /// The value of the term `e.idx`, where `v` is the value of `e`. As `whnf_core` with cheap projections in `is_def_eq` of the official kernel, the structure is reduced without delta (`force_core`). If it is then not an application of a constructor, the result is a neutral projection that keeps `v`. A neutral projection of a folded structure is not in weak head normal form: `force` and `conv` reduce it later (`proj_unfold`).
+    ///
+    /// Without this, each unfolding of a projection function such as `S.fn (gC slowA c) x` unfolds `gC` at once. In `perf/proj-applied-struct`, `gC` decides `slowA = c` with `slowA` a long computation, and engine F filled its arena on each of the three theorems. The official kernel compares `gC slowA c` and `gC' slowA c` first, and they are equal after one delta step.
+    fn proj_value_core(&mut self, sname: NameId, idx: u32, v: ValueId) -> ValueId {
+        let w = self.force_core(v);
         if self.bad() {
             return self.v_dummy();
         }
+        match self.proj_ctor(sname, idx, w) {
+            Some(a) => a,
+            None => {
+                if self.bad() {
+                    return self.v_dummy();
+                }
+                self.v_neutral(Head::Proj(sname, idx, v))
+            }
+        }
+    }
+
+    /// The field `idx` of `v` after `force`, or `None` if the projection is stuck.
+    fn proj_reduce(&mut self, sname: NameId, idx: u32, v: ValueId) -> Option<ValueId> {
+        let w = self.force(v);
+        if self.bad() {
+            return None;
+        }
+        self.proj_ctor(sname, idx, w)
+    }
+
+    /// The field `idx` of `w`, if `w` is an application of a constructor of `sname` with enough arguments, or a string literal and `sname` is `String`.
+    fn proj_ctor(&mut self, sname: NameId, idx: u32, w0: ValueId) -> Option<ValueId> {
+        let mut w = w0;
         if let Value::Lit(Literal::Str(s)) = self.vget(w) {
             if self.pin_on(PIN_STRING) {
                 let t = self.string_lit_to_constructor(s);
@@ -820,13 +875,38 @@ impl Checker {
         if let Value::Neu(Head::Const(c, _), sp) = self.vget(w) {
             if let Some((induct, nparams, _)) = self.ctor_shape(c) {
                 if induct == sname {
-                    if let Some(a) = self.va.spine_arg(sp, nparams + idx) {
-                        return a;
-                    }
+                    return self.va.spine_arg(sp, nparams + idx);
                 }
             }
         }
-        self.v_neutral(Head::Proj(sname, idx, v))
+        None
+    }
+
+    /// `v` with its head projection reduced, if `v` is a neutral projection that reduces after `force` of its structure. Other values do not change. The arguments of the spine are applied to the field.
+    ///
+    /// The result goes into `c_force` at key (v, 4), and the bits of `f_bits` of the step at key (v, 5). Conversion can meet the same neutral projection in many queries. Without the cache, each call applies the spine again and makes new values, so the caches of conversion, whose keys are values, do not find the earlier answers. On Init, engine F then filled its arena on 89 more declarations, most of them proofs by `omega`.
+    pub(crate) fn proj_unfold(&mut self, v: ValueId) -> ValueId {
+        let (s, i, x, sp) = match self.vget(v) {
+            Value::Neu(Head::Proj(s, i, x), sp) => (s, i, x, sp),
+            _ => return v,
+        };
+        if let Some(w) = self.c_force.get(raw(v.0), 4) {
+            self.force_bits(v, 5);
+            return ValueId(low(w));
+        }
+        let saved = self.f_bits;
+        self.f_bits = 0;
+        let w = match self.proj_reduce(s, i, x) {
+            Some(a) => self.apply_spine(a, sp, self.dummy),
+            None => v,
+        };
+        let got = self.f_bits;
+        self.f_bits = saved | got;
+        if !self.bad() {
+            self.c_force.put(raw(v.0), 4, raw(w.0));
+            self.c_force.put(raw(v.0), 5, raw(got));
+        }
+        w
     }
 
     /// The value of `e` in the local context, read back as a term. It is the beta and zeta normal form of `e`, with each definition in folded form.

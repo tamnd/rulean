@@ -87,7 +87,7 @@ Value ::= VSort(level)
 Closure ::= { env: EnvId, body: TermId }               -- body is a stored term (04.2)
 Head  ::= HFVar(level: u32, type: ValueId)            -- de Bruijn level, with its type
         | HConst(ConstApp)                            -- axiom, opaque, inductive, constructor, quot, or a stuck recursor
-        | HProj(struct_name, idx, value: ValueId)     -- stuck projection
+        | HProj(struct_name, idx, value: ValueId)     -- projection of a structure that is not a constructor application (05.4.2)
         | HRec(RecApp)                                -- stuck recursor application
 Spine ::= list of ValueId (in the arena, as a linked chunk array)
 Env   ::= persistent list of ValueId (in the arena)
@@ -105,7 +105,7 @@ Env   ::= persistent list of ValueId (in the arena)
 - β: `apply(VLam(_, _, clo), a) = eval(clo.env ++ [a], clo.body)`.
 - δ: `force(VGlued(c, sp, u)) = force(apply_spine(u, sp))`. `u` is computed once, from the value of `c` instantiated at its levels. The instantiation is cached per (constant, level list) (`m_unfold`, A§1.5).
 - ι: a recursor application whose major premise forces to a constructor (or a literal, or a K-target, or a structure eta-target) steps by the rule of A§1.6 steps 1 to 7. The profile flag `no_whnf_prop_major` decides whether the major is forced when its type is a proposition.
-- proj: as in A§1.6. The constructor's inductive must equal the projection's structure name (#14631).
+- proj: as in A§1.6. The constructor's inductive must equal the projection's structure name (#14631). `eval` reduces the structure of a projection with `force`, as `whnf` of the official kernel. When a delta step of conversion (`conv_delta`) evaluates an unfolding, `eval` reduces the structure only without delta (`force_core`), as `whnf_core` with cheap projections in `is_def_eq` of the official kernel. If the structure is then not a constructor application, the value is `VNeu(HProj(...))` with the structure in folded form. `force` reduces such a projection after `force` of the structure, and conversion reduces it only after steps 7 and 8 of 05.4.4, or in lazy delta when the other side is a definition (row O9). The reduction of a neutral projection goes into the force cache, so each query on the same value gets the same result value.
 - Quot: `Quot.lift f h (Quot.mk r a) ⇝ f a` and `Quot.ind h (Quot.mk r a) ⇝ h a`, with the argument positions of A§1.6.
 - Nat and String: 05.8.
 
@@ -121,7 +121,7 @@ Env   ::= persistent list of ValueId (in the arena)
 2. Bool shortcut (A§1.7).
 3. Proof irrelevance. Its position depends on the profile flag `proof_irrel_first` (05.7.1).
 4. Head reduction without delta (`force_core`).
-5. Lazy delta on glued heads: same head and levels, compare the arguments; if that fails, unfold the side with the greater height, or both if the heights are equal (A§1.8 step 5). If the side with the smaller height has the other side as an argument, that side unfolds first, for at most 32 steps (row O8). Nat offset and Nat reduction are tried here with the fvar guard of A§1.7.
+5. Lazy delta on glued heads: same head and levels, compare the arguments; if that fails, unfold the side with the greater height, or both if the heights are equal (A§1.8 step 5). If the side with the smaller height has the other side as an argument, that side unfolds first, for at most 32 steps (row O8). If one side is a definition and the other side is a neutral projection, the projection is reduced first, and the definition unfolds only if the projection does not reduce (row O9). Nat offset and Nat reduction are tried here with the fvar guard of A§1.7.
 6. Same constant with equivalent levels; same free variable.
 7. Projections against projections.
 8. Full projection reduction and a recursive call.
@@ -198,6 +198,7 @@ Engine F may change the order of steps only as listed here. Each row has a twin 
 | O5 | Unfold both sides at once when heights are equal | official step 5 does the same | `lazyDelta_equal_height` |
 | O7 | Compare two values by their form before any step, and stop lazy delta when both sides have the same form | official step 1 compares two terms by their structure; two values of the same form read back to the same term | `same_true`, `lazyDelta_same` |
 | O8 | In lazy delta, when the side with the smaller height has the other side as an argument, unfold that side first, for at most 32 steps | each step is a delta step of the official rules, so an "equal" answer is a true equality; a "not equal" answer goes to engine R | not done |
+| O9 | In lazy delta, when one side is a definition and the other side is a neutral projection, reduce the projection before the definition unfolds | the reduction of a projection is an official step (step 8), and lazy delta then continues on the same pair of terms | not done |
 | O6 | Infer types as values in a context tree (05.4.5) | the typing rules are the official rules, each equality check is a conversion of engine F, and a reject comes from engine R | not done |
 
 Rows are added only with a lemma, an Arena regression test and a corpus run that shows no verdict change.

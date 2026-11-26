@@ -185,6 +185,8 @@ pub struct Builtins {
     pub e_list_nil_char: ExprId,
     /// The binary operations of `reduce_nat` as constants with no levels, in the order of the `NAT_*` indices.
     pub nat_ops: Vec<ExprId>,
+    /// The names of the constants of `nat_ops`, in the same order.
+    pub nat_op_names: Vec<NameId>,
     /// The names of the pinned primitives, in the order of `pin::TARGET_REF`.
     pub pin_names: Vec<NameId>,
 }
@@ -200,10 +202,11 @@ fn name1(st: &mut Store, a: &[u8]) -> NameId {
     st.name_str_bytes(r, a)
 }
 
-fn nat_op(st: &mut Store, out: &mut Vec<ExprId>, op: &[u8]) {
+fn nat_op(st: &mut Store, out: &mut Vec<ExprId>, names: &mut Vec<NameId>, op: &[u8]) {
     let n = name2(st, b"Nat", op);
     let c = const0(st, n);
     out.push(c);
+    names.push(n);
 }
 
 /// The name with the parts of `b`, separated by a dot.
@@ -268,20 +271,21 @@ impl Builtins {
         let nil = st.mk_const(list_nil, l0);
         let e_list_nil_char = st.mk_app(nil, e_char);
         let mut nat_ops = Vec::with_capacity(14);
-        nat_op(st, &mut nat_ops, b"add");
-        nat_op(st, &mut nat_ops, b"sub");
-        nat_op(st, &mut nat_ops, b"mul");
-        nat_op(st, &mut nat_ops, b"pow");
-        nat_op(st, &mut nat_ops, b"gcd");
-        nat_op(st, &mut nat_ops, b"mod");
-        nat_op(st, &mut nat_ops, b"div");
-        nat_op(st, &mut nat_ops, b"beq");
-        nat_op(st, &mut nat_ops, b"ble");
-        nat_op(st, &mut nat_ops, b"land");
-        nat_op(st, &mut nat_ops, b"lor");
-        nat_op(st, &mut nat_ops, b"xor");
-        nat_op(st, &mut nat_ops, b"shiftLeft");
-        nat_op(st, &mut nat_ops, b"shiftRight");
+        let mut nat_op_names = Vec::with_capacity(14);
+        nat_op(st, &mut nat_ops, &mut nat_op_names, b"add");
+        nat_op(st, &mut nat_ops, &mut nat_op_names, b"sub");
+        nat_op(st, &mut nat_ops, &mut nat_op_names, b"mul");
+        nat_op(st, &mut nat_ops, &mut nat_op_names, b"pow");
+        nat_op(st, &mut nat_ops, &mut nat_op_names, b"gcd");
+        nat_op(st, &mut nat_ops, &mut nat_op_names, b"mod");
+        nat_op(st, &mut nat_ops, &mut nat_op_names, b"div");
+        nat_op(st, &mut nat_ops, &mut nat_op_names, b"beq");
+        nat_op(st, &mut nat_ops, &mut nat_op_names, b"ble");
+        nat_op(st, &mut nat_ops, &mut nat_op_names, b"land");
+        nat_op(st, &mut nat_ops, &mut nat_op_names, b"lor");
+        nat_op(st, &mut nat_ops, &mut nat_op_names, b"xor");
+        nat_op(st, &mut nat_ops, &mut nat_op_names, b"shiftLeft");
+        nat_op(st, &mut nat_ops, &mut nat_op_names, b"shiftRight");
         let pin_names = pin::target_names(st);
         Builtins {
             nat,
@@ -316,6 +320,7 @@ impl Builtins {
             e_list_cons_char,
             e_list_nil_char,
             nat_ops,
+            nat_op_names,
             pin_names,
         }
     }

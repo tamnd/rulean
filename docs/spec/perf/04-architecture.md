@@ -134,6 +134,8 @@ Engine R alone used 227.0 G on the same build. So on Init, engine F is slower th
 - A Nat literal below 2^63 is an inline number in the value, and the extension operations (spec 05.8) on two such numbers use machine arithmetic with an overflow check. A result that overflows becomes a big number.
 - A big number is in the literal store of the worker. The limit of spec 05.11 stays.
 
+Result of the `Nat` extension on values, on Init, on 2026-11-26 (`rulean check --engine F`, macOS): `nat_value` made a term for the constant, a literal term for each argument and a term for the application, and then it called `reduce_nat` of engine R, which did a `whnf` of each argument again. Each of these steps interned a term, and the list of the argument terms was a new `Vec`. `nat_value` now reads the literals of the forced argument values and calls the operation of engine R on the handles of the literals, with no term for the application. The name of the operation comes from the table `nat_op_names`, so the lookup makes no term. A fault in the operation has the dummy term, and engine R does the query again with the real term. The run uses 279.3 G instructions in place of 282.7 G, and the 225 Arena tests give the expected verdict. The literals are still in the store, so the inline numbers of the first item are not done.
+
 ## 04.9 Heartbeats
 
 Engine F counts its steps. The in-process kernel compares the count with the limit of the call (spec 09.6.4). The rule of 09.6.4 stays: rulean must never count more heartbeats than the C++ kernel on a declaration that the C++ kernel finishes. Engine F does less work than engine R on most declarations. Calibration 2 of 09.6.4 is done again with engine F.

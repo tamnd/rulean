@@ -8,9 +8,9 @@
 //!
 //! Free variables of the local context keep their level. `quote` gives the free variables that it makes under a binder the levels from the length of the local context up, and it reads them back as bound variables.
 
-use alloc::vec::Vec;
+use rulean_nat::Nat;
 use rulean_store::ids::{low, raw};
-use rulean_store::{Expr, ExprId, Kind, LevelListId, Literal, NameId};
+use rulean_store::{Expr, ExprId, Kind, LevelListId, Literal, NameId, NatId};
 
 use crate::conv::{F_DELTA, F_TYPED};
 use crate::env::ConstKind;
@@ -394,21 +394,6 @@ impl Checker {
         }
     }
 
-    /// The term of a `Nat` literal value, or of `Nat.zero` (`is_nat_lit_ext`).
-    fn nat_lit_term(&mut self, w: ValueId) -> Option<ExprId> {
-        match self.vget(w) {
-            Value::Lit(Literal::Nat(n)) => Some(self.st.mk_nat_lit(n)),
-            Value::Neu(Head::Const(z, _), sp) => {
-                if z == self.b.nat_zero && sp == SpineId::NIL {
-                    Some(self.b.e_nat_zero)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    }
-
     /// The content of the slot of a glued value, or else the `Nat` extension on it. The result of the `Nat` extension goes into the slot, so that the next `force` of the same value does not compute it again. Without this, each `force` of `Nat.mod (Nat.mul a b) 3` computes the product again, and on a term with shared subterms the time grows with each level. The slot then holds a literal and not the unfolding of the definition. Both are values of the same term, and the `Nat` extension is tried before delta at each place, so the answer does not change. A slot hit sets `F_DELTA`, because the slot can hold an unfolding that an earlier query computed (see `unfold_glued`). If the slot holds a literal, the bit is not necessary, but it only makes engine R confirm more answers.
     pub(crate) fn glued_nat(
         &mut self,
@@ -439,18 +424,20 @@ impl Checker {
         r
     }
 
+    /// The body of `nat_value`. The arguments are forced, and the operation reads the literals of the values. It makes no term for the application, so a fault has the dummy term, and engine R does the query again with the real term.
     fn nat_value_body(&mut self, c: NameId, us: LevelListId, sp: SpineId) -> Option<ValueId> {
         if !self.pin_on(PIN_NAT) || us != LevelListId(0) {
             return None;
         }
         let n = self.va.spine_len(sp);
-        let f = self.st.mk_const(c, us);
+        let mut op = self.b.nat_op_names.len();
         if n == 1 {
             if c != self.b.nat_succ {
                 return None;
             }
         } else if n == 2 {
-            if self.nat_op_index(f) >= self.b.nat_ops.len() {
+            op = self.nat_op_name_index(c);
+            if op >= self.b.nat_op_names.len() || !self.pin_on(1 << op) {
                 return None;
             }
         } else {
@@ -458,14 +445,14 @@ impl Checker {
         }
         let b = self.vstk.len();
         let len = self.va.spine_push_args(sp, &mut self.vstk);
-        let mut terms: Vec<ExprId> = Vec::with_capacity(len);
+        let mut lits: [Option<NatId>; 2] = [None, None];
         let mut i = 0;
         let mut ok = true;
         while ok && i < len {
             let a = self.vstk[b + i];
             let w = self.force(a);
-            match self.nat_lit_term(w) {
-                Some(t) => terms.push(t),
+            match self.nat_lit_of_value(w) {
+                Some(x) => lits[i] = x,
                 None => ok = false,
             }
             i += 1;
@@ -474,10 +461,38 @@ impl Checker {
         if !ok || self.bad() {
             return None;
         }
-        let t = self.st.mk_apps(f, &terms);
-        match self.reduce_nat(t) {
-            Some(r) => Some(self.eval(EnvId::NIL, r)),
-            None => None,
+        let d = self.dummy;
+        let r = if n == 1 {
+            let zero = Nat::zero();
+            let v = self.nat_ref(lits[0], &zero).succ();
+            self.sized(d, v)
+        } else {
+            self.nat_bin(d, op, lits[0], lits[1])
+        };
+        match r {
+            Some(t) if !self.bad() => Some(self.eval(EnvId::NIL, t)),
+            _ => None,
+        }
+    }
+
+    /// The index of the binary `Nat` operation with the name `c` in `nat_op_names`, or the length of the table.
+    fn nat_op_name_index(&self, c: NameId) -> usize {
+        let names = &self.b.nat_op_names;
+        let mut i = 0;
+        while i < names.len() && names[i] != c {
+            i += 1;
+        }
+        i
+    }
+
+    /// The literal of a value in weak head normal form, as in `nat_lit_id` of engine R: `Some(Some(n))` for a literal, `Some(None)` for `Nat.zero`, and `None` for any other value.
+    fn nat_lit_of_value(&mut self, w: ValueId) -> Option<Option<NatId>> {
+        match self.vget(w) {
+            Value::Lit(Literal::Nat(n)) => Some(Some(n)),
+            Value::Neu(Head::Const(z, _), sp) if z == self.b.nat_zero && sp == SpineId::NIL => {
+                Some(None)
+            }
+            _ => None,
         }
     }
 

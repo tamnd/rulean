@@ -693,6 +693,46 @@ fn engine_f_with_confirm_all_agrees_with_engine_r() {
     assert_eq!(s.disagree, 0);
 }
 
+/// The type of a lambda in engine F is compared with a pi type under the local of the lambda, before its read-back (spec perf/04.5). The cases are nested lambdas, a declared type that unfolds to a pi type, a lambda as an argument, and a lambda with the wrong domain.
+#[test]
+fn engine_f_compares_the_type_of_a_lambda_before_read_back() {
+    let mut t = engine_f(false);
+    let (nat, zero) = t.nat();
+    // `K : Nat → Nat → Nat := fun a b => a`.
+    let b1 = t.bv(1);
+    let inner = t.lam("b", nat, b1);
+    let kv = t.lam("a", nat, inner);
+    let nn = t.pi("b", nat, nat);
+    let kty = t.pi("a", nat, nn);
+    let d = t.defn("K", kty, kv, Safety::Safe);
+    assert_eq!(t.add(&Decl::Defn(d)), None);
+    // `Fn : Type := Nat → Nat` and `f : Fn := fun n => n`.
+    let s1 = t.sort(1);
+    let d = t.defn("Fn", s1, nn, Safety::Safe);
+    assert_eq!(t.add(&Decl::Defn(d)), None);
+    let fnc = t.k("Fn");
+    let b0 = t.bv(0);
+    let idf = t.lam("n", nat, b0);
+    let d = t.defn("f", fnc, idf, Safety::Safe);
+    assert_eq!(t.add(&Decl::Defn(d)), None);
+    // `ap : (Nat → Nat) → Nat → Nat` and `v : Nat := ap (fun n => n) Nat.zero`.
+    let apty = t.pi("g", nn, nn);
+    let d = t.axiom("ap", &[], apty, Safety::Safe);
+    assert_eq!(t.add(&d), None);
+    let ap = t.k("ap");
+    let v = t.app(ap, &[idf, zero]);
+    let d = t.defn("v", nat, v, Safety::Safe);
+    assert_eq!(t.add(&Decl::Defn(d)), None);
+    let s = t.c.f_stats;
+    assert_eq!(s.infer_ok, s.infer);
+    // `bad : Nat → Nat := fun (g : Nat → Nat) => Nat.zero`: the domains are not equal.
+    let lam_bad = t.lam("g", nn, zero);
+    let d = t.defn("bad", nn, lam_bad, Safety::Safe);
+    assert_eq!(t.add(&Decl::Defn(d)), Some(ErrorKind::DefTypeMismatch));
+    assert!(!t.has("bad"));
+    assert_eq!(t.c.f_stats.disagree, 0);
+}
+
 #[test]
 fn engine_f_gives_the_errors_of_engine_r() {
     let mut t = engine_f(false);

@@ -155,6 +155,9 @@ impl Checker {
         if self.same_value(a, b) {
             return true;
         }
+        if let Some(r) = self.conv_pi_open(a, b) {
+            return r;
+        }
         let q = self.conv_quick(a, b);
         if q != LBool::Undef {
             return q == LBool::True;
@@ -414,6 +417,57 @@ impl Checker {
         let b1 = self.inst_closure(c1, x);
         let b2 = self.inst_closure(c2, x);
         self.conv(b1, b2)
+    }
+
+    /// Two pi types when one of them is the type of a lambda before its read-back (`Value::PiOpen`, spec perf/04.5). The other side goes to weak head normal form, as lazy delta does with a pi type on one side, because a pi type has no definition to unfold. If it is a pi type, the domains must be equal, and the bodies are compared under the local `x` of the lambda, in place of a new local. No value outside the body of the lambda has `x`, because `x` is a binder of the lambda, so `x` is a new variable for the other body too. Two such types with the same local compare their body types directly. In the other cases the result is `None`, and the normal steps read the type back. Without this rule, engine F inference read back the body type of each lambda, and on the Init export this was about 6 percent of the samples of engine F.
+    fn conv_pi_open(&mut self, a: ValueId, b: ValueId) -> Option<bool> {
+        let open_a = matches!(self.va.get(a), Value::PiOpen(..));
+        let open_b = matches!(self.va.get(b), Value::PiOpen(..));
+        if !open_a && !open_b {
+            return None;
+        }
+        if open_a && open_b {
+            if let (Value::PiOpen(_, _, x1, t1, _), Value::PiOpen(_, _, x2, t2, _)) =
+                (self.va.get(a), self.va.get(b))
+            {
+                if x1 == x2 {
+                    return Some(self.conv(t1, t2));
+                }
+            }
+            return None;
+        }
+        let (o, other) = if open_a { (a, b) } else { (b, a) };
+        let (x, bt) = match self.va.get(o) {
+            Value::PiOpen(_, _, x, bt, _) => (x, bt),
+            _ => return None,
+        };
+        let d = match self.va.get(x) {
+            Value::Neu(Head::FVar(_, d), _) => d,
+            _ => return None,
+        };
+        let w = self.force(other);
+        if self.bad() {
+            return Some(false);
+        }
+        let (d2, c2) = match self.vget(w) {
+            Value::Pi(_, _, d2, c2) => (d2, c2),
+            _ => return None,
+        };
+        let dom = if open_a {
+            self.conv(d, d2)
+        } else {
+            self.conv(d2, d)
+        };
+        if !dom {
+            return Some(false);
+        }
+        let b2 = self.inst_closure(c2, x);
+        let r = if open_a {
+            self.conv(bt, b2)
+        } else {
+            self.conv(b2, bt)
+        };
+        Some(r)
     }
 
     /// The body of a closure with `x` for its bound variable.

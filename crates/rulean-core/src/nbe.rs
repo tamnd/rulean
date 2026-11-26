@@ -10,7 +10,7 @@
 
 use rulean_nat::Nat;
 use rulean_store::ids::{low, raw};
-use rulean_store::{Expr, ExprId, Kind, LevelListId, Literal, NameId, NatId};
+use rulean_store::{BinderInfo, Expr, ExprId, Kind, LevelListId, Literal, NameId, NatId};
 
 use crate::conv::{F_DELTA, F_TYPED};
 use crate::env::ConstKind;
@@ -153,7 +153,7 @@ impl Checker {
     #[inline(always)]
     pub(crate) fn resolve(&mut self, v: ValueId) -> ValueId {
         match self.va.get(v) {
-            Value::Susp(..) => self.resolve_susp(v),
+            Value::Susp(..) | Value::PiOpen(..) => self.resolve_susp(v),
             _ => v,
         }
     }
@@ -162,7 +162,7 @@ impl Checker {
     #[inline(always)]
     pub(crate) fn vget(&mut self, v: ValueId) -> Value {
         match self.va.get(v) {
-            Value::Susp(..) => {
+            Value::Susp(..) | Value::PiOpen(..) => {
                 let w = self.resolve_susp(v);
                 self.va.get(w)
             }
@@ -178,6 +178,7 @@ impl Checker {
         while !done && !self.bad() {
             match self.va.get(w) {
                 Value::Susp(env, e, s) => w = self.susp_value(env, e, s),
+                Value::PiOpen(name, info, x, bt, s) => w = self.pi_open_value(name, info, x, bt, s),
                 _ => done = true,
             }
         }
@@ -200,6 +201,37 @@ impl Checker {
             self.va.slot_set_bits(s, got);
         }
         x
+    }
+
+    /// The pi value of `Value::PiOpen` with the local `x` and the body type `bt`: the content of the slot, or else the read-back of `bt` as the body of a closure, which then goes into the slot. This is the value that engine F inference made for a lambda before this form.
+    fn pi_open_value(
+        &mut self,
+        name: NameId,
+        info: BinderInfo,
+        x: ValueId,
+        bt: ValueId,
+        s: SlotId,
+    ) -> ValueId {
+        if let Some(w) = self.va.slot_get(s) {
+            return w;
+        }
+        let (lvl, d) = match self.va.get(x) {
+            Value::Neu(Head::FVar(l, d), _) => (l, d),
+            _ => {
+                self.fail(ErrorKind::Unsupported, self.dummy);
+                return self.v_dummy();
+            }
+        };
+        let body = self.quote(lvl, lvl + 1, bt);
+        let clo = Closure {
+            env: EnvId::NIL,
+            body,
+        };
+        let w = self.v_alloc(Value::Pi(name, info, d, clo));
+        if !self.bad() {
+            self.va.slot_set(s, w);
+        }
+        w
     }
 
     pub(crate) fn env_push(&mut self, env: EnvId, v: ValueId) -> EnvId {
@@ -967,7 +999,7 @@ impl Checker {
             Value::Susp(_, t, _) if self.st.loose_range(t) == 0 => {
                 return t;
             }
-            Value::Susp(..) => {
+            Value::Susp(..) | Value::PiOpen(..) => {
                 let w = self.resolve_susp(v);
                 self.va.get(w)
             }
@@ -996,8 +1028,8 @@ impl Checker {
                 let f = self.st.mk_const(c, us);
                 self.quote_spine(base, k, f, sp)
             }
-            // `vget` never gives this form.
-            Value::Susp(..) => self.fail(ErrorKind::Unsupported, self.dummy),
+            // `vget` never gives these forms.
+            Value::Susp(..) | Value::PiOpen(..) => self.fail(ErrorKind::Unsupported, self.dummy),
         }
     }
 

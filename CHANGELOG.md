@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.8.7] - 2026-11-27
+
 ### Changed
 
 - `Store::node` is always inlined. Each term read was a call that made the full `Expr` value in memory, and the caller then matched on it again. On Init with one thread, engine R uses 151.5 G instructions in place of 164.6 G, and engine F uses 211.5 G in place of 223.5 G.
@@ -459,7 +461,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.6...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.7...HEAD
+[0.8.7]: https://github.com/tamnd/rulean/compare/v0.8.6...v0.8.7
 [0.8.6]: https://github.com/tamnd/rulean/compare/v0.8.5...v0.8.6
 [0.8.5]: https://github.com/tamnd/rulean/compare/v0.8.4...v0.8.5
 [0.8.4]: https://github.com/tamnd/rulean/compare/v0.8.3...v0.8.4

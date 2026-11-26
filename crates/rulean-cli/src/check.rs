@@ -195,7 +195,7 @@ pub fn run(args: &[String]) -> Code {
     if o.parse_only {
         let path = o.input.clone().unwrap_or_default();
         return match open_input(&path) {
-            Ok(i) => parse_only(&path, i.reader),
+            Ok(i) => parse_only(&path, i.reader, expr_hint(&i.source)),
             Err(e) => {
                 eprintln!("rulean: cannot read {path}: {e}");
                 Code::Input
@@ -221,11 +221,12 @@ pub fn check_options(o: Options) -> Result<Run, Code> {
     };
     let source = input.source;
     let reader = input.reader;
+    let hint = expr_hint(&source);
     let timeout = o.timeout;
     let report_file = o.report.clone();
     let json = o.json;
     let start = Instant::now();
-    match limits::run_limited(timeout, move || check_reader(&o, reader)) {
+    match limits::run_limited(timeout, move || check_reader(&o, reader, hint)) {
         Limited::Done(Ok(mut r)) => {
             confirm_input(&source, &mut r.report);
             Ok(r)
@@ -308,11 +309,12 @@ pub struct Run {
     pub json: bool,
 }
 
-/// Checks an export that `input` gives. The parse reads one line at a time, so the input is not in memory as a whole. This runs on the checker thread.
-pub fn check_reader<R: BufRead>(o: &Options, input: R) -> std::io::Result<Run> {
+/// Checks an export that `input` gives. The parse reads one line at a time, so the input is not in memory as a whole. This runs on the checker thread. `hint` is an estimate of the count of the expression nodes (see `expr_hint`), or 0.
+pub fn check_reader<R: BufRead>(o: &Options, input: R, hint: usize) -> std::io::Result<Run> {
     let start = Instant::now();
     let mut store = Store::new();
     store.set_max_bytes(o.memory_budget());
+    store.reserve_exprs(hint);
     let (parsed, digest) = read_export(&mut store, input)?;
     let mut rep = Report {
         input_path: o.input.clone().unwrap_or_default(),
@@ -619,9 +621,10 @@ pub(crate) fn hex(b: &[u8]) -> String {
 }
 
 /// `--parse-only`: parses the export and reports the counts.
-fn parse_only<R: BufRead>(path: &str, input: R) -> Code {
+fn parse_only<R: BufRead>(path: &str, input: R, hint: usize) -> Code {
     let start = Instant::now();
     let mut store = Store::new();
+    store.reserve_exprs(hint);
     let parsed = match read_export(&mut store, input) {
         Ok((p, _)) => p,
         Err(e) => {
@@ -685,6 +688,19 @@ pub(crate) fn error_text(e: &rulean_format::Error) -> String {
 }
 
 /// Opens the input read-only through `rulean-io` (contract K2, spec 10.7), or standard input for `-`.
+/// The size of the export of Init in bytes over the count of its expression nodes, rounded up to a power of two. The export of Init has about 57 bytes for each node, so the estimate of `expr_hint` is a little below the real count for an export like Init, and the table of the expressions grows at most once.
+const BYTES_PER_EXPR: u64 = 64;
+
+/// An estimate of the count of the expression nodes of the input, from the size of a regular file, or 0 for another input. The store uses it to make room in its table before the parse (`Store::reserve_exprs`).
+pub(crate) fn expr_hint(source: &rulean_io::Source) -> usize {
+    match source {
+        rulean_io::Source::File(p) => std::fs::metadata(p)
+            .map(|m| usize::try_from(m.len() / BYTES_PER_EXPR).unwrap_or(usize::MAX))
+            .unwrap_or(0),
+        _ => 0,
+    }
+}
+
 pub(crate) fn open_input(path: &str) -> std::io::Result<rulean_io::Input> {
     rulean_io::open(path)
 }
@@ -1125,7 +1141,7 @@ mod tests {
     const META: &str = r#"{"meta":{"exporter":{"name":"lean4export","version":"3.1.0"},"format":{"version":"3.1.0"},"lean":{"githash":"0","version":"4.36.0"}}}"#;
 
     fn run_on(text: &str, o: &Options) -> Report {
-        check_reader(o, text.as_bytes())
+        check_reader(o, text.as_bytes(), 0)
             .expect("no read error")
             .report
     }

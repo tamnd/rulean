@@ -330,3 +330,45 @@ fn probe_stats_count_the_walks() {
     assert!(p.slots - before.slots >= 4);
     assert!(p.compares - before.compares >= 1);
 }
+
+/// Makes `n` bvar nodes and the apps of each pair of neighbours, and gives the handles.
+fn build(s: &mut Store, n: u32) -> Vec<ExprId> {
+    let mut ids = Vec::new();
+    for i in 0..n {
+        ids.push(s.mk_bvar(i));
+    }
+    for i in 1..n as usize {
+        let a = s.mk_app(ids[i - 1], ids[i]);
+        ids.push(a);
+    }
+    ids
+}
+
+#[test]
+fn reserve_exprs_changes_the_room_and_not_the_nodes() {
+    let mut plain = Store::new();
+    let want = build(&mut plain, 3000);
+    let grown = plain.memory().tables;
+    let mut s = Store::new();
+    let before = s.memory().tables;
+    s.reserve_exprs(6000);
+    let reserved = s.memory().tables;
+    assert!(reserved > before, "the call made no room");
+    assert_eq!(build(&mut s, 3000), want);
+    // The table had the room, so it did not grow.
+    assert_eq!(s.memory().tables, reserved);
+    assert!(reserved >= grown);
+    // A table with a node, an estimate past the limit, and an estimate over the budget change nothing.
+    s.reserve_exprs(1 << 20);
+    assert_eq!(s.memory().tables, reserved);
+    let mut s = Store::new();
+    s.reserve_exprs(usize::MAX);
+    assert_eq!(s.memory().tables, before);
+    let mut s = Store::new();
+    s.set_max_bytes(s.memory().total() + 4096);
+    s.reserve_exprs(1 << 20);
+    assert_eq!(s.memory().tables, before);
+    let mut first = want[..10].to_vec();
+    first.extend_from_slice(&want[3000..3009]);
+    assert_eq!(build(&mut s, 10), first);
+}

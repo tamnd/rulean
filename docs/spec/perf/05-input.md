@@ -43,6 +43,8 @@ A line that must grow an index table goes to the general parser too. The general
 
 Result on Init, on 2026-11-26 (`rulean check --parse-only`, macOS, `/usr/bin/time -l`): 27.97 G instructions and 9.03 G cycles before, 10.85 G instructions and 5.27 G cycles with the fast path. The counts of nodes, names and levels do not change.
 
+The digit loop reads a slice of at most 19 bytes with a local index, and it computes `10 * v` with two shifts. The release build has overflow checks, so a multiply has a check and a branch, and the shifts have only the check of the add. With this loop, Init uses 10.50 G instructions (the smallest of three runs).
+
 ## 05.4 Ids
 
 The id of each kind (`ie`, `in`, `il`) goes up by one from line to line in each export that we know. The index from an export id to a store handle (`Index` in `ndjson.rs`) stays an array. The fast path adds one check: if the id is the next id, the handle goes at the end of the array, with no check of the array length. An id that is not the next id uses the general path, which is valid for each order.
@@ -60,6 +62,8 @@ The report has the counts of the walks of the expression tables (`probes` in the
 So a walk reads 1.16 slots on average, and only 2.7 M full compares do not find the node. The table does not cluster, and equal hashes are rare. The probe is in the time profile of 03.3 because each walk reads a random slot of a large table, and this read often misses the cache. The Arena counts instructions, not cycles. So a change of the table does not give a large gain on the Arena measure. The instructions of the parse are in the scan of JSON (05.3). The parse of Init uses 27.97 G instructions and 9.03 G cycles, which is 3.1 instructions in each cycle.
 
 A change of the table is still useful for the wall time (G5). The candidates are a prefetch of the slot for the next line, and nodes of one kind in one array of 8 or 12 bytes. These are not in M8.
+
+The table of the frozen expressions doubles when it is half full, and each doubling puts each node in the table again. On Init the table doubles 20 times, and the doublings and the fills of the new tables use about 0.6 G in the profile of the parse. So before the parse, `rulean check` estimates the count of the nodes from the size of the file, at 64 bytes for each node (Init has about 57), and makes the table that large (`Store::reserve_exprs`). The estimate is a little low for an export like Init, so the table has the same size at the end as with no estimate. The call does nothing if the estimate puts the store over its memory budget. With the estimate, Init uses 9.69 G instructions (the smallest of three runs), and the bytes of the store do not change.
 
 ## 05.6 Read and hash
 

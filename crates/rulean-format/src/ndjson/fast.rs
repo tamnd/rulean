@@ -12,6 +12,20 @@ use crate::json::{bytes_eq, utf8_valid};
 /// The largest number of digits of a number on the fast path. Each number with 19 digits fits in a `u64`.
 const MAX_DIGITS: usize = 19;
 
+/// The 8 bytes of `b` at `i` as one little-endian word. The caller makes sure that `i + 8 <= b.len()`.
+#[inline]
+fn word(b: &[u8], i: usize) -> u64 {
+    let s = &b[i..i + 8];
+    (s[0] as u64)
+        | (s[1] as u64) << 8
+        | (s[2] as u64) << 16
+        | (s[3] as u64) << 24
+        | (s[4] as u64) << 32
+        | (s[5] as u64) << 40
+        | (s[6] as u64) << 48
+        | (s[7] as u64) << 56
+}
+
 /// A position in one line. `ok` is false after the first byte that does not match a form.
 struct Cur {
     i: usize,
@@ -24,10 +38,24 @@ impl Cur {
     }
 
     /// Reads the fixed text `lit`.
+    #[inline]
     fn lit(&mut self, b: &[u8], lit: &[u8]) {
         if self.ok {
-            if bytes_eq(b, self.i, self.i + lit.len(), lit) {
-                self.i += lit.len();
+            let i = self.i;
+            let n = lit.len();
+            let mut eq = i <= b.len() && n <= b.len() - i;
+            let mut j = 0;
+            // The text is a constant at each call, so after inlining the words of `lit` are constants too, and a long text is one compare for each 8 bytes.
+            while eq && j + 8 <= n {
+                eq = word(b, i + j) == word(lit, j);
+                j += 8;
+            }
+            while eq && j < n {
+                eq = b[i + j] == lit[j];
+                j += 1;
+            }
+            if eq {
+                self.i = i + n;
             } else {
                 self.ok = false;
             }

@@ -45,6 +45,8 @@ Result on Init, on 2026-11-26 (`rulean check --parse-only`, macOS, `/usr/bin/tim
 
 The digit loop reads a slice of at most 19 bytes with a local index, and it computes `10 * v` with two shifts. The release build has overflow checks, so a multiply has a check and a branch, and the shifts have only the check of the add. With this loop, Init uses 10.50 G instructions (the smallest of three runs).
 
+The compare of a fixed text reads 8 bytes of the line as one word and compares it with 8 bytes of the text. Each fixed text is a constant at its call, so after inlining the words of the text are constants too. With this compare and the room in the table of 05.5, Init uses 8.86 G instructions (the smallest of three runs).
+
 ## 05.4 Ids
 
 The id of each kind (`ie`, `in`, `il`) goes up by one from line to line in each export that we know. The index from an export id to a store handle (`Index` in `ndjson.rs`) stays an array. The fast path adds one check: if the id is the next id, the handle goes at the end of the array, with no check of the array length. An id that is not the next id uses the general path, which is valid for each order.

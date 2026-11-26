@@ -12,7 +12,7 @@ Goal: a bench for the popular kernels in the repository, and a parse of NDJSON t
 2. `scripts/kbench.sh`: runs rulean and the popular kernels of the toolchain on one export, and prints the instructions and the max RSS of each kernel (03.1).
 3. `docs/bench/kernels.md`: the table of 03.2, made with `kbench.sh`.
 4. The steps and the comparisons of each probe of the intern table, in the report of `rulean check --report` (05.5).
-5. A fix of the probe, from the counts of item 4 (05.5).
+5. A fix of the probe, from the counts of item 4 (05.5). The counts show that the walks are short, so this item is closed with no change of the table.
 6. The template fast path of the parse, with the test and the fuzz target that compare it with the general parser (05.3).
 7. The fast path for the ids (05.4).
 

@@ -45,6 +45,16 @@
         "interns": { "type": "integer", "minimum": 0, "description": "The calls of intern_expr of the store, with the parse (spec 08.7.4). The work count of the gate is steps plus interns." }
       }
     },
+    "probes": {
+      "type": "object",
+      "description": "The counts of the walks of the expression tables of the store, with the parse (spec perf/05.5). With --threads, the sum over the stores.",
+      "properties": {
+        "walks": { "type": "integer", "minimum": 0, "description": "The lookups of a node in a table." },
+        "slots": { "type": "integer", "minimum": 0, "description": "The slots that the lookups read, with the last slot of each lookup." },
+        "compares": { "type": "integer", "minimum": 0, "description": "The comparisons of a full node, after the hash and the kind of a slot matched." },
+        "hits": { "type": "integer", "minimum": 0, "description": "The lookups that found the node." }
+      }
+    },
     "quarantine": { "type": "array", "items": { "type": "string" }, "description": "The names of the unsafe and partial constants." },
     "pin_mismatch": { "type": "array", "items": { "type": "string" }, "description": "The primitives whose declaration is not the reference declaration (spec 05.8)." },
     "engine": {

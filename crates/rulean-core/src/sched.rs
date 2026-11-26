@@ -9,7 +9,7 @@
 use alloc::vec::Vec;
 use rulean_format::Decl;
 use rulean_store::ids::KIND_COUNT;
-use rulean_store::{Expr, ExprId, Store, Tier};
+use rulean_store::{Expr, ExprId, ProbeStats, Store, Tier};
 
 use crate::conv::FStats;
 use crate::env::{ConstInfo, ConstKind, Env};
@@ -88,6 +88,8 @@ pub struct JobResult {
     pub steps: u64,
     /// The calls of `intern_expr` of the store of the worker in the job.
     pub interns: u64,
+    /// The counts of the walks of the expression tables of the store of the worker in the job.
+    pub probes: ProbeStats,
 }
 
 /// The merge of the results of all jobs.
@@ -103,6 +105,8 @@ pub struct Outcome {
     pub steps: u64,
     /// The calls of `intern_expr` in all jobs.
     pub interns: u64,
+    /// The counts of the walks of the expression tables in all jobs.
+    pub probes: ProbeStats,
     /// The largest session of a worker at the end of a job.
     pub s_entries: u64,
     /// True if the store of a worker was full.
@@ -362,6 +366,7 @@ impl Checker {
         self.sess.stats = SessionStats::default();
         let start = self.steps;
         let start_interns = self.st.interns();
+        let start_probes = self.st.probe_stats();
         let mut r = JobResult::default();
         let mut i = plan.starts[k] as usize;
         let end = plan.starts[k + 1] as usize;
@@ -387,7 +392,28 @@ impl Checker {
         r.full = self.st.is_full();
         r.steps = self.steps - start;
         r.interns = self.st.interns() - start_interns;
+        r.probes = probe_diff(self.st.probe_stats(), start_probes);
         r
+    }
+}
+
+/// The counts of `b` minus the counts of `a`.
+fn probe_diff(b: ProbeStats, a: ProbeStats) -> ProbeStats {
+    ProbeStats {
+        walks: b.walks - a.walks,
+        slots: b.slots - a.slots,
+        compares: b.compares - a.compares,
+        hits: b.hits - a.hits,
+    }
+}
+
+/// The sum of the counts of `a` and `b`.
+fn probe_sum(a: ProbeStats, b: ProbeStats) -> ProbeStats {
+    ProbeStats {
+        walks: a.walks + b.walks,
+        slots: a.slots + b.slots,
+        compares: a.compares + b.compares,
+        hits: a.hits + b.hits,
     }
 }
 
@@ -440,6 +466,7 @@ pub fn merge(plan: &Plan, results: &[JobResult], n: u32) -> Outcome {
         add_s(&mut o.s_stats, &r.s_stats);
         o.steps += r.steps;
         o.interns += r.interns;
+        o.probes = probe_sum(o.probes, r.probes);
         o.s_entries = max_u64(o.s_entries, r.s_entries);
         o.full = either(o.full, r.full);
         o.failed = first_failure(o.failed, r.failed);

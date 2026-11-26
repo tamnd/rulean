@@ -314,3 +314,19 @@ fn memory_budget_makes_the_store_full() {
     s.intern_nat(big);
     assert!(s.is_full());
 }
+
+#[test]
+fn probe_stats_count_the_walks() {
+    let mut s = Store::new();
+    let before = s.probe_stats();
+    let b0 = s.mk_bvar(0);
+    let b1 = s.mk_bvar(1);
+    let a = s.mk_app(b0, b1);
+    assert_eq!(s.mk_app(b0, b1), a);
+    let p = s.probe_stats();
+    assert_eq!(p.walks - before.walks, 4);
+    assert_eq!(p.hits - before.hits, 1);
+    // Each walk reads at least one slot, and the hit compares one full node.
+    assert!(p.slots - before.slots >= 4);
+    assert!(p.compares - before.compares >= 1);
+}

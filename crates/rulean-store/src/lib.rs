@@ -24,7 +24,7 @@ pub mod level;
 pub mod name;
 pub mod table;
 
-pub use expr::{Binder, Expr, Flags, LetNode, Literal, ProjNode, SATURATED};
+pub use expr::{Binder, Expr, Flags, LetNode, Literal, ProbeStats, ProjNode, SATURATED};
 pub use ids::{BinderInfo, ExprId, Kind, LevelId, LevelListId, NameId, NatId, Raw, StrId, Tier};
 pub use level::Level;
 pub use name::Name;
@@ -88,6 +88,8 @@ pub struct Store {
     pub(crate) max_bytes: usize,
     // The calls of `intern_expr`, with the calls that find the node (see `interns`).
     pub(crate) interns: u64,
+    // The counts of the walks of the expression tables (see `probe_stats`).
+    pub(crate) probes: expr::ProbeStats,
 }
 
 impl Default for Store {
@@ -126,6 +128,7 @@ impl Store {
             nat_heap: 0,
             max_bytes: usize::MAX,
             interns: 0,
+            probes: expr::ProbeStats::default(),
         };
         s.init_names();
         s.init_levels();
@@ -140,6 +143,11 @@ impl Store {
     /// The calls of `intern_expr` since the store was made, with the calls that find the node. This is a part of the work count of the report (spec 08.7.4).
     pub fn interns(&self) -> u64 {
         self.interns
+    }
+
+    /// The counts of the walks of the expression tables since the store was made (spec perf/05.5). They are not a part of the work count.
+    pub fn probe_stats(&self) -> expr::ProbeStats {
+        self.probes
     }
 
     /// Sets the memory budget of the store in bytes (`--max-memory`, spec 12.3). When an array of expressions must grow and the store would then use more than `bytes`, the store is full, as at the capacity limit. `usize::MAX` is no budget, and this is the default.

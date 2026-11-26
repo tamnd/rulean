@@ -1228,34 +1228,81 @@ impl Checker {
 
     /// `infer_app`.
     fn infer_app(&mut self, e: ExprId, infer_only: bool) -> ExprId {
-        if !infer_only {
-            let (f, a) = match self.st.node(e) {
-                Expr::App(f, a) => (f, a),
-                _ => return self.fail(ErrorKind::BadConst, e),
-            };
-            let ft0 = self.infer_type_core(f, infer_only);
-            let f_type = self.ensure_pi_core(ft0, e);
-            let a_type = self.infer_type_core(a, infer_only);
-            if self.bad() {
-                return self.dummy;
-            }
-            let (d_type, body) = self.binding(f_type);
-            let saved = self.eager;
-            if self.is_eager_reduce(a) {
-                self.eager = true;
-            }
-            let ok = self.is_def_eq(a_type, d_type);
-            self.eager = saved;
-            if self.bad() {
-                return self.dummy;
-            }
-            if !ok {
-                return self.fail_with(ErrorKind::AppTypeMismatch, e, f_type, a_type);
-            }
-            self.instantiate1(body, a)
-        } else {
+        if infer_only {
             self.infer_app_only(e)
+        } else {
+            self.infer_app_check(e)
         }
+    }
+
+    /// The check branch of `infer_app`. It does the checks of the C++ kernel for each argument in the same order, but it infers the type of the head one time and does not infer the type of each partial application. The pi type of the head is instantiated in chunks, as in `infer_app_only`, and the domain of each binder is instantiated with the arguments before it. Thus the body of the pi type is not instantiated again for each argument.
+    fn infer_app_check(&mut self, e: ExprId) -> ExprId {
+        let mut nodes: Vec<ExprId> = Vec::new();
+        let mut f = e;
+        let mut walking = true;
+        while walking {
+            match self.st.node(f) {
+                Expr::App(g, _) => {
+                    nodes.push(f);
+                    f = g;
+                }
+                _ => walking = false,
+            }
+        }
+        let mut args: Vec<ExprId> = Vec::new();
+        let f = expr::app_args(&self.st, e, &mut args);
+        let mut f_type = self.infer_type_core(f, false);
+        let n = args.len();
+        let mut j = 0;
+        let mut i = 0;
+        while i < n && !self.bad() {
+            let (t, k) = self.app_check_step(nodes[n - 1 - i], f_type, &args, j, i);
+            f_type = t;
+            j = k;
+            i += 1;
+        }
+        if self.bad() {
+            return self.dummy;
+        }
+        self.instantiate_rev(f_type, &args[j..n])
+    }
+
+    /// One step of `infer_app_check` for the argument `i`, at the application node `e`. `f_type` is a pi type or a term whose loose bound variables are the arguments `j..i`. It gives the body of the pi type and the new start of the chunk.
+    fn app_check_step(
+        &mut self,
+        e: ExprId,
+        f_type: ExprId,
+        args: &[ExprId],
+        j: usize,
+        i: usize,
+    ) -> (ExprId, usize) {
+        let (pi, j) = if self.is_pi(f_type) {
+            (f_type, j)
+        } else {
+            let t = self.instantiate_rev(f_type, &args[j..i]);
+            (self.ensure_pi_core(t, e), i)
+        };
+        let a = args[i];
+        let a_type = self.infer_type_core(a, false);
+        if self.bad() {
+            return (self.dummy, j);
+        }
+        let (dom, body) = self.binding(pi);
+        let d_type = self.instantiate_rev(dom, &args[j..i]);
+        let saved = self.eager;
+        if self.is_eager_reduce(a) {
+            self.eager = true;
+        }
+        let ok = self.is_def_eq(a_type, d_type);
+        self.eager = saved;
+        if self.bad() {
+            return (self.dummy, j);
+        }
+        if !ok {
+            let ft = self.instantiate_rev(pi, &args[j..i]);
+            self.fail_with(ErrorKind::AppTypeMismatch, e, ft, a_type);
+        }
+        (body, j)
     }
 
     /// The infer-only branch of `infer_app`. It instantiates the arguments in chunks.

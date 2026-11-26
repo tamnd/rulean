@@ -174,6 +174,7 @@ impl Nodes {
         self.table.clear();
     }
 
+    #[inline(always)]
     fn get(&self, kind: Kind, i: usize) -> Expr {
         match kind {
             Kind::BVar => Expr::BVar(self.bvar[i]),
@@ -497,6 +498,7 @@ fn push_node(
 
 impl Store {
     /// The node of an expression.
+    #[inline]
     pub fn node(&self, e: ExprId) -> Expr {
         match e.tier() {
             Tier::Frozen => self.exprs.get(e.kind(), e.index()),

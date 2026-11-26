@@ -64,12 +64,12 @@ impl Checker {
                 self.apply(vf, va, e)
             }
             Expr::Lam(b) => {
-                let d = self.eval(env, b.dom);
+                let d = self.eval_dom(env, b.dom);
                 let clo = Closure { env, body: b.body };
                 self.v_alloc(Value::Lam(b.name, b.info, d, clo))
             }
             Expr::Pi(b) => {
-                let d = self.eval(env, b.dom);
+                let d = self.eval_dom(env, b.dom);
                 let clo = Closure { env, body: b.body };
                 self.v_alloc(Value::Pi(b.name, b.info, d, clo))
             }
@@ -105,6 +105,25 @@ impl Checker {
             r
         } else {
             self.eval(env, a)
+        }
+    }
+
+    /// The value of the domain `d` of a binder. A domain that is not an atom becomes a suspended value, because most unfoldings apply the lambda and never read its domain. Under a binder that `quote` opened, the domain is evaluated now, for the reason that `eval_arg` gives.
+    #[inline(always)]
+    fn eval_dom(&mut self, env: EnvId, d: ExprId) -> ValueId {
+        if self.f_under == 0
+            && matches!(
+                d.kind(),
+                Kind::App | Kind::Proj | Kind::Let | Kind::Pi | Kind::Lam
+            )
+        {
+            let r = self.va.susp(env, d);
+            if self.va.full() {
+                self.fail(ErrorKind::ArenaFull, d);
+            }
+            r
+        } else {
+            self.eval(env, d)
         }
     }
 

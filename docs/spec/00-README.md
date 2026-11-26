@@ -36,6 +36,8 @@ Research reports:
 | [C](research/C-formal-verification.md) | metatheory, verified kernels in Lean and other systems, Rust verification tools, AI-assisted proof engineering |
 | [D](research/D-runtime-formats-rust.md) | the Lean object model, `.olean`, lean4export, plugging into Lean, pure-Rust crates, the "no C" question |
 
+The performance part, [perf/](perf/00-README.md), sets the goal of 10 times fewer instructions than each popular kernel, with the measurements of November 2026 and the milestones M8 to M10. Where it and 08 disagree, the performance part has priority.
+
 Reading order: 02, then 01.1, then 03, then the document for your area.
 
 ## 00.2 Settled decisions

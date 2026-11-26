@@ -4,6 +4,8 @@ This document turns promise P1 (02.2) into budgets, names the techniques that pa
 
 Evidence: research/B-kernels-and-performance.md sections 8 to 10, and research/A section 5.
 
+The performance part `perf/` (perf/00-README.md) is newer than this document. It sets the targets against each popular kernel and gives the new design of the check, the parse and the in-process kernel. Where the two disagree, `perf/` has priority.
+
 ## 08.1 The budget
 
 The P1.a target is at most 1.21 T instructions on the Arena Mathlib export, including parsing. Mathlib has about 700 k declarations.

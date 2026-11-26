@@ -226,9 +226,21 @@ impl Checker {
     }
 
     /// The node of the context `c` with one more binder of domain `dom` (a term in `c`) and value `dv`.
-    fn f_bind(&mut self, c: u32, name: NameId, info: BinderInfo, dom: ExprId, dv: ValueId) -> u32 {
-        if let Some(n) = self.fi.binds.get(dom.0, raw(c)) {
-            return low(n);
+    ///
+    /// A pi binder uses the node at key (`dom`, `c`) in `binds` if there is one. A lambda (`fresh`) always gets a new node with a new local, and the node does not go into `binds`. The type of a lambda is a `Value::PiOpen` with this local, and `conv` compares it with a pi type under the local, in place of a new local (spec perf/04.5). This is correct only if no value outside the body of the lambda has the local. With a shared node, this is false. For example, in `fun (p q : U) => Eq.refl q` the inner lambda has no loose bound variable, so `f_infer` infers it in the root context, and the key (`U`, root) gave it the node of `p`. Then the two types had the same local, and `conv` found `@Eq U q q` equal to `@Eq U p q`. A lambda is inferred once in each context (the cache `types`), so a new node for each lambda does not repeat the inference of its body.
+    fn f_bind(
+        &mut self,
+        c: u32,
+        name: NameId,
+        info: BinderInfo,
+        dom: ExprId,
+        dv: ValueId,
+        fresh: bool,
+    ) -> u32 {
+        if !fresh {
+            if let Some(n) = self.fi.binds.get(dom.0, raw(c)) {
+                return low(n);
+            }
         }
         let lvl = self.lctx_ty.len() as u32;
         let ty = self.quote(lvl, lvl, dv);
@@ -249,7 +261,7 @@ impl Checker {
             ty: dom,
             val: None,
         });
-        if !self.bad() {
+        if !fresh && !self.bad() {
             self.fi.binds.put(dom.0, raw(c), raw(id));
         }
         id
@@ -414,7 +426,7 @@ impl Checker {
                     self.f_sort_level(s, b.dom);
                 }
                 let dv = self.f_eval(c, b.dom);
-                let c2 = self.f_bind(c, b.name, b.info, b.dom, dv);
+                let c2 = self.f_bind(c, b.name, b.info, b.dom, dv, true);
                 let bt = self.f_infer(c2, b.body, infer_only);
                 if self.bad() {
                     return self.v_dummy();
@@ -434,7 +446,7 @@ impl Checker {
                 let s1 = self.f_infer(c, b.dom, infer_only);
                 let u = self.f_sort_level(s1, b.dom);
                 let dv = self.f_eval(c, b.dom);
-                let c2 = self.f_bind(c, b.name, b.info, b.dom, dv);
+                let c2 = self.f_bind(c, b.name, b.info, b.dom, dv, false);
                 let s2 = self.f_infer(c2, b.body, infer_only);
                 let v = self.f_sort_level(s2, b.body);
                 if self.bad() {

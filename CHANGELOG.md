@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- Engine F gives each lambda its own local in inference. Before, a lambda with no loose bound variable got the local of an outer lambda with the same domain, and engine F accepted `fun p q => Eq.refl q` as a proof of `p = q`. This bug came with v0.8.3, and only `--engine F` had it.
+
 ## [0.8.3] - 2026-11-27
 
 ### Added

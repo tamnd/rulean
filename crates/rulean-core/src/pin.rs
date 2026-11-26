@@ -362,13 +362,12 @@ impl Checker {
                 while i < info.ctors.len() && !missing {
                     let cn = d.name(&self.st, info.ctors[i]);
                     push_bytes(&mut m, &cn);
-                    let cs = self.env.peek(info.ctors[i]);
-                    if cs == 0 {
-                        missing = true;
-                    } else {
-                        let ct = self.env.at(cs).ty;
-                        let x = d.expr(&self.st, ct);
-                        push_bytes(&mut m, &x);
+                    match self.ctor_type(info.ctors[i]) {
+                        Some(ct) => {
+                            let x = d.expr(&self.st, ct);
+                            push_bytes(&mut m, &x);
+                        }
+                        None => missing = true,
                     }
                     i += 1;
                 }
@@ -380,6 +379,15 @@ impl Checker {
             return None;
         }
         Some(sha256(&m))
+    }
+
+    /// The type of the constructor `n`, or `None` if the environment does not have it. This is a function of its own, so that the branches of the loop in `pin_digest` do not keep a borrow of the environment. With the lookup inside the loop, Aeneas stopped with "Could not match the contexts" on these branches.
+    fn ctor_type(&self, n: NameId) -> Option<ExprId> {
+        let cs = self.env.peek(n);
+        if cs == 0 {
+            return None;
+        }
+        Some(self.env.at(cs).ty)
     }
 
     /// Compares each target that the environment has now, and that is not compared yet, with its reference. A mismatch turns the extension of the target off (deviation D1). With `trust_primitives` the extensions stay on, as in the official kernel.

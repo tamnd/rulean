@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ### Changed
 
+- Engine F compares two values of the same term on the values of the environment that the term reads, and not on the full environment (spec perf/04.3 A6). On the Init export, engine F uses 282.7 G instructions in place of 286.0 G, and engine R confirms 12737 answers in place of 13207. The answers do not change.
 - Engine F infers the type of a projection, a literal and a free variable itself, and not through engine R (spec perf/04.5). For a structure in `Prop`, engine R decides only `is_prop` of the field type, as one query on its read-back. On the Init export, engine F accepts 115085 of 115872 checks in place of 115082, and the count of instructions does not change by more than the noise. The answers do not change.
 - Engine F keeps the domain of a binder as a suspended value when the domain is not an atom, so an unfolding that applies a lambda does not evaluate its domain (spec perf/04.3 A5). `Store::node` also inlines its node read. On the Init export, engine F uses 285.9 G instructions in place of 312.8 G, and engine R uses 185.0 G in place of 188.1 G. The answers do not change.
 - The memos of the term walks (`instantiate`, lift, abstract, the occurrence test, level instantiation and term equality) are fixed caches with 2^13 slots, and `mk_app` has a front cache with 2^16 slots (spec perf/04.3). On the Init export, engine R uses 182.4 G instructions in place of 227.0 G, and engine F uses 312.8 G in place of 340.0 G. The answers do not change.

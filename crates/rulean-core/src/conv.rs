@@ -6,7 +6,7 @@
 
 use rulean_format::Hints;
 use rulean_store::ids::raw;
-use rulean_store::{BinderInfo, Expr, ExprId, LevelListId, NameId};
+use rulean_store::{BinderInfo, Expr, ExprId, LevelListId, NameId, SATURATED};
 
 use crate::env::compare_hints;
 use crate::expr;
@@ -506,7 +506,7 @@ impl Checker {
         // Two suspended arguments of the same term are equal without an evaluation when they have the same environment, or when the term has no loose bound variable (spec perf/04.3 A6).
         let (xa, xb) = (self.va.get(a), self.va.get(b));
         if let (Value::Susp(e1, t1, _), Value::Susp(e2, t2, _)) = (xa, xb) {
-            if t1 == t2 && (e1 == e2 || self.st.loose_range(t1) == 0) {
+            if t1 == t2 && self.same_env_top(e1, e2, self.st.loose_range(t1), budget) {
                 return true;
             }
         }
@@ -558,20 +558,38 @@ impl Checker {
         ok
     }
 
-    /// Two closures with the same body and environments of the same form.
+    /// Two closures with the same body and environments of the same form. The bound variable of the binder has index 0, so the body reads only the first `loose_range(body) - 1` values of the environment.
     fn same_closure(&mut self, c1: Closure, c2: Closure, budget: &mut u32) -> bool {
         if c1.body != c2.body {
             return false;
         }
-        let mut x = c1.env;
-        let mut y = c2.env;
-        let mut ok = self.va.env_len(x) == self.va.env_len(y);
-        while ok && x != y && x != EnvId::NIL {
+        let k = self.st.loose_range(c1.body);
+        let k = if k >= SATURATED {
+            k
+        } else {
+            k.saturating_sub(1)
+        };
+        self.same_env_top(c1.env, c2.env, k, budget)
+    }
+
+    /// Two environments with the same form in the first `k` values (spec perf/04.3 A6). A term with a loose bound variable range of `k` reads only these values, so the term has the same value in the two environments. The other values are not compared. If `k` is `SATURATED`, the two environments must have the same length and the same form in all values.
+    fn same_env_top(&mut self, e1: EnvId, e2: EnvId, k: u32, budget: &mut u32) -> bool {
+        let mut x = e1;
+        let mut y = e2;
+        let (n1, n2) = (self.va.env_len(x), self.va.env_len(y));
+        let mut ok = if k >= SATURATED {
+            n1 == n2
+        } else {
+            n1 >= k && n2 >= k
+        };
+        let mut i = 0;
+        while ok && i < k && x != y && x != EnvId::NIL {
             let (vx, px) = self.va.env_node(x);
             let (vy, py) = self.va.env_node(y);
             ok = self.same_in(vx, vy, budget);
             x = px;
             y = py;
+            i += 1;
         }
         ok
     }

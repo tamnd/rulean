@@ -257,6 +257,47 @@ fn nat_literal_extension() {
     assert_eq!(t.whnf_f(e), e);
 }
 
+#[test]
+fn nat_inline_numbers_give_the_answers_of_engine_r() {
+    let mut t = T::new();
+    let s1 = t.sort(1);
+    t.axiom("Nat", s1);
+    let big = 1u64 << 63;
+    let vals = [0, 1, 2, 3, 7, 64, 65, 1 << 32, big - 1, big, u64::MAX];
+    let ops = [
+        "Nat.add",
+        "Nat.sub",
+        "Nat.mul",
+        "Nat.gcd",
+        "Nat.mod",
+        "Nat.div",
+        "Nat.beq",
+        "Nat.ble",
+        "Nat.land",
+        "Nat.lor",
+        "Nat.xor",
+        "Nat.shiftRight",
+    ];
+    for op in ops {
+        let f = t.k(op);
+        for x in vals {
+            for y in vals {
+                let (a, b) = (t.nat(x), t.nat(y));
+                let e = t.app(f, &[a, b]);
+                let want = t.c.whnf(e);
+                assert_eq!(t.whnf_f(e), want, "{op} {x} {y}");
+            }
+        }
+    }
+    let succ = t.k("Nat.succ");
+    for x in vals {
+        let a = t.nat(x);
+        let e = t.app(succ, &[a]);
+        let want = t.c.whnf(e);
+        assert_eq!(t.whnf_f(e), want, "Nat.succ {x}");
+    }
+}
+
 /// The type `B` with the constructors `B.t` and `B.f`, and `B.rec.{u}`.
 fn bool_type(t: &mut T) {
     let s1 = t.sort(1);

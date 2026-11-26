@@ -40,6 +40,19 @@ impl SpineId {
 /// The limit is a budget for engine F on one declaration. When engine F fills the arena, the work that it did is lost, and engine R does the query again. A larger limit lets engine F waste more work on a declaration that it cannot finish. On the 42 Arena perf tests, the total count of instructions was 1537 G with 2^22, 1348 G with 2^20 and 1326 G with 2^18. The test `grind-ring-5` went from 121 G to 28 G, and `gf3-matrix-product` went from 49 G with 2^20 to 68 G with 2^18. A reset of the arena at each query was worse: `grind-ring-5` took 698 G with 2^22.
 pub const MAX_NODES: u32 = 1 << 18;
 
+/// The bound of the inline `Nat` numbers of `Value::Small`: 2^63. The sum of two inline numbers fits in a `u64`.
+pub const SMALL_NAT_LIMIT: u64 = 1 << 63;
+
+/// The `Value::Small` of `x`, which must be below `SMALL_NAT_LIMIT`.
+pub fn small(x: u64) -> Value {
+    Value::Small(x as u32, (x >> 32) as u32)
+}
+
+/// The number of a `Value::Small`.
+pub fn small_get(lo: u32, hi: u32) -> u64 {
+    (lo as u64) | ((hi as u64) << 32)
+}
+
 /// A closure: the body of a binder and the environment of its free de Bruijn indices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Closure {
@@ -62,7 +75,10 @@ pub enum Head {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Value {
     Sort(LevelId),
+    /// A literal. A `Nat` literal of this form is at least `SMALL_NAT_LIMIT`, because a smaller one is a `Value::Small`.
     Lit(Literal),
+    /// A `Nat` literal below `SMALL_NAT_LIMIT` as an inline number: the low and the high 32 bits (spec perf/04.8). The `Nat` extension computes on two such numbers with machine arithmetic, and the store does not keep the result.
+    Small(u32, u32),
     /// A lambda: the binder name and information, the domain and the body. The name is used only by read-back.
     Lam(NameId, BinderInfo, ValueId, Closure),
     /// A pi type: the binder name and information, the domain and the body.

@@ -204,7 +204,7 @@ impl Checker {
     /// True if the type of `v` is not a proposition for each value of the level parameters. A sort, a literal and a Pi type are never proofs. An application of a constant is never a proof if the type of the constant ends in a sort, or in an inductive type whose sort is never zero (`const_never_proof`). For other values the result is false, and the step reads the values back.
     fn never_proof(&mut self, v: ValueId) -> bool {
         match self.vget(v) {
-            Value::Sort(_) | Value::Lit(_) | Value::Pi(..) => true,
+            Value::Sort(_) | Value::Lit(_) | Value::Small(..) | Value::Pi(..) => true,
             Value::Neu(Head::Const(c, _), _) => self.const_never_proof(c),
             Value::Neu(Head::FVar(l, _), _) => self.fvar_never_proof(l),
             Value::Glued(c, _, _, _) => self.const_never_proof(c),
@@ -360,6 +360,13 @@ impl Checker {
             }
             (Value::Lit(x), Value::Lit(y)) => {
                 if x == y {
+                    LBool::True
+                } else {
+                    LBool::Undef
+                }
+            }
+            (Value::Small(x1, x2), Value::Small(y1, y2)) => {
+                if x1 == y1 && x2 == y2 {
                     LBool::True
                 } else {
                     LBool::Undef
@@ -521,6 +528,7 @@ impl Checker {
         match (xa, xb) {
             (Value::Sort(l1), Value::Sort(l2)) => l1 == l2,
             (Value::Lit(x), Value::Lit(y)) => x == y,
+            (Value::Small(x1, x2), Value::Small(y1, y2)) => x1 == y1 && x2 == y2,
             (Value::Lam(_, _, d1, c1), Value::Lam(_, _, d2, c2))
             | (Value::Pi(_, _, d1, c1), Value::Pi(_, _, d2, c2)) => {
                 self.same_in(d1, d2, budget) && self.same_closure(c1, c2, budget)

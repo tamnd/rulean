@@ -350,7 +350,23 @@ impl Nodes {
     }
 }
 
+/// The largest count of nodes that `Store::reserve_exprs` makes room for. A larger estimate is not a real export of today, and the room stays below 4 GiB of slots.
+const MAX_RESERVE: usize = 1 << 28;
+
 impl Store {
+    /// Makes room in the table of the frozen expressions for at least `n` nodes, so the table does not grow while a parse adds them. A reader calls it before the parse, with an estimate from the size of the input. The call does nothing if the table has a node, if the table already has the room, if `n` is more than `MAX_RESERVE`, or if the room would put the store over its budget. So the call changes the memory of the store and never changes the nodes.
+    pub fn reserve_exprs(&mut self, n: usize) {
+        if n <= MAX_RESERVE && self.exprs.table.len() == 0 {
+            let want = 2 * n + 1;
+            if self.exprs.table.capacity() < want {
+                let extra = Table::bytes_for(want, false) - self.exprs.table.bytes();
+                if !self.over_budget(extra) {
+                    self.exprs.table = Table::with_capacity(want, false);
+                }
+            }
+        }
+    }
+
     /// True if the next node of `kind` in `tier` makes the arrays or the table of the tier grow, and the store would then be over its budget.
     ///
     /// A full store gives the handle of the first frozen node of the kind (see `intern_expr`). So while the frozen array of the kind is empty, the budget does not stop a new node, and the handle is always valid. The checker also compares its memory with the budget, so this gap does not let the memory grow with no limit.

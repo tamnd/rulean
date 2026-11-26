@@ -87,10 +87,7 @@ impl Table {
 
     /// A new empty table with room for at least `n` slots. The capacity is a power of two.
     pub fn with_capacity(n: usize, use_epochs: bool) -> Table {
-        let mut cap = FIRST_CAPACITY;
-        while cap < n {
-            cap *= 2;
-        }
+        let cap = Table::capacity_for(n);
         let mut slots = Vec::with_capacity(if use_epochs { 0 } else { cap });
         let mut eslots = Vec::with_capacity(if use_epochs { cap } else { 0 });
         let mut i = 0;
@@ -120,6 +117,25 @@ impl Table {
         }
     }
 
+    /// The capacity of `Table::with_capacity(n, _)`: the smallest power of two that is at least `n` and at least the first capacity.
+    pub fn capacity_for(n: usize) -> usize {
+        let mut cap = FIRST_CAPACITY;
+        while cap < n {
+            cap *= 2;
+        }
+        cap
+    }
+
+    /// The number of bytes of the slots of `Table::with_capacity(n, use_epochs)`, with no allocation.
+    pub fn bytes_for(n: usize, use_epochs: bool) -> usize {
+        let per_slot = if use_epochs {
+            core::mem::size_of::<EpochSlot>()
+        } else {
+            core::mem::size_of::<Slot>()
+        };
+        Table::capacity_for(n) * per_slot
+    }
+
     /// The number of values in the table.
     pub fn len(&self) -> usize {
         self.count
@@ -137,12 +153,7 @@ impl Table {
 
     /// The number of bytes of the slots.
     pub fn bytes(&self) -> usize {
-        let per_slot = if self.use_epochs {
-            core::mem::size_of::<EpochSlot>()
-        } else {
-            core::mem::size_of::<Slot>()
-        };
-        self.capacity() * per_slot
+        Table::bytes_for(self.capacity(), self.use_epochs)
     }
 
     /// The first position of the probe sequence for `hash`.

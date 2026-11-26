@@ -34,18 +34,27 @@ impl Cur {
         }
     }
 
-    /// Reads a number with 1 to 19 ASCII digits and no leading zero.
+    /// Reads a number with 1 to 19 ASCII digits and no leading zero. The loop reads a slice of at most 19 bytes with a local index, so the index needs no bounds check, and `v * 10` is two shifts and one add, so it has one overflow check and not a multiply with an overflow check.
+    #[inline]
     fn num(&mut self, b: &[u8]) -> u64 {
         let mut v: u64 = 0;
         if self.ok {
             let start = self.i;
-            while self.i < b.len() && is_digit(b[self.i]) && self.i - start < MAX_DIGITS {
-                v = v * 10 + (b[self.i] - b'0') as u64;
-                self.i += 1;
+            let end = if b.len() - start > MAX_DIGITS {
+                start + MAX_DIGITS
+            } else {
+                b.len()
+            };
+            let s = &b[start..end];
+            let mut j = 0;
+            while j < s.len() && is_digit(s[j]) {
+                v = (v << 3) + (v << 1) + (s[j] - b'0') as u64;
+                j += 1;
             }
-            let n = self.i - start;
-            let more = self.i < b.len() && is_digit(b[self.i]);
-            if n == 0 || (n > 1 && b[start] == b'0') || more {
+            let i = start + j;
+            self.i = i;
+            let more = i < b.len() && is_digit(b[i]);
+            if j == 0 || (j > 1 && s[0] == b'0') || more {
                 self.ok = false;
             }
         }

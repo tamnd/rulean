@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-26
+
 ### Changed
 
 - Each declaration keeps the result of the level instantiation of a term of a constant in the cache `c_lps` (spec perf/04.3). The iota step of a recursor and `infer_constant` use it in both engines. On the Init export, engine F uses 359.9 G instructions in place of 402.3 G, and its answers do not change.
@@ -382,7 +384,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.0.19...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/tamnd/rulean/compare/v0.0.19...v0.8.0
 [0.0.19]: https://github.com/tamnd/rulean/compare/v0.0.18...v0.0.19
 [0.0.18]: https://github.com/tamnd/rulean/compare/v0.0.17...v0.0.18
 [0.0.17]: https://github.com/tamnd/rulean/compare/v0.0.16...v0.0.17

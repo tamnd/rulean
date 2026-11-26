@@ -2,14 +2,14 @@
 //!
 //! This module is a transcription of `instantiate.cpp`, `abstract.cpp`, the loose bound variable part of `expr.cpp` and `expr_eq_fn.cpp` of the official kernel v4.35.0.
 //!
-//! The official functions use `replace` with a cache for shared nodes. Here each function has its own recursion and a `Memo` keyed by the node and the binder offset. A free variable is an atom: the functions do not go into its type.
+//! The official functions use `replace` with a cache for shared nodes. Here each function has its own recursion and a `Lossy` cache keyed by the node and the binder offset. A miss of this cache only costs more work, because the result of a node does not depend on the order of the visits. A free variable is an atom: the functions do not go into its type.
 
 use alloc::vec::Vec;
 use rulean_store::ids::raw;
 use rulean_store::{Expr, ExprId, Flags, LevelId, NameId, SATURATED, Store};
 
 use crate::level;
-use crate::memo::Memo;
+use crate::memo::Lossy;
 
 /// The first level of the far free variables. A far free variable is a free variable of a term that is not in the local context. The C++ kernel accepts such a term, and it gives "unknown free variable" only when it must read the declaration of the variable. The checker gives the fault `UnknownFVar` when it infers the type of a far free variable, and `whnf` keeps the variable. The local context of the checker cannot have this number of declarations.
 pub const FAR_FVAR: u32 = 1 << 31;
@@ -24,24 +24,24 @@ pub fn far_fvar(st: &mut Store, k: u32) -> ExprId {
 /// The scratch maps of the expression operations. Each operation clears its own map when it starts.
 #[derive(Debug, Default)]
 pub struct Scratch {
-    inst: Memo,
-    lift: Memo,
-    abs: Memo,
-    occ: Memo,
-    lps: Memo,
-    eq: Memo,
+    inst: Lossy,
+    lift: Lossy,
+    abs: Lossy,
+    occ: Lossy,
+    lps: Lossy,
+    eq: Lossy,
 }
 
 impl Scratch {
     /// New empty maps.
     pub fn new() -> Scratch {
         Scratch {
-            inst: Memo::new(),
-            lift: Memo::new(),
-            abs: Memo::new(),
-            occ: Memo::new(),
-            lps: Memo::new(),
-            eq: Memo::new(),
+            inst: Lossy::new(),
+            lift: Lossy::new(),
+            abs: Lossy::new(),
+            occ: Lossy::new(),
+            lps: Lossy::new(),
+            eq: Lossy::new(),
         }
     }
 }
@@ -220,7 +220,7 @@ pub fn lower_loose_bvars(st: &mut Store, x: &mut Scratch, e: ExprId, s: u32, d: 
 
 fn shift_rec(
     st: &mut Store,
-    m: &mut Memo,
+    m: &mut Lossy,
     e: ExprId,
     offset: u32,
     s: u32,
@@ -257,7 +257,7 @@ fn shift_rec(
 
 fn shift_node(
     st: &mut Store,
-    m: &mut Memo,
+    m: &mut Lossy,
     e: ExprId,
     offset: u32,
     s: u32,
@@ -376,7 +376,7 @@ pub fn has_loose_bvar(st: &Store, x: &mut Scratch, e: ExprId, i: u32) -> bool {
     occ_rec(st, &mut x.occ, e, i as u64, 0)
 }
 
-fn occ_rec(st: &Store, m: &mut Memo, e: ExprId, i: u64, offset: u32) -> bool {
+fn occ_rec(st: &Store, m: &mut Lossy, e: ExprId, i: u64, offset: u32) -> bool {
     let k = i + offset as u64;
     if no_loose_from(st, e, k) {
         return false;
@@ -663,7 +663,7 @@ pub fn expr_equal(st: &Store, x: &mut Scratch, a: ExprId, b: ExprId) -> bool {
     eq_rec(st, &mut x.eq, a, b)
 }
 
-fn eq_rec(st: &Store, m: &mut Memo, a: ExprId, b: ExprId) -> bool {
+fn eq_rec(st: &Store, m: &mut Lossy, a: ExprId, b: ExprId) -> bool {
     if a == b {
         return true;
     }

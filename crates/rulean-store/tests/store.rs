@@ -322,6 +322,13 @@ fn probe_stats_count_the_walks() {
     let b0 = s.mk_bvar(0);
     let b1 = s.mk_bvar(1);
     let a = s.mk_app(b0, b1);
+    // The second call finds the node in the front cache of `mk_app`, so it does not walk the table.
+    assert_eq!(s.mk_app(b0, b1), a);
+    let p = s.probe_stats();
+    assert_eq!(p.walks - before.walks, 3);
+    assert_eq!(p.hits - before.hits, 0);
+    // A change of the tier empties the front cache, so the next call walks the frozen table and finds the node there.
+    s.set_scratch(true);
     assert_eq!(s.mk_app(b0, b1), a);
     let p = s.probe_stats();
     assert_eq!(p.walks - before.walks, 4);
@@ -329,6 +336,22 @@ fn probe_stats_count_the_walks() {
     // Each walk reads at least one slot, and the hit compares one full node.
     assert!(p.slots - before.slots >= 4);
     assert!(p.compares - before.compares >= 1);
+}
+
+#[test]
+fn an_app_of_the_scratch_tier_has_a_new_handle_after_the_clear() {
+    let mut s = Store::new();
+    let b0 = s.mk_bvar(0);
+    let b1 = s.mk_bvar(1);
+    s.set_scratch(true);
+    let a = s.mk_app(b0, b1);
+    assert_eq!(a.tier(), Tier::Scratch);
+    s.clear_scratch();
+    // The front cache does not keep the old scratch handle, so the node goes to the frozen tier.
+    let f = s.mk_app(b0, b1);
+    assert_eq!(f.tier(), Tier::Frozen);
+    s.set_scratch(true);
+    assert_eq!(s.mk_app(b0, b1), f);
 }
 
 /// Makes `n` bvar nodes and the apps of each pair of neighbours, and gives the handles.

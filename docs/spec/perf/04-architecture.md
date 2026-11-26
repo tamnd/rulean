@@ -207,3 +207,38 @@ The check budget is 16.0 G for 58547 declarations, which is about 270 k instruct
 - The sharing test (A6) needs a lemma: two values from the same term and the same environment are equal.
 - A2 changes no rule. It changes the engine that decides a query, and both engines are sound.
 - A3 changes the confirm set. The twin must show that each removed pair cannot give an answer that the official order does not give, or the pair stays.
+- The value keys (04.12) need a lemma: two values with the same key read back to the same term.
+
+## 04.12 Value keys
+
+A value key is a number for a value of the arena. Two values with the same key have the same term, in the same local context and at the same binder depth. Engine F uses the key to share the unfolding of a glued value between two values of the same term (04.6). The key does not need a read-back, because the key of a value comes from the keys of its parts.
+
+**Key nodes.** The keys of one declaration are the nodes of a hash-consed table `k_nodes`. A node is a tag and two numbers, and the table gives the same key for the same node. The table compares the full node on a hash match (spec 08.5), so two different nodes never get the same key. The table is cleared with the arena at the start of a declaration. The keys are structural: a key does not contain a value handle. So a key stays correct when a region of the arena is released (A4), and the table is not truncated at a release.
+
+**Keys of values.** These are the keys of the forms of spec 05.4.1:
+
+| Value | Key node |
+|---|---|
+| `Sort(l)` | (sort, `l`) |
+| `Small(lo, hi)` | (small, `lo`, `hi`) |
+| `Lit(l)` | a new key |
+| `Lam(d, clo)` and `Pi(d, clo)` | (binder, key of `d`, key of the environment of `clo`), then (closure, that key, the body term) |
+| `Neu(h, sp)` and `Glued(c, us, sp)` | (application, key of the head, key of `sp`) |
+| the head `FVar(l, t)` | (local, `l`, key of `t`) |
+| the head `Const(c, us)` and the head of `Glued(c, us, ...)` | (constant, `c`, `us`) |
+| the head `Proj(s, i, x)` | (projection, `s`, `i`), then (projection value, that key, key of `x`) |
+| `Susp(env, e)` with a closed term `e` | (closed term, `e`) |
+| `Susp(env, e)` with an open term `e` | (suspension, key of `env`, `e`) |
+| `PiOpen` | a new key |
+
+The key of the empty spine and of the empty environment is a constant. A spine node and an environment node have the key (spine, key of the parent, key of the argument) and (environment, key of the parent, key of the value). A glued value and a neutral value with the same head and the same arguments have the same key, because they read back to the same term. A new key is a node with a counter, and no other value gets it. A literal gets a new key because its term is not compared by its handle here, and a `PiOpen` gets a new key because its read-back depends on its local.
+
+A suspended argument keeps the key of its term and environment after its slot gets a value. So its key does not change, but it is not the key of the value in the slot. Two values of the same term can then have different keys. This is correct, because the rule is only "same key gives same term", and not the converse. It only removes a hit.
+
+**Storage.** The arena keeps the key of each value, environment node and spine node next to the node, with 0 for "not computed". A key is computed at the first read and kept, so the key of a spine with a shared prefix costs one table lookup for each new node. A release of a region removes the keys of the removed nodes with the nodes. The recursion of the key has a depth limit of 64, and a value deeper than that gets a new key. Then it is never a hit.
+
+**The unfolding cache.** `unfold_glued` computes the key of the glued value when its slot is empty. The cache `c_unfold_key` gives the unfolding of an earlier glued value with the same key, and the bits of `f_bits` that its evaluation set. A hit fills the slot with that unfolding and sets the bits again, as a slot hit does. A miss evaluates the unfolding and puts it in the cache. The cache holds value handles, so it is truncated with `c_force` when a region is released.
+
+Measure on Init, on 2026-11-27 (one thread, test builds, main at 5015a8e with the fix of #200): the run without keys used 291.4 G instructions and did 21.2 M unfoldings of glued values. The keys of this section, kept in a hash table in place of the arena storage, gave 12.1 M unfoldings, 2.0 M of them cache hits, and the run used 320.7 G. The same keys with no use of the cache used 412.9 G, so the keys cost about 121 G and the cache saved about 92 G. The keys in the arena, as above, gave 12.1 M unfoldings and 266.1 G, but this run was on a base without the fix of #200. The code change will give the measure on the current main. The other 7 M unfoldings that the cache removes are unfoldings in later steps: a hit gives a value that the caches of `force` and `conv` already know.
+
+The keys can also replace the value handles in the keys of `c_force` and of the caches of `conv`, so that two values of the same term share these results too. This is a later step, and it needs its own measure.

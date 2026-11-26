@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-11-26
+
 ### Added
 
 - The Lean twin has the reordering lemma O12 of spec 05.7.3 (`lazyDelta_same_unfold` and `conv_same_unfold`). For the same head with a definition, the official order gives "equal" when the two unfoldings are the same term, if its comparison of the arguments gives an answer. If that comparison has no answer with any fuel, the official order has no answer, and engine F gives "equal". The lemma states this hypothesis.
@@ -413,7 +415,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/tamnd/rulean/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/tamnd/rulean/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/tamnd/rulean/compare/v0.0.19...v0.8.0
 [0.0.19]: https://github.com/tamnd/rulean/compare/v0.0.18...v0.0.19

@@ -742,7 +742,7 @@ impl Checker {
     }
 
     /// The value of a literal of `nat_lit_id`. `zero` is the value for `None`.
-    fn nat_ref<'a>(&'a self, n: Option<NatId>, zero: &'a Nat) -> &'a Nat {
+    pub(crate) fn nat_ref<'a>(&'a self, n: Option<NatId>, zero: &'a Nat) -> &'a Nat {
         match n {
             Some(id) => self.st.nat(id),
             None => zero,
@@ -816,7 +816,7 @@ impl Checker {
     }
 
     /// A binary operation that checks the size of its result (`reduce_bin_nat_op` with `check_size`).
-    fn sized(&mut self, e: ExprId, r: Nat) -> Option<ExprId> {
+    pub(crate) fn sized(&mut self, e: ExprId, r: Nat) -> Option<ExprId> {
         if !self.check_nat_size(Checker::nat_size(&r), e) {
             return None;
         }
@@ -824,7 +824,7 @@ impl Checker {
     }
 
     /// The binary operation `op` of `reduce_nat` on the literals `n1` and `n2` of `nat_args`. The operation reads the values in the store and does not copy them. `Nat.pow` and `Nat.shiftLeft` check a count before the operation, so they copy the values.
-    fn nat_bin(
+    pub(crate) fn nat_bin(
         &mut self,
         e: ExprId,
         op: usize,

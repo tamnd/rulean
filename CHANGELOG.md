@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- In lazy delta, engine F unfolds both sides of the same regular head before it compares the arguments, and two unfoldings of the same form are equal (row O12 of spec 05.7.3). A `Nat` operation is not unfolded first, because the `Nat` extension evaluates its arguments. On `perf/short-circuit-and`, engine F accepts all checks with 1.07 G instructions in place of 77.3 G, because `false && a` and `false && b` both unfold to `false`, and the open terms `a` and `b` are not compared. On `perf/discarded-argument` and `perf/discarded-argument-match`, engine F uses 0.03 G in place of 0.46 G and 0.84 G. On the Init export, engine F accepts 115,254 checks in place of 115,262, the steps are 697.7 million in place of 691.3 million, and engine R confirms 12,955 equalities in place of 12,995.
+
 ## [0.8.1] - 2026-11-26
 
 ### Changed

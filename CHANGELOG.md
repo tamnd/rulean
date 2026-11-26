@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-11-27
+
 ### Added
 
 - The Lean twin has the reordering lemmas of rows O8, O9, O10 and O11 of spec 05.7.3 in `Twin/Step.lean`. These rows change which side gets the next step, so the lemmas have the confluence of the official rules as a hypothesis: the official order decides definitional equality, and the step of engine F keeps it. The lemma of O11 also needs definitional equality to be an equivalence and a congruence for applications.
@@ -423,7 +425,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/tamnd/rulean/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/tamnd/rulean/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/tamnd/rulean/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/tamnd/rulean/compare/v0.0.19...v0.8.0

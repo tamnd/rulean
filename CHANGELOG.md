@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-11-27
+
 ### Changed
 
 - The regions of the engine F arena can remove at most 2^13 values in one declaration, in place of 2^18. Engine F then stops sooner on a declaration that it cannot finish, and engine R checks it. On Init with `--engine F` and one thread, the run uses 249.5 G instructions in place of 264.9 G.
@@ -448,7 +450,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.5...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.6...HEAD
+[0.8.6]: https://github.com/tamnd/rulean/compare/v0.8.5...v0.8.6
 [0.8.5]: https://github.com/tamnd/rulean/compare/v0.8.4...v0.8.5
 [0.8.4]: https://github.com/tamnd/rulean/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/tamnd/rulean/compare/v0.8.2...v0.8.3

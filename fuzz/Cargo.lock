@@ -77,7 +77,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rulean-core"
-version = "0.8.5"
+version = "0.8.6"
 dependencies = [
  "rulean-format",
  "rulean-nat",
@@ -86,7 +86,7 @@ dependencies = [
 
 [[package]]
 name = "rulean-format"
-version = "0.8.5"
+version = "0.8.6"
 dependencies = [
  "rulean-nat",
  "rulean-store",
@@ -104,18 +104,18 @@ dependencies = [
 
 [[package]]
 name = "rulean-io"
-version = "0.8.5"
+version = "0.8.6"
 dependencies = [
  "rulean-core",
 ]
 
 [[package]]
 name = "rulean-nat"
-version = "0.8.5"
+version = "0.8.6"
 
 [[package]]
 name = "rulean-olean"
-version = "0.8.5"
+version = "0.8.6"
 dependencies = [
  "rulean-core",
  "rulean-format",
@@ -126,7 +126,7 @@ dependencies = [
 
 [[package]]
 name = "rulean-store"
-version = "0.8.5"
+version = "0.8.6"
 dependencies = [
  "rulean-nat",
 ]

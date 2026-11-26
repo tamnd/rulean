@@ -124,6 +124,8 @@ The allocations are not a large cost either (A9). A test build with a counting a
 
 So the 80 G target of M9 needs values that share the result of a reduction when they have the same terms, as the terms of engine R do. A value needs a key that is cheap to compute and that is the same for two values of the same term. A closed suspended argument has such a key now (its term). An open value needs a key from its term and the keys of its environment. This is a change of the value model, and it needs a new spec section before the code.
 
+First measure of a key, on 2026-11-27 (main at 5015a8e, one thread, a test build): the key of a glued value was the term of its read-back outside a binder (`quote` of the head and the spine, interned in the store), and a cache gave the unfolding at that key. The cache had 1.53 M hits, and the run used 631.6 G instructions in place of 284.8 G. The read-back evaluates each open suspended argument and interns each new term, and this costs much more than the unfoldings that the hits remove. So the key of a value must come from the keys that its parts have already, and it must not need a read-back. The two memos of `eval` above also gave a shared value for a closed term, and they did not decrease the count either. This suggests, but does not show, that most of the repeats are open values: the body of a definition evaluated again with new values for its arguments.
+
 ## 04.6 Conversion
 
 The order of the rules does not change. It is the order of spec 05.7.3, and each change of order needs a row in that table and a lemma. The changes are in how each rule runs:

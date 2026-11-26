@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 - `Store::node` is always inlined. Each term read was a call that made the full `Expr` value in memory, and the caller then matched on it again. On Init with one thread, engine R uses 151.5 G instructions in place of 164.6 G, and engine F uses 211.5 G in place of 223.5 G.
 - `Lossy::put` is always inlined, and the first allocation of its slots is a cold function. On Init with one thread, engine R uses 144.5 G instructions in place of 151.5 G, and engine F uses 208.6 G in place of 211.5 G.
+- In check mode, `infer_app` infers the type of the head of an application one time, and not the type of each partial application. It instantiates the domain of each binder with the arguments before it, and the body of the pi type one time at the end. The checks and their order do not change. On Init with one thread, engine R uses 140.7 G instructions in place of 144.5 G.
 
 ## [0.8.6] - 2026-11-27
 

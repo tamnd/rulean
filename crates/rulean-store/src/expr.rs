@@ -335,6 +335,98 @@ fn probe(nodes: &Nodes, node: Expr, h: u32, stats: &mut ProbeStats) -> (bool, Ra
     (hit, found, pos)
 }
 
+/// The number of index bits of `AppMemo`. The cache has 2^16 slots of 16 bytes with 32-bit ids (1 MiB), so it stays in the second level of the processor cache. On the Init export, engine R uses 186.7 G instructions with 2^12 slots, 184.6 G with 2^14 slots and 182.4 G with 2^16 slots.
+const APP_MEMO_BITS: u32 = 16;
+
+#[derive(Clone, Copy, Debug)]
+struct AppSlot {
+    epoch: u32,
+    f: Raw,
+    a: Raw,
+    v: Raw,
+}
+
+/// A front cache of `mk_app` with one slot for each hash of the pair of fields. A hit gives the handle of `App(f, a)` without a walk of the tables of the two tiers.
+///
+/// A slot keeps the full key, so a hit is correct. A handle in the cache stays valid while the tiers do not change in a way that gives a term a new handle. So `clear_scratch` and each change of `set_scratch` start a new epoch, and the cache is empty after them. With this rule a term has one handle, also when it is in the cache.
+#[derive(Clone, Debug)]
+pub(crate) struct AppMemo {
+    slots: Vec<AppSlot>,
+    epoch: u32,
+}
+
+impl AppMemo {
+    pub(crate) fn new() -> AppMemo {
+        AppMemo {
+            slots: Vec::new(),
+            epoch: 1,
+        }
+    }
+
+    #[inline(always)]
+    fn pos(f: Raw, a: Raw) -> usize {
+        (hash::finish(hash::mix_raw(hash::mix_raw(seed(Kind::App), f), a)) as usize)
+            & ((1usize << APP_MEMO_BITS) - 1)
+    }
+
+    #[inline]
+    fn get(&self, f: Raw, a: Raw) -> Option<Raw> {
+        match self.slots.get(AppMemo::pos(f, a)) {
+            Some(s) if s.epoch == self.epoch && s.f == f && s.a == a => Some(s.v),
+            _ => None,
+        }
+    }
+
+    /// True if the slots are allocated.
+    fn ready(&self) -> bool {
+        !self.slots.is_empty()
+    }
+
+    /// Allocates the slots.
+    fn alloc(&mut self) {
+        let n = 1usize << APP_MEMO_BITS;
+        self.slots = Vec::with_capacity(n);
+        while self.slots.len() < n {
+            self.slots.push(AppSlot {
+                epoch: 0,
+                f: 0,
+                a: 0,
+                v: 0,
+            });
+        }
+    }
+
+    /// The bytes that `alloc` adds.
+    fn alloc_bytes() -> usize {
+        (1usize << APP_MEMO_BITS) * core::mem::size_of::<AppSlot>()
+    }
+
+    /// Puts `v` in the slot of the pair. The slots must be allocated.
+    #[inline]
+    fn put(&mut self, f: Raw, a: Raw, v: Raw) {
+        let epoch = self.epoch;
+        self.slots[AppMemo::pos(f, a)] = AppSlot { epoch, f, a, v };
+    }
+
+    /// Makes the cache empty in O(1), except once in 2^32 calls, when it writes each slot.
+    pub(crate) fn clear(&mut self) {
+        if self.epoch < u32::MAX {
+            self.epoch += 1;
+        } else {
+            let mut i = 0;
+            while i < self.slots.len() {
+                self.slots[i].epoch = 0;
+                i += 1;
+            }
+            self.epoch = 1;
+        }
+    }
+
+    pub(crate) fn bytes(&self) -> usize {
+        self.slots.capacity() * core::mem::size_of::<AppSlot>()
+    }
+}
+
 impl Nodes {
     /// The bytes that the next node of `kind` adds when it makes the arrays or the table grow, or 0 if nothing grows. The arrays of one kind grow to about twice their size, so the estimate adds the current size of these arrays once more: the side records of 8 bytes and at most 16 bytes for a node. The table doubles, so the estimate adds its current size.
     fn growth(&self, kind: Kind) -> usize {
@@ -422,6 +514,9 @@ impl Store {
 
     /// Puts the nodes that the next `mk_*` calls make in the scratch tier if `on` is true (spec 04.8). A node that is already in the frozen tier keeps its frozen handle. So a term has one handle while the frozen tier does not change.
     pub fn set_scratch(&mut self, on: bool) {
+        if on != self.use_scratch {
+            self.app_memo.clear();
+        }
         self.use_scratch = on;
     }
 
@@ -433,6 +528,7 @@ impl Store {
     /// Removes every scratch node and puts new nodes in the frozen tier again. After this call a scratch handle is not valid. The caller must not keep one.
     pub fn clear_scratch(&mut self) {
         self.scratch.clear();
+        self.app_memo.clear();
         self.use_scratch = false;
     }
 
@@ -563,12 +659,31 @@ impl Store {
 
     /// The application `f a`.
     pub fn mk_app(&mut self, f: ExprId, a: ExprId) -> ExprId {
+        if let Some(v) = self.app_memo.get(f.0, a.0) {
+            self.interns += 1;
+            return ExprId(v);
+        }
         let sf = self.side(f);
         let sa = self.side(a);
         let h = hash::mix(hash::mix(seed(Kind::App), sf.hash), sa.hash);
         let range = max32(sf.info & SATURATED, sa.info & SATURATED);
         let flags = ((sf.info | sa.info) >> 24) as u8;
-        self.intern_expr(Expr::App(f, a), hash::finish(h), pack(range, flags))
+        let r = self.intern_expr(Expr::App(f, a), hash::finish(h), pack(range, flags));
+        if !self.full && (self.app_memo.ready() || self.app_memo_fits()) {
+            self.app_memo.put(f.0, a.0, r.0);
+        }
+        r
+    }
+
+    /// Allocates the front cache of `mk_app` if it fits in the memory budget, and gives true if the cache is ready. The cache is only a speed-up, so with a small budget the store works without it.
+    #[inline(never)]
+    fn app_memo_fits(&mut self) -> bool {
+        let fits = self.max_bytes == usize::MAX
+            || self.memory().total().saturating_add(AppMemo::alloc_bytes()) <= self.max_bytes;
+        if fits {
+            self.app_memo.alloc();
+        }
+        fits
     }
 
     /// The application of `f` to each argument, from the first to the last.

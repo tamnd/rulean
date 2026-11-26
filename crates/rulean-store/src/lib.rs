@@ -82,6 +82,8 @@ pub struct Store {
     pub(crate) scratch: expr::Nodes,
     pub(crate) use_scratch: bool,
     pub(crate) full: bool,
+    // The front cache of `mk_app` (see `expr::AppMemo`).
+    pub(crate) app_memo: expr::AppMemo,
     // The bytes of the limbs of the large natural number literals.
     pub(crate) nat_heap: usize,
     // The memory budget of the store in bytes (`--max-memory`, spec 12.3). `usize::MAX` is no budget.
@@ -125,6 +127,7 @@ impl Store {
             scratch: expr::Nodes::new(true),
             use_scratch: false,
             full: false,
+            app_memo: expr::AppMemo::new(),
             nat_heap: 0,
             max_bytes: usize::MAX,
             interns: 0,
@@ -176,7 +179,7 @@ impl Store {
             + self.scratch.table.bytes();
         let nat_bytes = self.nats.capacity() * core::mem::size_of::<Nat>() + self.nat_heap;
         Memory {
-            exprs: self.exprs.bytes() + self.scratch.bytes(),
+            exprs: self.exprs.bytes() + self.scratch.bytes() + self.app_memo.bytes(),
             names: self.names.capacity() * core::mem::size_of::<Name>()
                 + self.name_hash.capacity() * 4,
             strings: self.str_bytes.capacity()

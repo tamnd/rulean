@@ -116,3 +116,97 @@ impl Memo {
         self.table.clear();
     }
 }
+
+/// The number of index bits of a `Lossy` cache. The cache has 2^13 slots, so it uses 2^13 times the size of a slot (128 KiB with 32-bit ids).
+const LOSSY_BITS: u32 = 13;
+
+#[derive(Clone, Copy, Debug)]
+struct LossySlot {
+    epoch: u32,
+    a: Raw,
+    b: Raw,
+    v: Raw,
+}
+
+/// A cache with one slot for each hash value. A new entry replaces the entry in its slot, so `get` can miss a pair that `put` added before.
+///
+/// The slot keeps the full key, so a hit is always correct (spec 08.5). Use this cache only where a miss gives the same result with more work, as in the memo of `instantiate`. The cache has a fixed size, so its slots stay in the processor cache, and `clear` is O(1) with an epoch.
+#[derive(Clone, Debug)]
+pub struct Lossy {
+    slots: Vec<LossySlot>,
+    epoch: u32,
+}
+
+impl Default for Lossy {
+    fn default() -> Lossy {
+        Lossy::new()
+    }
+}
+
+impl Lossy {
+    /// A new empty cache. It allocates its slots at the first `put`, so an unused cache costs no memory.
+    pub fn new() -> Lossy {
+        Lossy {
+            slots: Vec::new(),
+            epoch: 1,
+        }
+    }
+
+    #[inline(always)]
+    fn pos(a: Raw, b: Raw) -> usize {
+        (pair_hash(a, b) as usize) & ((1usize << LOSSY_BITS) - 1)
+    }
+
+    /// The value of the pair `(a, b)`, if its slot keeps it.
+    #[inline]
+    pub fn get(&self, a: Raw, b: Raw) -> Option<Raw> {
+        match self.slots.get(Lossy::pos(a, b)) {
+            Some(s) if s.epoch == self.epoch && s.a == a && s.b == b => Some(s.v),
+            _ => None,
+        }
+    }
+
+    /// True if the slot of the pair `(a, b)` keeps it.
+    #[inline]
+    pub fn contains(&self, a: Raw, b: Raw) -> bool {
+        self.get(a, b).is_some()
+    }
+
+    /// Puts the value `v` for the pair `(a, b)` in its slot.
+    #[inline]
+    pub fn put(&mut self, a: Raw, b: Raw, v: Raw) {
+        if self.slots.is_empty() {
+            let n = 1usize << LOSSY_BITS;
+            self.slots = Vec::with_capacity(n);
+            while self.slots.len() < n {
+                self.slots.push(LossySlot {
+                    epoch: 0,
+                    a: 0,
+                    b: 0,
+                    v: 0,
+                });
+            }
+        }
+        let epoch = self.epoch;
+        self.slots[Lossy::pos(a, b)] = LossySlot { epoch, a, b, v };
+    }
+
+    /// The bytes of the slots.
+    pub fn bytes(&self) -> usize {
+        self.slots.capacity() * core::mem::size_of::<LossySlot>()
+    }
+
+    /// Makes the cache empty. This is O(1), except once in 2^32 calls, when it writes each slot.
+    pub fn clear(&mut self) {
+        if self.epoch < u32::MAX {
+            self.epoch += 1;
+        } else {
+            let mut i = 0;
+            while i < self.slots.len() {
+                self.slots[i].epoch = 0;
+                i += 1;
+            }
+            self.epoch = 1;
+        }
+    }
+}

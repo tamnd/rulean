@@ -64,6 +64,16 @@ Measure of A3 on Init, on 2026-11-26: engine F asked 20165 `conv` queries, and e
 
 Result of A5 on Init, on 2026-11-26 (`rulean check --engine F`, macOS): `eval` now makes a suspended value for an argument that is an application, a projection or a `let`. The first read evaluates it, and the value goes into a slot with the bits of `f_bits` that the evaluation set. Of 27.9 million suspended arguments, 16.6 million were evaluated and 0.7 million were read back as their term with no evaluation, because the term has no loose bound variable. So 40% of these arguments were never evaluated. The run uses 340.0 G instructions in place of 343.8 G for a build of the base on the same day (the result above gave 342.1 G for the same base). The gain is small, because most arguments that are never read are small terms. The first form of the change read the term node of each argument to find its kind, and it used 383.7 G even with no suspended value. The kind is now read from the handle. Three other forms were worse: suspended arguments in the inference of engine F (358.4 G), because the cache of `f_eval` already shares these values, suspended arguments only for closed terms, and a suspended value of a `let` (341.9 G).
 
+Result of fixed caches for the term walks, on Init, on 2026-11-26 (`rulean check --threads 1`, macOS): a profile of engine R showed that the build of terms used most of the time. `instantiate` used about 35% of the samples of the check, and the walks of the tables of the two tiers in `intern_expr` used about the same share. Each walk of `Scratch` had a `Memo` on a table that grows and does not get smaller. So after one large walk, each lookup read a large table that was not in the processor cache. The six memos of `Scratch` are now `Lossy` caches with 2^13 slots. A slot keeps one pair, and a new pair replaces the pair in its slot. A miss gives the same result with more work, because the result of a node does not depend on the order of the visits. Also `mk_app` has a front cache with 2^16 slots, keyed by its two fields. A hit gives the handle with no walk of the tables. The cache is empty after `clear_scratch` and after each change of `set_scratch`, so a term keeps one handle. A test build that also walked the tables on each hit found no different handle on Init.
+
+| Build | Engine R | Engine F |
+|---|---|---|
+| main (after A5) | 227.0 G | 340.0 G |
+| `Lossy` caches | 197.3 G | not measured |
+| `Lossy` caches and the front cache of `mk_app` | 182.4 G | 312.8 G |
+
+With 2^11 slots the `Lossy` caches gave 194.9 G, and with 2^15 slots they gave 188.0 G. The front cache of `mk_app` gave 186.7 G with 2^12 slots and 184.6 G with 2^14 slots. Two runs of the same build can differ by about 2 G. The peak memory footprint of engine R went down from 492 MB to 463 MB.
+
 ## 04.4 Values
 
 The value types of spec 05.4.1 stay. Three changes:
@@ -97,6 +107,19 @@ The order of the rules does not change. It is the order of spec 05.7.3, and each
 - The bench harness counts the queries of each kind (08.7.3 counters). The report already has `f_fallback`, `f_faults` and `r_confirmed` (03.4).
 
 Result of A2 on Init, on 2026-11-26 (`rulean check --engine F`, macOS): before, a "not equal" answer in the inference of engine F stopped the inference, and engine R checked the declaration again. Then engine F accepted 114129 of 115872 checks, engine R had 44159 shared queries, and the run used 428.9 G instructions. With A2, engine F accepts 114907 checks, engine R has 20099 shared queries, and the run uses 428.3 G instructions. So the full checks again were not a large cost. The cost of engine F is in its evaluation (04.2), and A5 and A1 must give the gain of M9.
+
+Measure of the arena limit on Init, on 2026-11-26 (`rulean check --threads 1 --engine F`, after A5): of the 892 value checks of engine F that failed, 731 failed with a full arena and 160 with an unsupported form. A failed value check goes to engine R for the whole declaration. A smaller `MAX_NODES` makes more checks fail, and each smaller limit made the run faster:
+
+| `MAX_NODES` | Failed checks with a full arena | Engine F |
+|---|---|---|
+| 2^20 | 181 | 428.2 G |
+| 2^18 (today) | 731 | 340.0 G |
+| 2^17 | 1372 | 315.7 G |
+| 2^16 | 2512 | 298.2 G |
+| 2^14 | 5181 | 284.7 G |
+| 2^12 | 9898 | 248.8 G |
+
+Engine R alone used 227.0 G on the same build. So on Init, engine F is slower than engine R at each limit, and the large declarations cost engine F more than they cost engine R. A smaller limit only moves work to engine R. The limit stays at 2^18 until A4 and A5 make a value check of engine F cheaper than engine R. Until then, the work on the store and the term walks comes first, because both engines use it.
 
 ## 04.8 Literals
 

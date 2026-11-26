@@ -402,3 +402,33 @@ fn a_nat_operation_that_waits_unfolds_after_the_other_side() {
     let s = t.c.f_stats;
     assert_eq!((s.queries, s.equal, s.fallback), (1, 1, 0));
 }
+
+#[test]
+fn two_additions_with_the_same_offset_compare_the_bases() {
+    let mut t = T::new();
+    let a = t.a_ty;
+    let aa = t.pi("b", a, a);
+    let aaa = t.pi("a", a, aa);
+    // A stand-in for `Nat.add`. The equality below is true for the real `Nat.add` and for this stand-in.
+    let b1 = t.bv(1);
+    let inner = t.lam("b", a, b1);
+    let add_v = t.lam("a", a, inner);
+    let add = t.def("Nat.add", aaa, add_v, 5);
+    let n2 = t.c.st.intern_nat(rulean_nat::Nat::from_u64(2));
+    let n3 = t.c.st.intern_nat(rulean_nat::Nat::from_u64(3));
+    let two = t.c.st.mk_nat_lit(n2);
+    let three = t.c.st.mk_nat_lit(n3);
+    let slow_v = t.app(add, &[two, three]);
+    let slow = t.def("slow", a, slow_v, 2);
+    let n1 = t.c.st.intern_nat(rulean_nat::Nat::from_u64(1));
+    let one = t.c.st.mk_nat_lit(n1);
+    // `(slow + 1) + 1` and `slow + 2` have the base `slow` and the offset 2.
+    let inner_sum = t.app(add, &[slow, one]);
+    let lhs = t.app(add, &[inner_sum, one]);
+    let rhs = t.app(add, &[slow, two]);
+    t.c.trace_on = true;
+    assert!(t.eq(lhs, rhs));
+    assert_eq!(t.c.trace.counts[Rule::Nat.index()], 0);
+    let s = t.c.f_stats;
+    assert_eq!((s.queries, s.equal, s.fallback), (1, 1, 0));
+}

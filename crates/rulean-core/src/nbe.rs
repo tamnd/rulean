@@ -577,7 +577,7 @@ impl Checker {
     }
 
     /// The index of the binary `Nat` operation with the name `c` in `nat_op_names`, or the length of the table.
-    fn nat_op_name_index(&self, c: NameId) -> usize {
+    pub(crate) fn nat_op_name_index(&self, c: NameId) -> usize {
         let names = &self.b.nat_op_names;
         let mut i = 0;
         while i < names.len() && names[i] != c {

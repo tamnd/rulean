@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-11-27
+
 ### Fixed
 
 - Engine F gives each lambda its own local in inference. Before, a lambda with no loose bound variable got the local of an outer lambda with the same domain, and engine F accepted `fun p q => Eq.refl q` as a proof of `p = q`. This bug came with v0.8.3, and only `--engine F` had it.
@@ -429,7 +431,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.3...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.4...HEAD
+[0.8.4]: https://github.com/tamnd/rulean/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/tamnd/rulean/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/tamnd/rulean/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/tamnd/rulean/compare/v0.8.0...v0.8.1

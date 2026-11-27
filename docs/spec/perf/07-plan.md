@@ -31,7 +31,7 @@ Goal: engine F with no new terms during a check (04), and engine F as the defaul
 7. Sharing first in `conv` (04.3 A6).
 8. Small Nat literals as inline numbers (04.8).
 9. No `malloc` in the hot path of engine F, checked with a count of the allocations (04.3 A9).
-10. Engine F is the default engine of `rulean check` (done in section 11.9).
+10. Engine F is the default engine of `rulean check`. Section 11.9 gives the condition and the measures of a first try.
 
 Exit: on the local measure, the check of Init with engine F uses at most 3 times fewer instructions than engine R does today (242.2 G, so at most 80 G for the whole run). The `perf/` gate of the nightly passes on at least 35 of the 45 tests. The verdicts of the corpus do not change.
 

@@ -106,8 +106,17 @@ A value limit of 32 in place of 64 gave 139.6 G, so the limit stays at 64.
 
 ## 11.9 The default engine
 
-Section 08.6 kept engine R as the default until engine F is faster on Init and on the perf gate. With 11.8, engine F on Init uses 138.3 G and engine R uses 138.6 G. On the 42 perf tests, 37 are at most 6.0 G with engine F and 33 with engine R, and the sum is 108.5 G with engine F and 284.4 G with engine R. The confirm run with `--confirm all` on the 28 exports of `arena-extra` shows no difference. So `rulean check` now uses engine F by default, and `--engine R` gives engine R only.
+PR #237 made engine F the default engine of `rulean check`, and this change was reverted. The work gate of CI showed 4.5% more work on Init and 17.0% more work on Std with engine F. A local measure of `std.ndjson` (101,146 declarations, Lean 4.36.0) gave these counts.
+
+| Build | Std, engine F | Std, engine R | Init, engine F | Init, engine R | Perf total, engine F |
+|---|---|---|---|---|---|
+| main with #237 | 239.0 G | 225.3 G | 138.8 G | 138.6 G | 107.8 G |
+| value limit 16 | 238.6 G | | 137.8 G | | |
+| value limit 4 | 238.2 G | | 137.7 G | | |
+| flag limit 64 | 231.7 G | | 138.5 G | | 126.0 G |
+
+The value checks of engine F are not the cause of the difference on Std. With the flag limit of 64, the queries of engine F on Std go from 297,492 to 92,065, and Std uses 7.3 G less. But `ite-taken-branch` then goes from 1.04 G to 19.58 G. So engine R stays the default engine. Engine F becomes the default engine only when it uses at most as many instructions as engine R on Init and on Std, and when the perf gate passes.
 
 ## 11.10 What follows
 
-With the rule, engine F on Init uses about the same number of instructions as engine R alone. The exit of M9 needs at most 80 G, so the next work is a faster engine R on wide proofs. Section 08.5 shows the parts: `inst_rec`, the hash-cons walk and `mk_app`. Engine F stays the engine for deep terms and for the evaluation tests.
+With the rule, engine F on Init uses about the same number of instructions as engine R alone, and on Std it uses 6% more. The exit of M9 needs at most 80 G, so the next work is a faster engine R on wide proofs. Section 08.5 shows the parts: `inst_rec`, the hash-cons walk and `mk_app`. Engine F stays the engine for deep terms and for the evaluation tests.

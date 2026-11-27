@@ -10,7 +10,9 @@ use alloc::vec::Vec;
 use rulean_format::Safety;
 use rulean_nat::Nat;
 use rulean_store::ids::{low, raw};
-use rulean_store::{BinderInfo, Expr, ExprId, LevelId, LevelListId, Literal, NameId, Raw, Store};
+use rulean_store::{
+    BinderInfo, Expr, ExprId, LevelId, LevelListId, Literal, NameId, Raw, Store, Tier,
+};
 
 use crate::conv::{Engine, FStats};
 use crate::env::{ConstKind, Env};
@@ -399,6 +401,8 @@ pub struct Checker {
     pub(crate) check_lparams: bool,
     /// The second key of a check-mode `infer` entry of the session: 1 plus the level list of the level parameters of the declaration (spec perf/11.15).
     pub(crate) lp_key: Raw,
+    /// True if a local of the declaration has a value. Then the session takes no key with free variables (spec perf/11.16).
+    pub(crate) lctx_let: bool,
     /// The safety of the declaration (`m_definition_safety`).
     pub(crate) safety: Safety,
     // The local context, indexed by the level of the free variable.
@@ -520,6 +524,7 @@ impl Checker {
             lparams: Vec::new(),
             check_lparams: false,
             lp_key: 0,
+            lctx_let: false,
             safety: Safety::Safe,
             lctx_name: Vec::new(),
             lctx_info: Vec::new(),
@@ -588,6 +593,7 @@ impl Checker {
         self.lctx_ty.truncate(0);
         self.lctx_fv.truncate(0);
         self.lctx_val.truncate(0);
+        self.lctx_let = false;
         self.scope.truncate(0);
         self.clear_caches();
         self.va.reset();
@@ -804,6 +810,9 @@ impl Checker {
         self.lctx_name.push(name);
         self.lctx_info.push(info);
         self.lctx_ty.push(ty);
+        if val.is_some() {
+            self.lctx_let = true;
+        }
         self.lctx_val.push(val);
         if !self.bad() {
             self.scope.push(lvl);
@@ -1570,10 +1579,10 @@ impl Checker {
                 } else {
                     0
                 };
-                let key = self.sess_key(e)
+                let key = self.sess_key_local(e)
                     && (infer_only
                         || (self.safety == Safety::Safe && (kb == 0 || self.check_lparams)));
-                let hit = if key {
+                let hit = if key && e.tier() == Tier::Frozen {
                     self.sess_get(tag, e.0, kb)
                 } else {
                     None

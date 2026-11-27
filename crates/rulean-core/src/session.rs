@@ -29,6 +29,9 @@ pub(crate) const S_UNFOLD: u8 = 5;
 /// The tag of an `infer` entry in check mode, for a term with no level parameter that a safe declaration checked. The key is (term, 0).
 pub(crate) const S_CHECK: u8 = 6;
 
+/// The copies of the entries with a scratch key use at most 1 / `LOCAL_SHARE` of the scratch nodes of the declaration (spec perf/11.16).
+const LOCAL_SHARE: usize = 50;
+
 /// The bytes of one slot: the tag, two keys, the value, the stamp and the reference bit.
 const SLOT_BYTES: usize = 6 + 3 * (Raw::BITS as usize / 8);
 const WAYS: usize = 4;
@@ -340,6 +343,15 @@ impl Checker {
             && !expr::has_fvar(&self.st, e)
     }
 
+    /// True if `e` can be the key of an `infer` entry of the session. This is `sess_key`, but a key can also have free variables and be in the scratch tier, if no local of the declaration has a value (spec perf/11.16). A free variable `FVar(l, t)` has its type in the node, so with no `let` locals a judgment on `e` holds in each local context that has `e`. A scratch key is copied into the frozen tier at commit, and a lookup uses only a frozen key.
+    #[inline]
+    pub(crate) fn sess_key_local(&self, e: ExprId) -> bool {
+        self.sess.on
+            && !self.trace_on
+            && !self.confirm_all
+            && ((!expr::has_fvar(&self.st, e) && e.tier() == Tier::Frozen) || !self.lctx_let)
+    }
+
     /// The cut of the current job: the length of the environment.
     #[inline]
     pub(crate) fn sess_cut(&self) -> u32 {
@@ -366,20 +378,36 @@ impl Checker {
         let pending = core::mem::take(&mut self.sess.pending);
         let stamp = self.sess_cut();
         let mut budget = self.st.scratch_total() / 10;
+        let mut lbudget = self.st.scratch_total() / LOCAL_SHARE;
         let mut map = Memo::new();
         let saved = self.st.uses_scratch();
         self.st.set_scratch(false);
         let mut i = 0;
         while i < pending.len() {
             let (tag, a, b, v) = pending[i];
-            let v2 = if value_is_term(tag) && ExprId(v).tier() == Tier::Scratch {
-                self.promote(ExprId(v), &mut map, &mut budget, false)
+            let local = tag == S_INFER || tag == S_CHECK;
+            let scratch_key = local && ExprId(a).tier() == Tier::Scratch;
+            let a2 = if scratch_key && lbudget == 0 {
+                None
+            } else if scratch_key {
+                self.promote(ExprId(a), &mut map, &mut lbudget, true)
             } else {
-                Some(ExprId(v))
+                Some(ExprId(a))
             };
-            match v2 {
-                Some(v2) => self.sess.store(tag, a, b, v2.0, stamp),
-                None => self.sess.stats.drops += 1,
+            let v2 = match a2 {
+                None => None,
+                Some(_) if value_is_term(tag) && ExprId(v).tier() == Tier::Scratch => {
+                    if scratch_key {
+                        self.promote(ExprId(v), &mut map, &mut lbudget, true)
+                    } else {
+                        self.promote(ExprId(v), &mut map, &mut budget, local)
+                    }
+                }
+                Some(_) => Some(ExprId(v)),
+            };
+            match (a2, v2) {
+                (Some(a2), Some(v2)) => self.sess.store(tag, a2.0, b, v2.0, stamp),
+                _ => self.sess.stats.drops += 1,
             }
             i += 1;
         }
@@ -642,6 +670,38 @@ mod tests {
         c.sess.note(S_WHNF, key.0, 0, x.0);
         c.sess_commit();
         assert_eq!(c.sess.stats.drops, 1);
+    }
+
+    #[test]
+    fn commit_promotes_a_scratch_key_with_a_free_variable() {
+        let (mut c, _) = checker_with_scratch(400);
+        let ty = c.st.mk_bvar(9);
+        let x = c.st.mk_fvar(0, ty);
+        assert_eq!(x.tier(), Tier::Scratch);
+        c.sess.note(S_CHECK, x.0, 0, ty.0);
+        c.sess_commit();
+        c.st.clear_scratch();
+        c.st.set_scratch(false);
+        // The same free variable in a later declaration is the frozen copy of the key.
+        let ty2 = c.st.mk_bvar(9);
+        let x2 = c.st.mk_fvar(0, ty2);
+        assert_eq!(x2.tier(), Tier::Frozen);
+        let got = c.sess.get(S_CHECK, x2.0, 0, c.sess_cut());
+        assert_eq!(got, Some(ty2.0));
+    }
+
+    #[test]
+    fn a_let_local_stops_keys_with_free_variables() {
+        let mut c = Checker::new(rulean_store::Store::new());
+        c.sess.on = true;
+        let n = c.st.anon();
+        let ty = c.st.mk_bvar(9);
+        let x = c.mk_local(n, rulean_store::BinderInfo::Default, ty, None);
+        assert!(c.sess_key_local(x));
+        let v = c.st.mk_bvar(10);
+        let y = c.mk_local(n, rulean_store::BinderInfo::Default, ty, Some(v));
+        assert!(!c.sess_key_local(x));
+        assert!(!c.sess_key_local(y));
     }
 
     #[test]

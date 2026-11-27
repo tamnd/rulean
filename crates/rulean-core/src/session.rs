@@ -29,8 +29,8 @@ pub(crate) const S_UNFOLD: u8 = 5;
 /// The tag of an `infer` entry in check mode, for a term with no level parameter that a safe declaration checked. The key is (term, 0).
 pub(crate) const S_CHECK: u8 = 6;
 
-/// The copies of the entries with a scratch key use at most 1 / `LOCAL_SHARE` of the scratch nodes of the declaration (spec perf/11.16).
-const LOCAL_SHARE: usize = 50;
+/// The copies of the entries with a scratch key use at most 1 / `LOCAL_SHARE` of the scratch nodes of the declaration (spec perf/11.16 and 11.17). On Init, 1/10 uses 10% fewer instructions than 1/50.
+const LOCAL_SHARE: usize = 10;
 
 /// The bytes of one slot: the tag, two keys, the value, the stamp and the reference bit.
 const SLOT_BYTES: usize = 6 + 3 * (Raw::BITS as usize / 8);

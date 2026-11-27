@@ -570,7 +570,7 @@ fn f_proj(t: &mut T, x: u32, delta: bool) -> ExprId {
     t.app(f, &[p])
 }
 
-/// Adds `d : (x : Bx A) -> (h : H) -> (k1 : K1 -> A) -> (k2 : K2 -> A) -> A := fun x h k1 k2 => let b : A := k1 h; k2 h`. `H` is in the context [x], `K1` in [x, h] and `K2` in [x, h, k1]. The check of `k1 h` is the first query, and the check of `k2 h` is the second query, and both use the value of `H`. Engine F must accept the type and the value of `d`. The result is the number of the answers of engine F that engine R confirmed in the check of `d`.
+/// Adds `d : (x : Bx A) -> (h : H) -> (k1 : K1 -> A) -> (k2 : K2 -> A) -> A := fun x h k1 k2 => let b : A := k1 h; k2 h`. `H` is in the context [x], `K1` in [x, h] and `K2` in [x, h, k1]. The check of `k1 h` is the first query, and the check of `k2 h` is the second query, and both use the value of `H`. Engine F must accept the value of `d`. The result is the number of the answers of engine F that engine R confirmed in the check of `d`.
 fn add_d(t: &mut T, h_ty: ExprId, k1_dom: ExprId, k2_dom: ExprId) -> u64 {
     let a = t.k("A");
     let bx = t.k("Bx");
@@ -593,8 +593,9 @@ fn add_d(t: &mut T, h_ty: ExprId, k1_dom: ExprId, k2_dom: ExprId) -> u64 {
     let before = t.c.f_stats;
     add_const(t, "d", dty, Some(value));
     let s = t.c.f_stats;
-    assert_eq!(s.infer - before.infer, 2);
-    assert_eq!(s.infer_ok - before.infer_ok, 2);
+    // Engine F checks the value. The type is not deep, so engine R checks it (spec perf/11.19).
+    assert_eq!(s.infer - before.infer, 1);
+    assert_eq!(s.infer_ok - before.infer_ok, 1);
     assert_eq!(s.disagree, before.disagree);
     s.confirmed - before.confirmed
 }
@@ -681,8 +682,9 @@ fn engine_f_accepts_a_projection_of_a_structure() {
     let before = t.c.f_stats;
     assert_eq!(add_def(&mut t, "p", ty, value), None);
     let s = t.c.f_stats;
-    assert_eq!(s.infer - before.infer, 2);
-    assert_eq!(s.infer_ok - before.infer_ok, 2);
+    // Engine F checks the value. The type is not deep, so engine R checks it (spec perf/11.19).
+    assert_eq!(s.infer - before.infer, 1);
+    assert_eq!(s.infer_ok - before.infer_ok, 1);
 }
 
 #[test]
@@ -781,6 +783,7 @@ fn engine_f_accepts_a_proof_field_of_a_proposition() {
     let before = t.c.f_stats;
     assert_eq!(add_def(&mut t, "q", ty, value), None);
     let s = t.c.f_stats;
-    assert_eq!(s.infer - before.infer, 2);
-    assert_eq!(s.infer_ok - before.infer_ok, 2);
+    // Engine F checks the value. The type is not deep, so engine R checks it (spec perf/11.19).
+    assert_eq!(s.infer - before.infer, 1);
+    assert_eq!(s.infer_ok - before.infer_ok, 1);
 }

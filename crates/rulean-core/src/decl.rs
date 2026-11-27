@@ -86,7 +86,7 @@ impl Checker {
         }
     }
 
-    /// `check_constant_val`: the name, the level parameters and the type of a constant. The caller has called `begin`. Engine F tries the type check first, as in `check_value`.
+    /// `check_constant_val`: the name, the level parameters and the type of a constant. The caller has called `begin`. Engine F tries the type check first if the type is deep (spec perf/11.19).
     fn check_constant_val(&mut self, n: NameId, lparams: &[NameId], ty: ExprId) {
         self.check_name(n, ty);
         self.check_duplicated_univ_params(lparams, ty);

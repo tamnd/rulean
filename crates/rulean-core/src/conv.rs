@@ -72,6 +72,14 @@ impl Checker {
         if self.engine == Engine::R || self.eq_depth > 0 || self.bad() || self.va.full() {
             return self.is_def_eq_r(t, s);
         }
+        // The same handle is the same term. Engine F would evaluate it first, and the evaluation can do large `Nat` operations.
+        if t == s {
+            return true;
+        }
+        // A closed term against a scalar goes to engine G first, so that engine F does not evaluate the term one more time.
+        if let Some(r) = self.ground_defeq(t, s) {
+            return r;
+        }
         self.f_stats.queries += 1;
         let depth = self.depth;
         self.f_bits = 0;
@@ -161,6 +169,9 @@ impl Checker {
         let q = self.conv_quick(a, b);
         if q != LBool::Undef {
             return q == LBool::True;
+        }
+        if let Some(r) = self.conv_ground(a, b) {
+            return r;
         }
         if self.flags.proof_irrel_first {
             let p = self.conv_proof_irrel(a, b);

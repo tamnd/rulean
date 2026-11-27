@@ -4,6 +4,7 @@
 //!
 //! The code stays in the Aeneas subset of spec 10.6: `while` loops with an index, no iterators, no closures and only the modelled `Vec` methods.
 
+use alloc::vec;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 
@@ -21,26 +22,21 @@ pub fn used_len(a: &[u64]) -> usize {
 
 /// A vector of `n` zero limbs.
 pub fn zeros(n: usize) -> Vec<u64> {
-    let mut v = Vec::with_capacity(n);
-    let mut i = 0;
-    while i < n {
-        v.push(0);
-        i += 1;
-    }
-    v
+    vec![0; n]
 }
 
 /// A copy of the limbs `lo..hi` of `a`. A limb at or above `a.len()` is zero.
 pub fn part(a: &[u64], lo: usize, hi: usize) -> Vec<u64> {
-    let mut v = Vec::with_capacity(hi.saturating_sub(lo));
-    let mut i = lo;
-    while i < hi {
-        if i < a.len() {
-            v.push(a[i]);
-        } else {
-            v.push(0);
+    let mut v = zeros(hi.saturating_sub(lo));
+    let end = if hi < a.len() { hi } else { a.len() };
+    if lo < end {
+        let src = &a[lo..end];
+        let dst = &mut v[..end - lo];
+        let mut i = 0;
+        while i < src.len() {
+            dst[i] = src[i];
+            i += 1;
         }
-        i += 1;
     }
     v
 }
@@ -79,23 +75,34 @@ pub fn cmp(a: &[u64], b: &[u64]) -> Ordering {
 pub fn add(a: &[u64], b: &[u64]) -> Vec<u64> {
     // `long` is the longer operand. The first loop runs on the limbs of both operands and has no test of the length, and the second loop runs on the other limbs of `long`.
     let (long, short) = if a.len() >= b.len() { (a, b) } else { (b, a) };
-    let mut r = Vec::with_capacity(long.len() + 1);
-    let mut carry: u128 = 0;
+    let n = long.len();
+    let m = short.len();
+    let mut r = zeros(n + 1);
+    let mut carry: u64 = 0;
+    let (x, y, out) = (&long[..m], &short[..m], &mut r[..m]);
     let mut i = 0;
-    while i < short.len() {
-        let s = long[i] as u128 + short[i] as u128 + carry;
-        r.push(s as u64);
-        carry = s >> 64;
+    while i < m {
+        let s = x[i] as u128 + y[i] as u128 + carry as u128;
+        out[i] = s as u64;
+        carry = (s >> 64) as u64;
         i += 1;
     }
-    while i < long.len() {
-        let s = long[i] as u128 + carry;
-        r.push(s as u64);
-        carry = s >> 64;
-        i += 1;
+    let (x, out) = (&long[m..n], &mut r[m..n]);
+    let mut j = 0;
+    while j < x.len() && carry != 0 {
+        let s = x[j] as u128 + carry as u128;
+        out[j] = s as u64;
+        carry = (s >> 64) as u64;
+        j += 1;
+    }
+    while j < x.len() {
+        out[j] = x[j];
+        j += 1;
     }
     if carry != 0 {
-        r.push(carry as u64);
+        r[n] = carry;
+    } else {
+        r.truncate(n);
     }
     r
 }
@@ -162,23 +169,43 @@ pub fn mul_school(a: &[u64], b: &[u64]) -> Vec<u64> {
     let ns = used_len(short);
     let long = &long[..nl];
     let mut r = zeros(nl + ns);
+    // Two rows go in one pass on the long operand, so each limb of the result is read and written half as often. The carries are single limbs: `t` and `u` are at most (2^64 - 1) + (2^64 - 1)^2 + (2^64 - 1) = 2^128 - 1.
     let mut i = 0;
-    while i < ns {
-        let x = short[i] as u128;
-        if x != 0 {
-            let row = &mut r[i..i + nl + 1];
-            let mut carry: u128 = 0;
-            let mut j = 0;
-            while j < nl {
-                // At most (2^64 - 1) + (2^64 - 1)^2 + (2^64 - 1) = 2^128 - 1.
-                let t = row[j] as u128 + x * long[j] as u128 + carry;
-                row[j] = t as u64;
-                carry = t >> 64;
-                j += 1;
-            }
-            row[nl] = carry as u64;
+    while i + 1 < ns {
+        let x0 = short[i] as u128;
+        let x1 = short[i + 1] as u128;
+        let row = &mut r[i..i + nl + 2];
+        let mut c0: u64 = 0;
+        let mut c1: u64 = 0;
+        let mut prev: u64 = 0;
+        let mut j = 0;
+        while j < nl {
+            let l = long[j];
+            let t = row[j] as u128 + x0 * l as u128 + c0 as u128;
+            let u = (t as u64) as u128 + x1 * prev as u128 + c1 as u128;
+            row[j] = u as u64;
+            c0 = (t >> 64) as u64;
+            c1 = (u >> 64) as u64;
+            prev = l;
+            j += 1;
         }
-        i += 1;
+        let u = c0 as u128 + x1 * prev as u128 + c1 as u128;
+        row[nl] = u as u64;
+        row[nl + 1] = (u >> 64) as u64;
+        i += 2;
+    }
+    if i < ns {
+        let x = short[i] as u128;
+        let row = &mut r[i..i + nl + 1];
+        let mut c: u64 = 0;
+        let mut j = 0;
+        while j < nl {
+            let t = row[j] as u128 + x * long[j] as u128 + c as u128;
+            row[j] = t as u64;
+            c = (t >> 64) as u64;
+            j += 1;
+        }
+        row[nl] = c;
     }
     r
 }
@@ -251,16 +278,23 @@ fn shl_small(a: &[u64], s: u32) -> Vec<u64> {
 
 /// The value of the limbs `0..n` of `a`, divided by `2^s` for a shift `s` below 64.
 fn shr_small(a: &[u64], n: usize, s: u32) -> Vec<u64> {
-    let mut r = Vec::with_capacity(n);
-    let mut i = 0;
-    while i < n {
+    let mut r = zeros(n);
+    if n > 0 {
+        let (x, out) = (&a[..n], &mut r[..n]);
         if s == 0 {
-            r.push(a[i]);
+            let mut i = 0;
+            while i < n {
+                out[i] = x[i];
+                i += 1;
+            }
         } else {
-            let hi = if i + 1 < n { a[i + 1] << (64 - s) } else { 0 };
-            r.push((a[i] >> s) | hi);
+            let mut i = 0;
+            while i + 1 < n {
+                out[i] = (x[i] >> s) | (x[i + 1] << (64 - s));
+                i += 1;
+            }
+            out[n - 1] = x[n - 1] >> s;
         }
-        i += 1;
     }
     r
 }
@@ -355,10 +389,11 @@ fn knuth_d(a: &[u64], b: &[u64], na: usize, n: usize) -> (Vec<u64>, Vec<u64>) {
 /// `a & b`.
 pub fn and(a: &[u64], b: &[u64]) -> Vec<u64> {
     let n = if a.len() < b.len() { a.len() } else { b.len() };
-    let mut r = Vec::with_capacity(n);
+    let mut r = zeros(n);
+    let (x, y, out) = (&a[..n], &b[..n], &mut r[..n]);
     let mut i = 0;
     while i < n {
-        r.push(a[i] & b[i]);
+        out[i] = x[i] & y[i];
         i += 1;
     }
     r
@@ -367,15 +402,20 @@ pub fn and(a: &[u64], b: &[u64]) -> Vec<u64> {
 /// `a | b`.
 pub fn or(a: &[u64], b: &[u64]) -> Vec<u64> {
     let (long, short) = if a.len() >= b.len() { (a, b) } else { (b, a) };
-    let mut r = Vec::with_capacity(long.len());
+    let n = long.len();
+    let m = short.len();
+    let mut r = zeros(n);
+    let (x, y, out) = (&long[..m], &short[..m], &mut r[..m]);
     let mut i = 0;
-    while i < short.len() {
-        r.push(long[i] | short[i]);
+    while i < m {
+        out[i] = x[i] | y[i];
         i += 1;
     }
-    while i < long.len() {
-        r.push(long[i]);
-        i += 1;
+    let (x, out) = (&long[m..n], &mut r[m..n]);
+    let mut j = 0;
+    while j < x.len() {
+        out[j] = x[j];
+        j += 1;
     }
     r
 }
@@ -383,15 +423,20 @@ pub fn or(a: &[u64], b: &[u64]) -> Vec<u64> {
 /// `a ^ b`.
 pub fn xor(a: &[u64], b: &[u64]) -> Vec<u64> {
     let (long, short) = if a.len() >= b.len() { (a, b) } else { (b, a) };
-    let mut r = Vec::with_capacity(long.len());
+    let n = long.len();
+    let m = short.len();
+    let mut r = zeros(n);
+    let (x, y, out) = (&long[..m], &short[..m], &mut r[..m]);
     let mut i = 0;
-    while i < short.len() {
-        r.push(long[i] ^ short[i]);
+    while i < m {
+        out[i] = x[i] ^ y[i];
         i += 1;
     }
-    while i < long.len() {
-        r.push(long[i]);
-        i += 1;
+    let (x, out) = (&long[m..n], &mut r[m..n]);
+    let mut j = 0;
+    while j < x.len() {
+        out[j] = x[j];
+        j += 1;
     }
     r
 }

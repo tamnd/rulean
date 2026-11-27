@@ -4,6 +4,18 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.8.8] - 2026-11-27
+
+### Added
+
+- Engine G, a call-by-need machine for closed terms of the type `Bool` or `Nat` (spec perf/10). It reads the terms of the store directly, it keeps the value of each definition for the full declaration, and a copying collector frees the heap in long loops. Engine R uses it for a closed query against a `Bool` or `Nat` scalar. The perf suite uses 178.3 G instructions in place of 449.2 G, `magma-list-deep-n36` uses 46.5 G in place of 153.2 G, and `magma-list-pair-n21` uses 13.3 G in place of 89.6 G.
+
+### Changed
+
+- Engine G keeps a direct-mapped cache of the resolved constants and recursors, and of the cells of the closed arguments. The perf suite uses 170.2 G instructions in place of 178.3 G. The work baseline of Init is now 211.5 M, and the baseline of Std is 335.5 M.
+- With engine F, `is_def_eq_shared` is true at once for the same handle, and it gives a closed query against a scalar to engine G. In conversion, engine F reads a value back as a closed term (at most 64 nodes) when the other value is a scalar, and engine G answers the query. `gf3-matrix-product` uses 18.2 G instructions in place of 40.1 G.
+- The schoolbook product of `rulean-nat` does two rows in one pass. The other limb loops write by index into a zeroed vector, so the compiler removes the bound checks. The perf suite uses 148.0 G instructions in place of 170.2 G.
+
 ## [0.8.7] - 2026-11-27
 
 ### Changed
@@ -461,7 +473,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.7...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.8...HEAD
+[0.8.8]: https://github.com/tamnd/rulean/compare/v0.8.7...v0.8.8
 [0.8.7]: https://github.com/tamnd/rulean/compare/v0.8.6...v0.8.7
 [0.8.6]: https://github.com/tamnd/rulean/compare/v0.8.5...v0.8.6
 [0.8.5]: https://github.com/tamnd/rulean/compare/v0.8.4...v0.8.5

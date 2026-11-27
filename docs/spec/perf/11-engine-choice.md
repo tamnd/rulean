@@ -85,10 +85,25 @@ The value check of a definition, a theorem or an opaque constant uses this rule.
 3. If the count is also more than 256, the queries of the declaration use engine R only.
 4. Else engine F checks the value, as before.
 
+The type check uses steps 1 and 2 of this rule (11.8).
+
 Engine R is the reference engine, so the rule cannot change a verdict. It only changes the engine that does the work.
 
 On main with #233, the rule takes Init with engine F from 208.9 G to 139.5 G, and the perf total from 110.6 G to 108.6 G. No perf test is slower by more than 0.15 G. `fueled-chain` goes from 0.82 G to 0.26 G and `grind-ring-5` from 6.40 G to 6.09 G.
 
-## 11.8 What follows
+## 11.8 The type check
+
+After #235, the type check of a declaration with engine F used the same rule: a type with more than 64 distinct nodes and no chain of more than 64 nested binders goes to engine R. The type check does not set the flag of 11.6, because in `app-lam` the type is wide but the value is deep.
+
+| Build | Init, engine F | Perf total |
+|---|---|---|
+| main with #235 | 139.5 G | 108.6 G |
+| and the rule for the type check | 138.3 G | 108.5 G |
+
+No perf test changes by more than 0.15 G. Engine F on Init now uses about as many instructions as engine R alone (138.6 G).
+
+A value limit of 32 in place of 64 gave 139.6 G, so the limit stays at 64.
+
+## 11.9 What follows
 
 With the rule, engine F on Init uses about the same number of instructions as engine R alone. The exit of M9 needs at most 80 G, so the next work is a faster engine R on wide proofs. Section 08.5 shows the parts: `inst_rec`, the hash-cons walk and `mk_app`. Engine F stays the engine for deep terms and for the evaluation tests.

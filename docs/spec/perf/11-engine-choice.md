@@ -213,3 +213,21 @@ PR #248 uses the same rule for the results of `whnf_core`, `whnf` and the succes
 | #248: all tags but unfold | 103.9 G | 178.2 G |
 
 The goal of M9 for Init is at most 80 G. The next work looks at the profile after #248.
+
+## 11.17 Terms without a binder and the budget of local keys
+
+The profile of Init after #248 gives `canon` 5.4% of the main thread. It finds the cache key of a term for each call of `whnf_core`, `whnf` and the type inference. PR #250 adds the store flag `HAS_BINDER`, which a `lam`, a `pi` or a `let` node sets. The store interns every node, and the alpha-equality compares each atom by its handle. So a term without a binder is alpha-equal only to itself. `canon` gives such a term back at once, and `expr_equal` stops when a term has no binder.
+
+The same profile shows that the session drops 8.3 M pending entries and stores 0.77 M. Almost all drops come from the budget of the scratch keys of 11.16, and few come from a value. A probe of the budget gives these counts with engine R:
+
+| Budget of scratch keys | Init | Std | Perf tests (engine F) | Peak memory, Init | Peak memory, Std |
+|---|---|---|---|---|---|
+| 2% (#250) | 101.7 G | 174.3 G | 106.5 G | 591 MB | 1020 MB |
+| 4% | 95.0 G | 166.9 G | 105.7 G | 620 MB | 1136 MB |
+| 6.25% | 93.0 G | 162.5 G | 104.7 G | 959 MB | 1136 MB |
+| 8.3% | 91.4 G | 161.7 G | 105.9 G | 951 MB | 1171 MB |
+| 10% | 91.4 G | 160.0 G | 105.6 G | 929 MB | 1186 MB |
+
+The step of the memory of Init between 4% and 6.25% is one growth of the session table, and the table stays below its limit of 128 MiB. No perf test is slower with 10%, and gf3 goes from 16.4 G to 15.9 G. The slower gf3 of 11.16 was measured before #248 and #250. PR #251 sets the budget to 10%.
+
+The goal of M9 for Init is at most 80 G.

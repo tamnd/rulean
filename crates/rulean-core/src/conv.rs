@@ -69,7 +69,12 @@ impl Checker {
     ///
     /// An "equal" answer of engine F is final, but engine R confirms it if the query used both a type-directed rule and a delta step (the confirm set of spec 05.1), or if `confirm_all` is true. A "not equal" answer of engine F is only a hint, so engine R decides the query. If engine F stops with a fault, the fault is removed and engine R decides the query.
     pub(crate) fn is_def_eq_shared(&mut self, t: ExprId, s: ExprId) -> bool {
-        if self.engine == Engine::R || self.eq_depth > 0 || self.bad() || self.va.full() {
+        if self.engine == Engine::R
+            || self.f_declined
+            || self.eq_depth > 0
+            || self.bad()
+            || self.va.full()
+        {
             return self.is_def_eq_r(t, s);
         }
         // The same handle is the same term. Engine F would evaluate it first, and the evaluation can do large `Nat` operations.

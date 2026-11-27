@@ -378,6 +378,8 @@ pub struct Checker {
     pub f_stats: FStats,
     /// The rules that the current engine F query used, as the bits `F_DELTA` and `F_TYPED`.
     pub(crate) f_bits: u32,
+    /// True if engine F declined a check of the current declaration because engine R is the better engine for its term (`term_large`). Then the queries of the declaration use engine R only.
+    pub(crate) f_declined: bool,
     /// True while a delta step of the conversion of engine F evaluates an unfolding. Then `eval` reduces the structure of a projection without delta, as `whnf_core` with cheap projections in the official kernel. `force` sets it to false for its own steps.
     pub(crate) cheap_proj: bool,
     /// The number of open definitional equality queries. Engine F answers only a query that is not inside another query.
@@ -505,6 +507,7 @@ impl Checker {
             confirm_all: false,
             f_stats: FStats::default(),
             f_bits: 0,
+            f_declined: false,
             cheap_proj: false,
             eq_depth: 0,
             trace_on: false,
@@ -582,6 +585,7 @@ impl Checker {
         self.fi.reset();
         self.f_under = 0;
         self.f_bits = 0;
+        self.f_declined = false;
         self.eq_depth = 0;
         self.eager = false;
         self.depth = 0;

@@ -246,3 +246,33 @@ Three variants give these counts with engine R:
 Most of the gain comes from the alpha-equal pairs. A pair that is alpha-equal is no longer in the session cache, so the pre-check of engine F does not find it, and engine F gets the query. The confirm run gives 428 engine F queries instead of 360. All 413 equal results are confirmed by engine R, and the run has 0 differences.
 
 The goal of M9 for Init is at most 80 G.
+
+## 11.19 Types to engine R, and a walk of 256 nodes
+
+The profile of Init after #254 shows that the type check with engine F uses 7.2 G and the type check with engine R uses 4.4 G. Engine F is the slower engine for most types. PR #256 makes two changes. First, engine F checks a type only if `term_walk` finds a chain of more than `F_DEEP` nested binders, and engine R checks the other types. Second, `term_walk` reads at most 256 nodes in place of 1024. The walk goes first into the body of each binder, so it finds a deep chain early. `F_WALK` is not less than `F_R_ONLY`, so the walk still counts a value with more than `F_R_ONLY` nodes.
+
+| Corpus | Before (#255) | After (#256) |
+|---|---|---|
+| Init, engine F | 94.5 G | 92.0 G |
+| Std, engine F | 177.7 G | 173.6 G |
+| Init, engine R | 87.8 G | 87.6 G |
+| Perf tests, engine F | 104.5 G | 103.7 G |
+
+The walk limit alone gives -0.84 G on Init. When engine R checks all types, Init gives 91.5 G, but `beta-ladder` goes from 0.09 G to 5.88 G, because its type is deep. With the rule for deep types, `beta-ladder` stays at 0.09 G.
+
+## 11.20 Pools of vectors
+
+A count of the instructions in malloc and free shows that many hot paths make a new vector for each query and free it at the end. Examples are the arguments of an application in the type inference and in `is_def_eq_app`, the levels of a constant in `inst_lps_cached`, and the free variables of a binder. PR #257 adds two pools to the type checker, `vpool` for terms and `lpool` for levels. A hot path takes a vector from a pool and gives it back when it is done. A pool keeps at most 64 vectors. A function with many exits gets a wrapper that takes the vectors, calls the body with them and gives them back, so that the body can stop at any point.
+
+All counts are from one batch on the same machine.
+
+| Corpus | Before (#256) | Pools in the type inference | All hot paths (#257) |
+|---|---|---|---|
+| Init, engine R | 88.0 G | 83.7 G | 82.2 G |
+| Std, engine R | 155.9 G | 148.7 G | 145.5 G |
+| Init, engine F | 92.7 G | 88.0 G | 86.6 G |
+| Std, engine F | 174.9 G | 167.1 G | 164.8 G |
+
+The perf total with engine F goes from 103.7 G to 102.8 G. The confirm run gives 0 differences. Some vectors in the cold paths are still new for each call, and the arena of engine F has its own allocations, so item A9 of 04.3 stays open.
+
+The goal of M9 for Init with engine F is at most 80 G. After #257, the gap is about 6.6 G.

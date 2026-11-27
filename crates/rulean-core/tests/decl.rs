@@ -692,10 +692,26 @@ fn engine_f_checks_types_and_values() {
     let n = f_accepts(&mut t);
     assert!(t.has("z2"));
     let s = t.c.f_stats;
-    // Two type checks of the axioms, and a type check and a value check of each definition.
-    assert_eq!(s.infer, 2 * n - 2);
+    // A value check of each definition. The types are not deep, so engine R checks them (spec perf/11.19).
+    assert_eq!(s.infer, n - 2);
     assert_eq!(s.infer_ok, s.infer);
     assert_eq!(s.disagree, 0);
+}
+
+#[test]
+fn engine_f_checks_a_deep_type() {
+    let mut t = engine_f(false);
+    let (nat, _) = t.nat();
+    // `Nat -> Nat -> ... -> Nat` with 70 binders. The chain is deeper than `F_DEEP`, so engine F checks the type.
+    let mut ty = nat;
+    for _ in 0..70 {
+        ty = t.pi("n", nat, ty);
+    }
+    let before = t.c.f_stats.infer;
+    let d = t.axiom("f", &[], ty, Safety::Safe);
+    assert_eq!(t.add(&d), None);
+    assert_eq!(t.c.f_stats.infer, before + 1);
+    assert_eq!(t.c.f_stats.infer_ok, t.c.f_stats.infer);
 }
 
 #[test]
@@ -703,7 +719,7 @@ fn engine_f_with_confirm_all_agrees_with_engine_r() {
     let mut t = engine_f(true);
     let n = f_accepts(&mut t);
     let s = t.c.f_stats;
-    assert_eq!(s.infer, 2 * n - 2);
+    assert_eq!(s.infer, n - 2);
     assert_eq!(s.infer_ok, s.infer);
     assert_eq!(s.disagree, 0);
 }
@@ -812,8 +828,8 @@ fn engine_f_gives_the_errors_of_engine_r() {
     assert!(!t.has("bad3"));
     let s = t.c.f_stats;
     assert_eq!(s.disagree, 0);
-    // Engine F accepts the types of the two axioms and of the three definitions, and no value.
-    assert_eq!(s.infer_ok, 5);
+    // Engine F accepts no value. No type is deep, so engine F checks no type (spec perf/11.19).
+    assert_eq!(s.infer_ok, 0);
 }
 
 #[test]
@@ -856,9 +872,9 @@ fn engine_f_continues_after_engine_r_confirms_a_query() {
     let d = t.defn("v", nat, gc, Safety::Safe);
     assert_eq!(t.add(&Decl::Defn(d)), None);
     let s = t.c.f_stats;
-    // Engine F accepts the type and the value of `v`. It does not stop on the answer in the confirm set.
-    assert_eq!(s.infer - before.infer, 2);
-    assert_eq!(s.infer_ok - before.infer_ok, 2);
+    // Engine F accepts the value of `v`. It does not stop on the answer in the confirm set. The type is not deep, so engine R checks it.
+    assert_eq!(s.infer - before.infer, 1);
+    assert_eq!(s.infer_ok - before.infer_ok, 1);
     assert!(s.confirmed > before.confirmed);
     assert_eq!(s.disagree, 0);
 }
@@ -888,7 +904,8 @@ fn long_let_chain() {
     let d = t.defn("chain", nat, v, Safety::Safe);
     assert_eq!(t.add(&Decl::Defn(d)), None);
     let s = t.c.f_stats;
-    assert_eq!(s.infer, 4);
+    // Engine F checks the value. The types are not deep, so engine R checks them.
+    assert_eq!(s.infer, 1);
     assert_eq!(s.infer_ok, s.infer);
 }
 

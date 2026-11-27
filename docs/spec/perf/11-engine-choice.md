@@ -276,3 +276,21 @@ All counts are from one batch on the same machine.
 The perf total with engine F goes from 103.7 G to 102.8 G. The confirm run gives 0 differences. Some vectors in the cold paths are still new for each call, and the arena of engine F has its own allocations, so item A9 of 04.3 stays open.
 
 The goal of M9 for Init with engine F is at most 80 G. After #257, the gap is about 6.6 G.
+
+## 11.21 The map of promote, and a cache of whole calls
+
+The session promotes the terms of each declaration from the scratch store to the main store. Before #259, each commit made a new map and a new stack for this walk and freed them at the end. PR #259 keeps the map and the stack in the type checker and clears them for each commit. `Memo::clear` is O(1), because it uses an epoch.
+
+| Corpus | Before (#258) | After (#259) |
+|---|---|---|
+| Init, engine R | 82.7 G | 80.4 G |
+| Init, engine F | 86.8 G | 85.0 G |
+
+The perf total went from 102.8 G to 104.6 G in one run. Repeated runs show that the change is noise in `gf3`, which gives 15.4 G and 15.9 G with the same binary.
+
+We also tried two changes that did not help, and we did not merge them.
+
+1. A cache of whole calls to `instantiate`. The key is the body and the list of arguments, and the value is the result. Engine R makes 10.5 M calls on Init, and about 2.9 M of them repeat a call before them. The cache gave less memory (963 MB to 628 MB), but more instructions: Init with engine R went from 80.7 G to 82.0 G, and Init with engine F went from 85.6 G to 87.1 G. The cost of the key and the log is more than the work that the cache saves, because the memo of `inst_rec` already finds most of the repeated nodes.
+2. A cache of calls with one argument only. It was 0.8 G slower than no cache.
+
+A larger budget for the scratch store of the session (one fifth in place of one tenth) gave less instructions on Init, but more memory, up to 1.6 GB on Std, and the runs were too noisy to show a real gain. We did not change the budget.

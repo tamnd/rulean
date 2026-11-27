@@ -192,24 +192,28 @@ pub fn mul_school(a: &[u64], b: &[u64]) -> Vec<u64> {
 fn school_rows(r: &mut [u64], long: &[u64], short: &[u64]) {
     let nl = long.len();
     let ns = short.len();
-    // Two rows go in one pass on the long operand, so each limb of the result is read and written half as often. The carries are single limbs: `t` and `u` are at most (2^64 - 1) + (2^64 - 1)^2 + (2^64 - 1) = 2^128 - 1.
+    // The rows are written in `r` at the offset `i`, with no sub-slice, so the loops have no reborrow. Two rows go in one pass on the long operand, so each limb of the result is read and written half as often. The carries are single limbs: `t` and `u` are at most (2^64 - 1) + (2^64 - 1)^2 + (2^64 - 1) = 2^128 - 1.
     let mut i = 0;
     while i + 3 < ns {
         let x0 = short[i] as u128;
         let x1 = short[i + 1] as u128;
         let x2 = short[i + 2] as u128;
         let x3 = short[i + 3] as u128;
-        let row = &mut r[i..i + nl + 4];
-        let (mut c0, mut c1, mut c2, mut c3): (u64, u64, u64, u64) = (0, 0, 0, 0);
-        let (mut p1, mut p2, mut p3): (u64, u64, u64) = (0, 0, 0);
+        let mut c0: u64 = 0;
+        let mut c1: u64 = 0;
+        let mut c2: u64 = 0;
+        let mut c3: u64 = 0;
+        let mut p1: u64 = 0;
+        let mut p2: u64 = 0;
+        let mut p3: u64 = 0;
         let mut j = 0;
         while j < nl {
             let l = long[j];
-            let t = row[j] as u128 + x0 * l as u128 + c0 as u128;
+            let t = r[i + j] as u128 + x0 * l as u128 + c0 as u128;
             let u = (t as u64) as u128 + x1 * p1 as u128 + c1 as u128;
             let v = (u as u64) as u128 + x2 * p2 as u128 + c2 as u128;
             let w = (v as u64) as u128 + x3 * p3 as u128 + c3 as u128;
-            row[j] = w as u64;
+            r[i + j] = w as u64;
             c0 = (t >> 64) as u64;
             c1 = (u >> 64) as u64;
             c2 = (v >> 64) as u64;
@@ -223,52 +227,53 @@ fn school_rows(r: &mut [u64], long: &[u64], short: &[u64]) {
         let u = c0 as u128 + x1 * p1 as u128 + c1 as u128;
         let v = (u as u64) as u128 + x2 * p2 as u128 + c2 as u128;
         let w = (v as u64) as u128 + x3 * p3 as u128 + c3 as u128;
-        row[nl] = w as u64;
-        let (c1, c2, c3) = ((u >> 64) as u64, (v >> 64) as u64, (w >> 64) as u64);
+        r[i + nl] = w as u64;
+        let c1 = (u >> 64) as u64;
+        let c2 = (v >> 64) as u64;
+        let c3 = (w >> 64) as u64;
         let v = c1 as u128 + x2 * p1 as u128 + c2 as u128;
         let w = (v as u64) as u128 + x3 * p2 as u128 + c3 as u128;
-        row[nl + 1] = w as u64;
-        let (c2, c3) = ((v >> 64) as u64, (w >> 64) as u64);
+        r[i + nl + 1] = w as u64;
+        let c2 = (v >> 64) as u64;
+        let c3 = (w >> 64) as u64;
         let w = c2 as u128 + x3 * p1 as u128 + c3 as u128;
-        row[nl + 2] = w as u64;
-        row[nl + 3] = (w >> 64) as u64;
+        r[i + nl + 2] = w as u64;
+        r[i + nl + 3] = (w >> 64) as u64;
         i += 4;
     }
     while i + 1 < ns {
         let x0 = short[i] as u128;
         let x1 = short[i + 1] as u128;
-        let row = &mut r[i..i + nl + 2];
         let mut c0: u64 = 0;
         let mut c1: u64 = 0;
         let mut prev: u64 = 0;
         let mut j = 0;
         while j < nl {
             let l = long[j];
-            let t = row[j] as u128 + x0 * l as u128 + c0 as u128;
+            let t = r[i + j] as u128 + x0 * l as u128 + c0 as u128;
             let u = (t as u64) as u128 + x1 * prev as u128 + c1 as u128;
-            row[j] = u as u64;
+            r[i + j] = u as u64;
             c0 = (t >> 64) as u64;
             c1 = (u >> 64) as u64;
             prev = l;
             j += 1;
         }
         let u = c0 as u128 + x1 * prev as u128 + c1 as u128;
-        row[nl] = u as u64;
-        row[nl + 1] = (u >> 64) as u64;
+        r[i + nl] = u as u64;
+        r[i + nl + 1] = (u >> 64) as u64;
         i += 2;
     }
     if i < ns {
         let x = short[i] as u128;
-        let row = &mut r[i..i + nl + 1];
         let mut c: u64 = 0;
         let mut j = 0;
         while j < nl {
-            let t = row[j] as u128 + x * long[j] as u128 + c as u128;
-            row[j] = t as u64;
+            let t = r[i + j] as u128 + x * long[j] as u128 + c as u128;
+            r[i + j] = t as u64;
             c = (t >> 64) as u64;
             j += 1;
         }
-        row[nl] = c;
+        r[i + nl] = c;
     }
 }
 

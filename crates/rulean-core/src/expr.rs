@@ -62,6 +62,11 @@ pub fn has_fvar(st: &Store, e: ExprId) -> bool {
     st.flags(e).has(Flags::HAS_FVAR)
 }
 
+/// True if `e` has a `lam`, a `pi` or a `let`.
+pub fn has_binder(st: &Store, e: ExprId) -> bool {
+    st.flags(e).has(Flags::HAS_BINDER)
+}
+
 /// True if `e` has a level parameter.
 pub fn has_level_param(st: &Store, e: ExprId) -> bool {
     st.flags(e).has(Flags::HAS_LEVEL_PARAM)
@@ -675,6 +680,10 @@ pub fn expr_equal(st: &Store, x: &mut Scratch, a: ExprId, b: ExprId) -> bool {
     if a == b {
         return true;
     }
+    // Without a binder, alpha-equal terms are the same node (spec perf/11.17).
+    if !has_binder(st, a) || !has_binder(st, b) {
+        return false;
+    }
     x.eq.clear();
     eq_rec(st, &mut x.eq, a, b)
 }
@@ -683,7 +692,7 @@ fn eq_rec(st: &Store, m: &mut Lossy, a: ExprId, b: ExprId) -> bool {
     if a == b {
         return true;
     }
-    if st.hash(a) != st.hash(b) || a.kind() != b.kind() {
+    if st.hash(a) != st.hash(b) || a.kind() != b.kind() || !has_binder(st, a) {
         return false;
     }
     // A pair seen before is equal or the whole walk is already false (the cache of `expr_eq_fn`).

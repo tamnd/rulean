@@ -33,6 +33,8 @@ impl Flags {
     pub const HAS_LIT: u8 = 8;
     /// The node has a projection.
     pub const HAS_PROJ: u8 = 16;
+    /// The node has a `lam`, a `pi` or a `let`. A node without it is alpha-equal only to itself, because the store interns it.
+    pub const HAS_BINDER: u8 = 32;
 
     /// True if every flag of `mask` is set.
     pub fn has(self, mask: u8) -> bool {
@@ -705,7 +707,7 @@ impl Store {
         // The hash does not mix the binder name or the binder info, as in Lean. So alpha-equivalent terms have equal hashes (see the module documentation).
         let h = hash::mix(hash::mix(seed(kind), sd.hash), sb.hash);
         let range = max32(sd.info & SATURATED, range_under(sb.info & SATURATED));
-        let flags = ((sd.info | sb.info) >> 24) as u8;
+        let flags = ((sd.info | sb.info) >> 24) as u8 | Flags::HAS_BINDER;
         (hash::finish(h), pack(range, flags))
     }
 
@@ -746,7 +748,8 @@ impl Store {
             max32(st.info & SATURATED, sv.info & SATURATED),
             range_under(sb.info & SATURATED),
         );
-        let flags = ((st.info | sv.info | sb.info) >> 24) as u8 | Flags::HAS_LET;
+        let flags =
+            ((st.info | sv.info | sb.info) >> 24) as u8 | Flags::HAS_LET | Flags::HAS_BINDER;
         let node = LetNode {
             name,
             ty,

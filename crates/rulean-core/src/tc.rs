@@ -990,6 +990,10 @@ impl Checker {
 
     /// The cache key of a term: the first term that the checker saw that is equal to it up to binder names and binder info (`expr_map` with `is_equal`).
     pub(crate) fn canon(&mut self, e: ExprId) -> ExprId {
+        // A term without a binder is its own key (spec perf/11.17).
+        if !expr::has_binder(&self.st, e) {
+            return e;
+        }
         if let Some(c) = self.c_canon.get(e.0, 0) {
             return ExprId(c);
         }

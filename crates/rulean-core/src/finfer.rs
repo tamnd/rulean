@@ -151,6 +151,10 @@ impl Checker {
         if self.engine == Engine::R || self.bad() || self.va.full() {
             return false;
         }
+        // A wide type goes to engine R, as a wide value does. The type check does not set `f_declined` (spec perf/11.8).
+        if self.term_walk(ty) > F_TERM_CAP {
+            return false;
+        }
         self.f_stats.infer += 1;
         let depth = self.depth;
         self.f_root();

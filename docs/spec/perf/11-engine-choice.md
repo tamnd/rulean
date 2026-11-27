@@ -174,3 +174,26 @@ Each probe below is a change that we measured and did not keep. The column "engi
 R1 cuts the environment of a closure and of a suspension to the part that the body uses. It copies at most 4 values, and else it keeps the full environment. R1 alone did not decrease the count. R3 is a lossy cache of the evaluation of a closed application, with 2^13 slots. It keeps a result only when the evaluation did not use a fallback. R1 and R3 together make engine F alone 1.1% slower. R3 alone makes it 0.4% faster, and this gain is too small for a new cache in the hot path.
 
 The copy of R1 makes new environments, so two closures for the same work do not share an environment, and the value keys of the closures cost more. R3 finds few repeated closed applications, because the values of engine F are not shared. So R1 and R3 need R2 first. The next step is R2, the shared values of 09.5.
+
+## 11.15 The probes of R2 and the session for check mode
+
+R2 shares the values of engine F. Each new value gets its value key (04.12), and a lossy table with 2^13 slots gives the older value with the same key. A hit is used only if the older value is still in the arena and has the same key, so a region release cannot make a wrong hit. The column "engine F alone" has the meaning of 11.14.
+
+| Probe | Engine F alone | Rule |
+|---|---|---|
+| main with #244 | 211.74 G | 138.36 G |
+| R2: lambdas, pi types, constants and applications | 290.97 G | 143.53 G |
+| R2: constants, and applications whose parts have a key | 252.64 G | 140.09 G |
+| R2: constants only | 229.06 G | |
+
+With constants only, engine F does the same 830 queries and the same 115,603 accepted inferences as main. So the shared values do not remove work on Init, and the cost is the key of each new value. R2 is not kept. The R3 probe of 11.14 also gave 30 disagreements that engine R found, so no verdict changed. A term with no loose bound variable can have free variables of the local context, and their values change with the context. So a cache of the evaluation of a closed term must also have the free variables in its key.
+
+The session of 08.4 kept only infer-only results, because a check-mode result also depends on the level parameters and the safety of the declaration. PR #245 adds a check-mode entry. It is written and read only in a safe declaration, because a safe declaration can use fewer constants than the other kinds. For a term with a level parameter, the second key is the level list of the level parameters of the declaration.
+
+| Build | Init, engine R | Std, engine R |
+|---|---|---|
+| main with #244 | 137.2 G | 226.0 G |
+| terms with no level parameter | 129.2 G | 213.6 G |
+| #245 | 126.4 G | 206.6 G |
+
+This is the first change since 11.10 that makes engine R faster on Init. The work that it removes is the same work in two declarations, not a repeated step in one declaration. So the next work looks for other work that the declarations repeat.

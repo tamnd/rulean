@@ -117,6 +117,20 @@ PR #237 made engine F the default engine of `rulean check`, and this change was 
 
 The value checks of engine F are not the cause of the difference on Std. With the flag limit of 64, the queries of engine F on Std go from 297,492 to 92,065, and Std uses 7.3 G less. But `ite-taken-branch` then goes from 1.04 G to 19.58 G. So engine R stays the default engine. Engine F becomes the default engine only when it uses at most as many instructions as engine R on Init and on Std, and when the perf gate passes.
 
-## 11.10 What follows
+## 11.10 Probes on engine R
+
+A sample of engine R on Std gives these shares of the self time: `inst_rec` 15.7%, `mk_app` 13.4%, the probe of the hash-cons table 13.4%, `canon` 5.4% and `Memo::put` 4.2%. Each probe below is a change that we measured with `--engine R` and did not keep.
+
+| Probe | Std | Init |
+|---|---|---|
+| main | 225.3 G | 138.6 G |
+| No memo in `inst_rec` | 553.3 G | 178.9 G |
+| Memo of `inst_rec` with 2^15 slots in place of 2^13 | 225.4 G | 137.3 G |
+| Memo of `inst_rec` with 2^11 slots | 226.3 G | 137.4 G |
+| A memo of `instantiate1` from one call to the next, cleared at each new generation of the store | 226.0 G | 137.2 G |
+
+The memo of `inst_rec` is necessary, because the terms share many nodes. But its size is not the problem, and a cache of the results from one call to the next does not find enough repeated calls. So the cost of engine R is in the work of each substitution, and the next work must make fewer substitutions, not faster ones.
+
+## 11.11 What follows
 
 With the rule, engine F on Init uses about the same number of instructions as engine R alone, and on Std it uses 6% more. The exit of M9 needs at most 80 G, so the next work is a faster engine R on wide proofs. Section 08.5 shows the parts: `inst_rec`, the hash-cons walk and `mk_app`. Engine F stays the engine for deep terms and for the evaluation tests.

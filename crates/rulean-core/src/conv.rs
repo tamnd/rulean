@@ -259,7 +259,7 @@ impl Checker {
     }
 
     /// `never_proof` for an application of the constant `c`, with a memo in `c_never_proof`. The function removes the Pi binders of the type of `c`. If the rest is a sort, an application of `c` is a type. If the rest is an application of an inductive type whose own type ends in a sort with a level that is never zero, an application of `c` is a value of a type that is not a proposition. A partial application of `c` has a Pi type whose codomain is that type, and it is also not a proposition. The function does not unfold the rest, so a type such as a definition that unfolds to a proposition gives false.
-    fn const_never_proof(&mut self, c: NameId) -> bool {
+    pub(crate) fn const_never_proof(&mut self, c: NameId) -> bool {
         if let Some(x) = self.c_never_proof.get(raw(c.0), 0) {
             return x == 1;
         }

@@ -37,6 +37,9 @@ const G_GC_WORDS: usize = 1 << 24;
 /// The operation index of `Nat.succ` in a frame. The binary operations use the indices of `nat_ops`.
 const OP_SUCC: u32 = 100;
 
+/// The largest number of pairs of values that one `ground_cmp` query compares.
+const G_CMP_PAIRS: u32 = 1 << 22;
+
 /// A value of engine G, in weak head normal form.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GVal {
@@ -150,6 +153,8 @@ pub struct Ground {
     args: Vec<u32>,
     frames: Vec<FrameAt>,
     tmp: Vec<u32>,
+    /// The pairs of cells that `ground_cmp` must still compare. They are roots of the collector.
+    roots: Vec<u32>,
     /// Key (slot, 0) is the cell of the value of the definition of the slot, and key (term, 1) is the cell of a closed argument. The heap stays from one run to the next in a declaration, so a definition is computed one time (a constant applicative form).
     caf: Memo,
     /// The keys and the cells of `caf`, for the collector.
@@ -250,7 +255,11 @@ impl Ground {
     pub fn bytes(&self) -> usize {
         self.cells.capacity() * core::mem::size_of::<Slot>()
             + self.envs.capacity() * core::mem::size_of::<GEnv>()
-            + (self.fields.capacity() + self.args.capacity() + self.tmp.capacity()) * 4
+            + (self.fields.capacity()
+                + self.args.capacity()
+                + self.tmp.capacity()
+                + self.roots.capacity())
+                * 4
             + self.frames.capacity() * core::mem::size_of::<FrameAt>()
             + self.nats.capacity() * core::mem::size_of::<Nat>()
             + self.caf.bytes()
@@ -301,6 +310,7 @@ impl Ground {
         }
         self.nats = Vec::new();
         self.tmp.truncate(0);
+        self.roots.truncate(0);
     }
 
     fn size(&self) -> usize {
@@ -516,12 +526,122 @@ impl Checker {
         None
     }
 
-    /// The loop of the machine.
+    /// True if engine G shows that the closed terms `t` and `s` are not definitionally equal (spec perf/10). The step computes the weak head normal form of the two terms, and then the normal forms of the pairs of fields, the first field first, as far as the comparison needs them. Two different `Nat` values are not equal. Two constructor applications of an inductive type that is never a proposition are not equal if the constructors are different, and they are not equal if a pair of their fields is not equal. A pair of other values (a lambda, a type, or a value that can be a proof) does not give a result, and the step goes to the next pair. The step never gives "equal", so a false result only tells engine R to continue. The rivals compute closed data in the same way: rpylean has a closed evaluator, and nano-lean compares values that it computed one time.
+    ///
+    /// The result is 1 if the terms are not equal, 4 if the step compared data and found no difference, and 0 for the other cases.
+    pub(crate) fn ground_cmp(&mut self, t: ExprId, s: ExprId) -> u32 {
+        if t == s || self.gcmp_block > 0 || !self.ground_ok(t) || !self.ground_ok(s) {
+            return 0;
+        }
+        if let Some(x) = self.c_ground_cmp.get(t.0, s.0) {
+            return low(x);
+        }
+        self.gm.runs += 1;
+        self.gm.caches();
+        let a = self.g_arg(t, NIL);
+        let b = self.g_arg(s, NIL);
+        self.gm.roots.push(a);
+        self.gm.roots.push(b);
+        let mut ticks: u64 = 0;
+        let mut pairs: u32 = 0;
+        // 0: continue, 1: not equal, 2: no result, 3: all pairs read.
+        let mut state: u32 = 0;
+        let mut data = false;
+        let mut bailed = false;
+        while state == 0 {
+            let n = self.gm.roots.len();
+            if n < 2 {
+                state = 3;
+            } else if pairs >= G_CMP_PAIRS {
+                state = 2;
+            } else if self.gm.roots[n - 2] == self.gm.roots[n - 1] {
+                // One cell is one term, so the pair is equal and the step does not compute it.
+                self.gm.roots.truncate(n - 2);
+            } else {
+                pairs += 1;
+                let x = self.gm.roots[n - 2];
+                let ok = self.ground_loop(Ctl::Force(x), &mut ticks).is_some();
+                let y = self.gm.roots[n - 1];
+                let ok = ok && self.ground_loop(Ctl::Force(y), &mut ticks).is_some();
+                if ok {
+                    // The collector can move the cells, so the step reads them after the two loops.
+                    let x = self.gm.cells[self.gm.roots[n - 2] as usize];
+                    let y = self.gm.cells[self.gm.roots[n - 1] as usize];
+                    self.gm.roots.truncate(n - 2);
+                    state = match (x, y) {
+                        (Slot::Val(v), Slot::Val(w)) => self.g_cmp_vals(v, w),
+                        _ => 2,
+                    };
+                    data = data || !self.gm.roots.is_empty();
+                } else {
+                    bailed = true;
+                    state = 2;
+                }
+            }
+        }
+        if bailed {
+            if self.gm.size() > G_MAX_CELLS {
+                self.gm.clear();
+            } else {
+                self.gm.unwind();
+            }
+        }
+        self.gm.args.truncate(0);
+        self.gm.frames.truncate(0);
+        self.gm.roots.truncate(0);
+        let r = if state == 1 {
+            self.gm.hits += 1;
+            1
+        } else if state == 3 && data {
+            4
+        } else {
+            0
+        };
+        self.c_ground_cmp.put(t.0, s.0, raw(r));
+        r
+    }
+
+    /// One pair of values of `ground_cmp`: 1 if they are not equal, and 0 if the step continues. A pair of constructor applications with the same constructor puts the pairs of fields on `roots`, the last field first, so that the first field is the next pair.
+    fn g_cmp_vals(&mut self, v: GVal, w: GVal) -> u32 {
+        match (v, w) {
+            (GVal::Small(x), GVal::Small(y)) => u32::from(x != y),
+            (GVal::Big(i), GVal::Big(j)) => {
+                u32::from(!self.gm.nats[i as usize].beq(&self.gm.nats[j as usize]))
+            }
+            (GVal::Small(_), GVal::Big(_)) | (GVal::Big(_), GVal::Small(_)) => 1,
+            (GVal::Ctor(c, fs, nf), GVal::Ctor(d, gs, mf)) => {
+                if !self.const_never_proof(c) || !self.const_never_proof(d) {
+                    0
+                } else if c != d {
+                    1
+                } else {
+                    let mut i = nf.min(mf);
+                    while i > 0 {
+                        i -= 1;
+                        let p = self.gm.fields[(fs + i) as usize];
+                        let q = self.gm.fields[(gs + i) as usize];
+                        self.gm.roots.push(p);
+                        self.gm.roots.push(q);
+                    }
+                    0
+                }
+            }
+            _ => 0,
+        }
+    }
+
+    /// The loop of the machine on the term `e`.
     fn ground_run(&mut self, e: ExprId) -> Option<GVal> {
-        let mut c = Ctl::Eval(e, NIL);
+        let mut ticks: u64 = 0;
+        self.ground_loop(Ctl::Eval(e, NIL), &mut ticks)
+    }
+
+    /// The loop of the machine from the control `c0`. `ticks` counts the steps of all the loops of one query, so that the budget and the collector see all of them.
+    fn ground_loop(&mut self, c0: Ctl, ticks: &mut u64) -> Option<GVal> {
+        let mut c = c0;
         let mut out = None;
         let mut go = true;
-        let mut ticks: u64 = 0;
+        let mut tk = *ticks;
         while go {
             c = match c {
                 Ctl::Eval(t, env) => self.g_eval(t, env),
@@ -537,18 +657,19 @@ impl Checker {
                     Ctl::Bail
                 }
             };
-            ticks += 1;
-            if ticks.is_multiple_of(4096) {
+            tk += 1;
+            if tk.is_multiple_of(4096) {
                 if self.gm.size() > self.gm.gc_at.max(G_GC_FIRST)
                     || self.gm.nat_words > self.gm.words_at.max(G_GC_WORDS)
                 {
                     c = self.gm.gc(c);
                 }
-                if ticks > G_MAX_STEPS || self.ground_over() {
+                if tk > G_MAX_STEPS || self.ground_over() {
                     c = Ctl::Bail;
                 }
             }
         }
+        *ticks = tk;
         out
     }
 
@@ -1064,6 +1185,11 @@ impl Ground {
         i = 0;
         while i < self.tmp.len() {
             self.tmp[i] = g.cell(self, self.tmp[i]);
+            i += 1;
+        }
+        i = 0;
+        while i < self.roots.len() {
+            self.roots[i] = g.cell(self, self.roots[i]);
             i += 1;
         }
         i = 0;

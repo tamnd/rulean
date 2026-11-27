@@ -13,7 +13,11 @@ use crate::pin::{PIN_NAT, PIN_STRING};
 use crate::session::S_SUCCESS;
 use crate::tc::{Checker, LBool, to_lbool};
 use crate::trace::Rule;
+
 use rulean_format::Hints;
+
+/// The number of steps of `lazy_delta_reduction` before `ground_cmp` runs.
+const G_CMP_AFTER: u32 = 16;
 
 /// The result of one step of lazy delta reduction (`reduction_status`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -503,10 +507,24 @@ impl Checker {
         let mut s = s0;
         let mut r = LBool::Undef;
         let mut done = false;
+        let mut steps: u32 = 0;
         while !done && !self.bad() {
+            steps += 1;
             let n = self.lazy_delta_nat(t, s);
+            // Engine G: after `G_CMP_AFTER` steps with no result, two closed terms that compute to different data are not equal (spec perf/10). The step does not come first, because engine R shows most equal pairs in a few steps, and engine G computes the full values.
+            let g = if steps == G_CMP_AFTER && n == LBool::Undef {
+                self.ground_cmp(t, s)
+            } else {
+                0
+            };
+            if g == 4 {
+                self.gcmp_block += 1;
+            }
             if n != LBool::Undef {
                 r = n;
+                done = true;
+            } else if g == 1 {
+                r = LBool::False;
                 done = true;
             } else {
                 let (st, t1, s1) = self.lazy_delta_reduction_step(t, s);
@@ -696,11 +714,16 @@ impl Checker {
                 return r == LBool::True;
             }
         }
+        // `lazy_delta_reduction` can block `ground_cmp` for the sub-queries of this query.
+        let block = self.gcmp_block;
         let (r, t_n, s_n) = self.lazy_delta_reduction(t_n, s_n);
-        if r != LBool::Undef {
-            return r == LBool::True;
-        }
-        self.is_def_eq_whnf(t_n, s_n)
+        let out = if r != LBool::Undef {
+            r == LBool::True
+        } else {
+            self.is_def_eq_whnf(t_n, s_n)
+        };
+        self.gcmp_block = block;
+        out
     }
 
     /// The steps of `is_def_eq_core` after lazy delta reduction.

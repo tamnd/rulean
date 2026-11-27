@@ -4,6 +4,17 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.8.10] - 2026-11-27
+
+### Changed
+
+- Engine G reads the operands of a `Nat` operation in place and does not copy them. Karatsuba uses the subtractive form, writes the result in place and starts at 48 limbs. The shifts and `land` do not copy the input, and the schoolbook loop does four rows in one pass. `gf3-matrix-product` uses 15.95 G instructions in place of 17.77 G. Init and Std do not change.
+
+### Documentation
+
+- The spec has the new section perf/10.9 on the large numbers of engine G, with the profile and the measures of each step.
+- The spec has the new section perf/11.10 with the probes on engine R that did not help.
+
 ## [0.8.9] - 2026-11-27
 
 ### Changed
@@ -489,7 +500,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.9...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.10...HEAD
+[0.8.10]: https://github.com/tamnd/rulean/compare/v0.8.9...v0.8.10
 [0.8.9]: https://github.com/tamnd/rulean/compare/v0.8.8...v0.8.9
 [0.8.8]: https://github.com/tamnd/rulean/compare/v0.8.7...v0.8.8
 [0.8.7]: https://github.com/tamnd/rulean/compare/v0.8.6...v0.8.7

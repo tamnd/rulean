@@ -435,6 +435,8 @@ pub struct Checker {
     pub(crate) c_ground_fail: Memo,
     /// The pairs of closed terms of `ground_cmp` in this declaration: 1 if they are not equal, 2 if there is no result.
     pub(crate) c_ground_cmp: Memo,
+    /// Above zero while engine R works on a query in which `ground_cmp` compared data and found no difference. The sub-queries of such a query are parts of the same data, so `ground_cmp` does not run on them, and the time stays linear in the size of the data.
+    pub(crate) gcmp_block: u32,
     /// The state of engine G (spec perf/10).
     pub(crate) gm: crate::ground::Ground,
     /// The session: judgments on frozen closed terms that stay across declarations (spec 08.4).
@@ -523,6 +525,7 @@ impl Checker {
             c_canon: Memo::new(),
             c_ground_fail: Memo::new(),
             c_ground_cmp: Memo::new(),
+            gcmp_block: 0,
             gm: crate::ground::Ground::default(),
             c_whnf_core: Memo::new(),
             c_whnf: Memo::new(),
@@ -582,6 +585,7 @@ impl Checker {
         self.eq_depth = 0;
         self.eager = false;
         self.depth = 0;
+        self.gcmp_block = 0;
         self.rec_depth = 0;
         self.fault = None;
     }

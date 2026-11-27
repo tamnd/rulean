@@ -527,12 +527,14 @@ impl Checker {
     }
 
     /// True if engine G shows that the closed terms `t` and `s` are not definitionally equal (spec perf/10). The step computes the weak head normal form of the two terms, and then the normal forms of the pairs of fields, the first field first, as far as the comparison needs them. Two different `Nat` values are not equal. Two constructor applications of an inductive type that is never a proposition are not equal if the constructors are different, and they are not equal if a pair of their fields is not equal. A pair of other values (a lambda, a type, or a value that can be a proof) does not give a result, and the step goes to the next pair. The step never gives "equal", so a false result only tells engine R to continue. The rivals compute closed data in the same way: rpylean has a closed evaluator, and nano-lean compares values that it computed one time.
-    pub(crate) fn ground_cmp(&mut self, t: ExprId, s: ExprId) -> bool {
-        if t == s || !self.ground_ok(t) || !self.ground_ok(s) {
-            return false;
+    ///
+    /// The result is 1 if the terms are not equal, 4 if the step compared data and found no difference, and 0 for the other cases.
+    pub(crate) fn ground_cmp(&mut self, t: ExprId, s: ExprId) -> u32 {
+        if t == s || self.gcmp_block > 0 || !self.ground_ok(t) || !self.ground_ok(s) {
+            return 0;
         }
         if let Some(x) = self.c_ground_cmp.get(t.0, s.0) {
-            return x == 1;
+            return low(x);
         }
         self.gm.runs += 1;
         self.gm.caches();
@@ -544,6 +546,7 @@ impl Checker {
         let mut pairs: u32 = 0;
         // 0: continue, 1: not equal, 2: no result, 3: all pairs read.
         let mut state: u32 = 0;
+        let mut data = false;
         let mut bailed = false;
         while state == 0 {
             let n = self.gm.roots.len();
@@ -551,6 +554,9 @@ impl Checker {
                 state = 3;
             } else if pairs >= G_CMP_PAIRS {
                 state = 2;
+            } else if self.gm.roots[n - 2] == self.gm.roots[n - 1] {
+                // One cell is one term, so the pair is equal and the step does not compute it.
+                self.gm.roots.truncate(n - 2);
             } else {
                 pairs += 1;
                 let x = self.gm.roots[n - 2];
@@ -566,6 +572,7 @@ impl Checker {
                         (Slot::Val(v), Slot::Val(w)) => self.g_cmp_vals(v, w),
                         _ => 2,
                     };
+                    data = data || !self.gm.roots.is_empty();
                 } else {
                     bailed = true;
                     state = 2;
@@ -582,12 +589,16 @@ impl Checker {
         self.gm.args.truncate(0);
         self.gm.frames.truncate(0);
         self.gm.roots.truncate(0);
-        if state == 1 {
+        let r = if state == 1 {
             self.gm.hits += 1;
-        }
-        self.c_ground_cmp
-            .put(t.0, s.0, if state == 1 { 1 } else { 2 });
-        state == 1
+            1
+        } else if state == 3 && data {
+            4
+        } else {
+            0
+        };
+        self.c_ground_cmp.put(t.0, s.0, raw(r));
+        r
     }
 
     /// One pair of values of `ground_cmp`: 1 if they are not equal, and 0 if the step continues. A pair of constructor applications with the same constructor puts the pairs of fields on `roots`, the last field first, so that the first field is the next pair.
@@ -630,6 +641,7 @@ impl Checker {
         let mut c = c0;
         let mut out = None;
         let mut go = true;
+        let mut tk = *ticks;
         while go {
             c = match c {
                 Ctl::Eval(t, env) => self.g_eval(t, env),
@@ -645,18 +657,19 @@ impl Checker {
                     Ctl::Bail
                 }
             };
-            *ticks += 1;
-            if ticks.is_multiple_of(4096) {
+            tk += 1;
+            if tk.is_multiple_of(4096) {
                 if self.gm.size() > self.gm.gc_at.max(G_GC_FIRST)
                     || self.gm.nat_words > self.gm.words_at.max(G_GC_WORDS)
                 {
                     c = self.gm.gc(c);
                 }
-                if *ticks > G_MAX_STEPS || self.ground_over() {
+                if tk > G_MAX_STEPS || self.ground_over() {
                     c = Ctl::Bail;
                 }
             }
         }
+        *ticks = tk;
         out
     }
 

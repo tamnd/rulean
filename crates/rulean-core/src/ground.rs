@@ -136,6 +136,27 @@ struct CEntry {
     cell: u32,
 }
 
+/// An argument of an application record: a variable (its index and its term), an open term, or a closed term.
+#[derive(Clone, Copy, Debug)]
+enum GArg {
+    Var(u32, ExprId),
+    Open(ExprId),
+    Closed(ExprId),
+}
+
+/// An entry of the cache of application records: the term, the generation of `codes`, the head, and the arguments `start .. start + n` of `codes`, the last argument first.
+#[derive(Clone, Copy, Debug)]
+struct ARec {
+    key: ExprId,
+    cgen: u32,
+    head: ExprId,
+    start: u32,
+    n: u32,
+}
+
+/// The number of argument entries in `codes` at which the records start again.
+const G_MAX_CODES: usize = 1 << 20;
+
 /// The number of entries of the direct-mapped caches.
 const CACHE_BITS: u32 = 12;
 
@@ -170,6 +191,12 @@ pub struct Ground {
     ccache: Vec<CEntry>,
     /// A direct-mapped cache of the cells of the closed arguments, in front of `caf`: the term, the generation and the cell.
     acache: Vec<(ExprId, u32, u32)>,
+    /// The application records (spec perf/10, G5): the kinds of the arguments of each application, found one time. `ccells` keeps the cell of each closed argument and the generation of the heap of the cell.
+    apcache: Vec<ARec>,
+    codes: Vec<GArg>,
+    ccells: Vec<(u32, u32)>,
+    /// The generation of `codes`. A clear of `codes` starts a new one.
+    cgen: u32,
     /// The epoch of the declaration, and the generation of the heap. A clear starts a new epoch and a new generation, and a collection starts a new generation.
     epoch: u32,
     hgen: u32,
@@ -265,6 +292,9 @@ impl Ground {
             + self.caf.bytes()
             + self.ccache.capacity() * core::mem::size_of::<CEntry>()
             + self.acache.capacity() * 12
+            + self.apcache.capacity() * core::mem::size_of::<ARec>()
+            + self.codes.capacity() * core::mem::size_of::<GArg>()
+            + self.ccells.capacity() * 8
     }
 
     /// Makes the caches, the first time.
@@ -281,6 +311,13 @@ impl Ground {
                     cell: 0,
                 });
                 self.acache.push((ExprId(0), u32::MAX, 0));
+                self.apcache.push(ARec {
+                    key: ExprId(0),
+                    cgen: u32::MAX,
+                    head: ExprId(0),
+                    start: 0,
+                    n: 0,
+                });
                 i += 1;
             }
         }
@@ -292,6 +329,9 @@ impl Ground {
         self.hgen = self.hgen.wrapping_add(1) & 0x7fff_ffff;
         self.caf.clear();
         self.caf_keys = Vec::new();
+        self.codes = Vec::new();
+        self.ccells = Vec::new();
+        self.cgen = self.cgen.wrapping_add(1) & 0x7fff_ffff;
         self.gc_at = G_GC_FIRST;
         self.nat_words = 0;
         self.words_at = G_GC_WORDS;
@@ -713,16 +753,11 @@ impl Checker {
 
     fn g_eval(&mut self, t: ExprId, env: u32) -> Ctl {
         match self.st.node(t) {
-            Expr::BVar(i) => match self.gm.env_get(env, i) {
-                Some(c) => Ctl::Force(c),
-                None => Ctl::Bail,
-            },
+            Expr::BVar(i) => self.g_var(env, i),
             Expr::App(..) => self.g_app(t, env),
             Expr::Lam(b) => {
                 if self.gm.avail() > 0 {
-                    let a = self.gm.pop_arg();
-                    let env2 = self.gm.env_push(env, a);
-                    Ctl::Eval(b.body, env2)
+                    self.g_beta(b.body, env)
                 } else {
                     Ctl::Ret(GVal::Clo(t, env))
                 }
@@ -744,21 +779,111 @@ impl Checker {
         }
     }
 
-    /// An application: the arguments go on the stack, the last one first, and the head is next.
-    fn g_app(&mut self, t: ExprId, env: u32) -> Ctl {
+    /// The variable `i` of the environment. A cell with a value gives the value in the same step.
+    fn g_var(&mut self, env: u32, i: u32) -> Ctl {
+        match self.gm.env_get(env, i) {
+            Some(c) => self.g_force(c),
+            None => Ctl::Bail,
+        }
+    }
+
+    /// The body of a lambda, with the top argument for its variable. The lambdas of the body take the next arguments in the same step, while there are arguments above the base.
+    fn g_beta(&mut self, body: ExprId, env: u32) -> Ctl {
+        let a = self.gm.pop_arg();
+        let mut e = self.gm.env_push(env, a);
+        let mut t = body;
+        let mut go = true;
+        while go {
+            go = false;
+            if self.gm.avail() > 0
+                && let Expr::Lam(b) = self.st.node(t)
+            {
+                let a2 = self.gm.pop_arg();
+                e = self.gm.env_push(e, a2);
+                t = b.body;
+                go = true;
+            }
+        }
+        Ctl::Eval(t, e)
+    }
+
+    /// The record of the application `t`, from the cache or new: the head, and the start and the number of its arguments in `codes`.
+    fn app_rec(&mut self, t: ExprId) -> (ExprId, u32, u32) {
+        let i = cache_index(t);
+        let r = self.gm.apcache[i];
+        if r.key == t && r.cgen == self.gm.cgen {
+            return (r.head, r.start, r.n);
+        }
+        if self.gm.codes.len() > G_MAX_CODES {
+            self.gm.codes.truncate(0);
+            self.gm.ccells.truncate(0);
+            self.gm.cgen = self.gm.cgen.wrapping_add(1);
+        }
+        let start = self.gm.codes.len() as u32;
         let mut f = t;
         let mut go = true;
         while go {
             match self.st.node(f) {
                 Expr::App(g, a) => {
-                    let c = self.g_arg(a, env);
-                    self.gm.args.push(c);
+                    let k = match self.st.node(a) {
+                        Expr::BVar(j) => GArg::Var(j, a),
+                        _ => {
+                            if expr::has_loose_bvars(&self.st, a) {
+                                GArg::Open(a)
+                            } else {
+                                GArg::Closed(a)
+                            }
+                        }
+                    };
+                    self.gm.codes.push(k);
+                    self.gm.ccells.push((u32::MAX, 0));
                     f = g;
                 }
                 _ => go = false,
             }
         }
-        Ctl::Eval(f, env)
+        let n = self.gm.codes.len() as u32 - start;
+        self.gm.apcache[i] = ARec {
+            key: t,
+            cgen: self.gm.cgen,
+            head: f,
+            start,
+            n,
+        };
+        (f, start, n)
+    }
+
+    /// An application: the arguments go on the stack, the last one first, and the head is next. The kinds of the arguments come from the record of the application. A head that is a constant or a variable is done in the same step.
+    fn g_app(&mut self, t: ExprId, env: u32) -> Ctl {
+        let (f, start, n) = self.app_rec(t);
+        let mut j = start;
+        let end = start + n;
+        while j < end {
+            let c = match self.gm.codes[j as usize] {
+                GArg::Var(i, a) => match self.gm.env_get(env, i) {
+                    Some(c) => c,
+                    None => self.gm.cell(Slot::Thunk(a, env)),
+                },
+                GArg::Open(a) => self.gm.cell(Slot::Thunk(a, env)),
+                GArg::Closed(a) => {
+                    let (g, c) = self.gm.ccells[j as usize];
+                    if g == self.gm.hgen {
+                        c
+                    } else {
+                        let c2 = self.g_arg(a, env);
+                        self.gm.ccells[j as usize] = (self.gm.hgen, c2);
+                        c2
+                    }
+                }
+            };
+            self.gm.args.push(c);
+            j += 1;
+        }
+        match self.st.node(f) {
+            Expr::Const(..) => self.g_const(f),
+            Expr::BVar(i) => self.g_var(env, i),
+            _ => Ctl::Eval(f, env),
+        }
     }
 
     fn g_lit(&mut self, n: NatId) -> GVal {
@@ -768,7 +893,7 @@ impl Checker {
 
     fn g_force(&mut self, c: u32) -> Ctl {
         match self.gm.cells[c as usize] {
-            Slot::Val(v) => Ctl::Ret(v),
+            Slot::Val(v) => self.g_ret(v),
             Slot::Busy(..) => Ctl::Bail,
             Slot::Thunk(t, env) => {
                 self.gm.cells[c as usize] = Slot::Busy(t, env);
@@ -809,11 +934,7 @@ impl Checker {
     fn g_apply(&mut self, v: GVal) -> Ctl {
         match v {
             GVal::Clo(lam, env) => match self.st.node(lam) {
-                Expr::Lam(b) => {
-                    let a = self.gm.pop_arg();
-                    let env2 = self.gm.env_push(env, a);
-                    Ctl::Eval(b.body, env2)
-                }
+                Expr::Lam(b) => self.g_beta(b.body, env),
                 _ => Ctl::Bail,
             },
             GVal::Pap(c, start, n) => {
@@ -930,12 +1051,12 @@ impl Checker {
             CKind::Defn(s, value) => {
                 let e2 = self.gm.ccache[i];
                 if e2.key == t && e2.hgen == self.gm.hgen {
-                    return Ctl::Force(e2.cell);
+                    return self.g_force(e2.cell);
                 }
                 let c = self.g_caf(s, value);
                 self.gm.ccache[i].hgen = self.gm.hgen;
                 self.gm.ccache[i].cell = c;
-                Ctl::Force(c)
+                self.g_force(c)
             }
             CKind::Type => Ctl::Ret(GVal::Type),
             CKind::Ctor(n, np, nf) => self.g_ctor(t, n, np, nf),

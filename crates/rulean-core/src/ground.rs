@@ -1490,9 +1490,9 @@ impl Ground {
             efwd: alloc::vec![NIL; self.envs.len()],
             ffwd: alloc::vec![NIL; self.fields.len()],
             nfwd: alloc::vec![NIL; self.nats.len()],
-            cells: Vec::with_capacity(self.cells.len() / 2 + 16),
-            envs: Vec::with_capacity(self.envs.len() / 2 + 16),
-            fields: Vec::with_capacity(self.fields.len() / 2 + 16),
+            cells: Vec::with_capacity(self.cells.len() + 16),
+            envs: Vec::with_capacity(self.envs.len() + 16),
+            fields: Vec::with_capacity(self.fields.len() + 16),
             nats: Vec::new(),
             words: 0,
         };

@@ -230,4 +230,19 @@ The same profile shows that the session drops 8.3 M pending entries and stores 0
 
 The step of the memory of Init between 4% and 6.25% is one growth of the session table, and the table stays below its limit of 128 MiB. No perf test is slower with 10%, and gf3 goes from 16.4 G to 15.9 G. The slower gf3 of 11.16 was measured before #248 and #250. PR #251 sets the budget to 10%.
 
+## 11.18 Pairs that the quick check finds known
+
+`quick_is_def_eq` gives true at once for a pair that is alpha-equal or in a success cache. Before #254, `is_def_eq` then put the pair in the declaration cache and noted it in the session again. This work had no benefit, because the quick check finds the pair again with no work. PR #254 adds the field `known_pair`. The quick check sets it to the pair that it finds known, and `is_def_eq` clears it before each query. `is_def_eq` does not put the marked pair in the caches.
+
+Three variants give these counts with engine R:
+
+| Variant | Init | Std |
+|---|---|---|
+| #251, no mark | 90.8 G | 159.8 G |
+| Mark only the cache hits | 91.1 G | 160.5 G |
+| Mark only the alpha-equal pairs | 88.6 G | 156.2 G |
+| Mark both (#254) | 87.8 G | 156.2 G |
+
+Most of the gain comes from the alpha-equal pairs. A pair that is alpha-equal is no longer in the session cache, so the pre-check of engine F does not find it, and engine F gets the query. The confirm run gives 428 engine F queries instead of 360. All 413 equal results are confirmed by engine R, and the run has 0 differences.
+
 The goal of M9 for Init is at most 80 G.

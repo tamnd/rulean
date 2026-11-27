@@ -105,6 +105,41 @@ enum Ctl {
     Bail,
 }
 
+/// A constant, resolved for `g_const`.
+#[derive(Clone, Copy, Debug)]
+enum CKind {
+    Succ,
+    Zero,
+    /// A binary `Nat` operation, with its index in `nat_ops`.
+    NatOp(u32),
+    /// A definition or a theorem: the slot and the value.
+    Defn(u32, ExprId),
+    Type,
+    /// A constructor: the name, the parameters and the fields.
+    Ctor(NameId, u32, u32),
+    /// A recursor that engine G can reduce: the slot and the index of the major premise.
+    Rec(u32, u32),
+    Quot(NameId),
+    Bail,
+}
+
+/// An entry of the constant cache. `kind` is good while `epoch` is the epoch of the declaration, and `cell` is good while `hgen` is the generation of the heap.
+#[derive(Clone, Copy, Debug)]
+struct CEntry {
+    key: ExprId,
+    epoch: u32,
+    hgen: u32,
+    kind: CKind,
+    cell: u32,
+}
+
+/// The number of entries of the direct-mapped caches.
+const CACHE_BITS: u32 = 12;
+
+fn cache_index(e: ExprId) -> usize {
+    (u64::from(low(e.0)).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> (64 - CACHE_BITS)) as usize
+}
+
 /// The state of engine G. The arrays are empty between two runs.
 #[derive(Debug, Default)]
 pub struct Ground {
@@ -126,6 +161,13 @@ pub struct Ground {
     words_at: usize,
     /// The collections.
     pub gcs: u64,
+    /// A direct-mapped cache of the constants, in front of the environment and `caf`.
+    ccache: Vec<CEntry>,
+    /// A direct-mapped cache of the cells of the closed arguments, in front of `caf`: the term, the generation and the cell.
+    acache: Vec<(ExprId, u32, u32)>,
+    /// The epoch of the declaration, and the generation of the heap. A clear starts a new epoch and a new generation, and a collection starts a new generation.
+    epoch: u32,
+    hgen: u32,
     /// The runs, and the runs that gave a result.
     pub runs: u64,
     pub hits: u64,
@@ -140,10 +182,33 @@ impl Ground {
             + self.frames.capacity() * core::mem::size_of::<FrameAt>()
             + self.nats.capacity() * core::mem::size_of::<Nat>()
             + self.caf.bytes()
+            + self.ccache.capacity() * core::mem::size_of::<CEntry>()
+            + self.acache.capacity() * 12
+    }
+
+    /// Makes the caches, the first time.
+    fn caches(&mut self) {
+        if self.ccache.len() == 0 {
+            let n = 1usize << CACHE_BITS;
+            let mut i = 0;
+            while i < n {
+                self.ccache.push(CEntry {
+                    key: ExprId(0),
+                    epoch: u32::MAX,
+                    hgen: u32::MAX,
+                    kind: CKind::Bail,
+                    cell: 0,
+                });
+                self.acache.push((ExprId(0), u32::MAX, 0));
+                i += 1;
+            }
+        }
     }
 
     /// Empties the arrays. A large array is given back to the allocator.
     pub(crate) fn clear(&mut self) {
+        self.epoch = self.epoch.wrapping_add(1) & 0x7fff_ffff;
+        self.hgen = self.hgen.wrapping_add(1) & 0x7fff_ffff;
         self.caf.clear();
         self.caf_keys = Vec::new();
         self.gc_at = G_GC_FIRST;
@@ -303,6 +368,7 @@ impl Checker {
             return Some(ExprId(w));
         }
         self.gm.runs += 1;
+        self.gm.caches();
         let v = self.ground_run(e);
         let r = match v {
             Some(GVal::Small(x)) => Some(self.mk_nat(Nat::from_u64(x))),
@@ -435,14 +501,21 @@ impl Checker {
         if expr::has_loose_bvars(&self.st, a) {
             return self.gm.cell(Slot::Thunk(a, env));
         }
-        match self.gm.caf.get(a.0, 1) {
+        let i = cache_index(a);
+        let (k, g, c) = self.gm.acache[i];
+        if k == a && g == self.gm.hgen {
+            return c;
+        }
+        let c = match self.gm.caf.get(a.0, 1) {
             Some(c) => low(c),
             None => {
                 let c = self.gm.cell(Slot::Thunk(a, NIL));
                 self.gm.caf_put(a.0, 1, c);
                 c
             }
-        }
+        };
+        self.gm.acache[i] = (a, self.gm.hgen, c);
+        c
     }
 
     fn g_eval(&mut self, t: ExprId, env: u32) -> Ctl {
@@ -565,72 +638,124 @@ impl Checker {
         Ctl::Ret(GVal::Pap(t, start, n))
     }
 
-    /// A constant applied to the arguments above the base.
-    fn g_const(&mut self, t: ExprId) -> Ctl {
+    /// What `g_const` does with the constant `t`, from the environment.
+    fn g_resolve(&mut self, t: ExprId) -> CKind {
         let (n, ls) = match self.st.node(t) {
             Expr::Const(n, ls) => (n, ls),
-            _ => return Ctl::Bail,
+            _ => return CKind::Bail,
         };
-        let avail = self.gm.avail();
         if n == self.b.nat_succ {
-            if avail == 0 {
-                return self.g_pap(t);
-            }
-            let a = self.gm.pop_arg();
-            self.gm.frame(Frame::Nat1(OP_SUCC, a));
-            return Ctl::Force(a);
+            return CKind::Succ;
         }
         if n == self.b.nat_zero {
-            return Ctl::Ret(GVal::Small(0));
+            return CKind::Zero;
         }
         let op = self.nat_op_name_index(n);
         if op < self.b.nat_op_names.len() {
-            if avail < 2 {
-                return self.g_pap(t);
-            }
-            let a = self.gm.pop_arg();
-            let b = self.gm.pop_arg();
-            self.gm.frame(Frame::Nat1(op as u32, b));
-            return Ctl::Force(a);
+            return CKind::NatOp(op as u32);
         }
         let s = self.env.find(n);
         if s == 0 {
-            return Ctl::Bail;
+            return CKind::Bail;
         }
         let nls = self.st.level_list_items(ls).len();
         let c = self.env.at(s);
         let lps_ok = nls == c.lparams.len();
         match &c.kind {
-            ConstKind::Defn { value, .. } | ConstKind::Thm { value } => {
-                if lps_ok {
-                    let value = *value;
-                    let c = match self.gm.caf.get(raw(s), 0) {
-                        Some(c) => low(c),
-                        None => {
-                            let c = self.gm.cell(Slot::Thunk(value, NIL));
-                            self.gm.caf_put(raw(s), 0, c);
-                            c
-                        }
-                    };
-                    Ctl::Force(c)
-                } else {
-                    Ctl::Bail
+            ConstKind::Defn { value, .. } | ConstKind::Thm { value } if lps_ok => {
+                CKind::Defn(s, *value)
+            }
+            ConstKind::Induct(_) => CKind::Type,
+            ConstKind::Ctor(ci) => CKind::Ctor(n, ci.nparams, ci.nfields),
+            ConstKind::Rec(_) if lps_ok => self.g_resolve_rec(s),
+            ConstKind::Quot { .. } => CKind::Quot(n),
+            _ => CKind::Bail,
+        }
+    }
+
+    /// A recursor that engine G can reduce: not K-like, and with a major premise that is not a proof when `no_whnf_prop_major` is on.
+    fn g_resolve_rec(&mut self, s: u32) -> CKind {
+        let r = match self.rec_shape(s) {
+            Some(r) => r,
+            None => return CKind::Bail,
+        };
+        if r.k || (self.flags.no_whnf_prop_major && !self.major_not_prop(s, r.major_idx)) {
+            return CKind::Bail;
+        }
+        CKind::Rec(s, r.major_idx)
+    }
+
+    /// The cell of the value of the definition of the slot.
+    fn g_caf(&mut self, s: u32, value: ExprId) -> u32 {
+        match self.gm.caf.get(raw(s), 0) {
+            Some(c) => low(c),
+            None => {
+                let c = self.gm.cell(Slot::Thunk(value, NIL));
+                self.gm.caf_put(raw(s), 0, c);
+                c
+            }
+        }
+    }
+
+    /// A constant applied to the arguments above the base.
+    fn g_const(&mut self, t: ExprId) -> Ctl {
+        let i = cache_index(t);
+        let ent = self.gm.ccache[i];
+        let kind = if ent.key == t && ent.epoch == self.gm.epoch {
+            ent.kind
+        } else {
+            let k = self.g_resolve(t);
+            self.gm.ccache[i] = CEntry {
+                key: t,
+                epoch: self.gm.epoch,
+                hgen: u32::MAX,
+                kind: k,
+                cell: 0,
+            };
+            k
+        };
+        let avail = self.gm.avail();
+        match kind {
+            CKind::Succ => {
+                if avail == 0 {
+                    return self.g_pap(t);
                 }
+                let a = self.gm.pop_arg();
+                self.gm.frame(Frame::Nat1(OP_SUCC, a));
+                Ctl::Force(a)
             }
-            ConstKind::Induct(_) => Ctl::Ret(GVal::Type),
-            ConstKind::Ctor(ci) => {
-                let (np, nf) = (ci.nparams, ci.nfields);
-                self.g_ctor(t, n, np, nf)
-            }
-            ConstKind::Rec(_) => {
-                if lps_ok {
-                    self.g_rec(t, s)
-                } else {
-                    Ctl::Bail
+            CKind::Zero => Ctl::Ret(GVal::Small(0)),
+            CKind::NatOp(op) => {
+                if avail < 2 {
+                    return self.g_pap(t);
                 }
+                let a = self.gm.pop_arg();
+                let b = self.gm.pop_arg();
+                self.gm.frame(Frame::Nat1(op, b));
+                Ctl::Force(a)
             }
-            ConstKind::Quot { .. } => self.g_quot_const(t, n),
-            ConstKind::Axiom | ConstKind::Opaque { .. } => Ctl::Bail,
+            CKind::Defn(s, value) => {
+                let e2 = self.gm.ccache[i];
+                if e2.key == t && e2.hgen == self.gm.hgen {
+                    return Ctl::Force(e2.cell);
+                }
+                let c = self.g_caf(s, value);
+                self.gm.ccache[i].hgen = self.gm.hgen;
+                self.gm.ccache[i].cell = c;
+                Ctl::Force(c)
+            }
+            CKind::Type => Ctl::Ret(GVal::Type),
+            CKind::Ctor(n, np, nf) => self.g_ctor(t, n, np, nf),
+            CKind::Rec(s, major_idx) => {
+                if avail <= major_idx {
+                    return self.g_pap(t);
+                }
+                let m = self.gm.arg_at(major_idx);
+                self.gm.frame(Frame::Rec(s));
+                Ctl::Force(m)
+            }
+            CKind::Quot(n) => self.g_quot_const(t, n),
+            CKind::Bail => Ctl::Bail,
         }
     }
 
@@ -641,26 +766,6 @@ impl Checker {
         self.gm.drop_top(np);
         let start = self.gm.pop_fields(nf);
         Ctl::Ret(GVal::Ctor(n, start, nf))
-    }
-
-    /// A recursor: the major premise is forced, and `g_iota` takes the rule.
-    fn g_rec(&mut self, t: ExprId, slot: u32) -> Ctl {
-        let r = match self.rec_shape(slot) {
-            Some(r) => r,
-            None => return Ctl::Bail,
-        };
-        if r.k {
-            return Ctl::Bail;
-        }
-        if self.gm.avail() <= r.major_idx {
-            return self.g_pap(t);
-        }
-        if self.flags.no_whnf_prop_major && !self.major_not_prop(slot, r.major_idx) {
-            return Ctl::Bail;
-        }
-        let m = self.gm.arg_at(r.major_idx);
-        self.gm.frame(Frame::Rec(slot));
-        Ctl::Force(m)
     }
 
     /// The rule of the recursor of the slot for the major premise `v`. The arguments of the recursor are on the stack.
@@ -919,6 +1024,7 @@ impl Ground {
             self.caf.put(a, b, raw(x));
             i += 1;
         }
+        self.hgen = self.hgen.wrapping_add(1) & 0x7fff_ffff;
         let live = self.size();
         self.gc_at = live * 2;
         self.words_at = self.nat_words * 2;

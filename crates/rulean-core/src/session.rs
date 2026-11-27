@@ -379,7 +379,7 @@ impl Checker {
         let stamp = self.sess_cut();
         let mut budget = self.st.scratch_total() / 10;
         let mut lbudget = self.st.scratch_total() / LOCAL_SHARE;
-        let mut map = Memo::new();
+        let mut map = self.take_pmap();
         let saved = self.st.uses_scratch();
         self.st.set_scratch(false);
         let mut i = 0;
@@ -433,6 +433,7 @@ impl Checker {
             i += 1;
         }
         self.st.set_scratch(saved);
+        self.pmap = Some(map);
         let mut pending = pending;
         pending.truncate(0);
         self.sess.pending = pending;
@@ -466,6 +467,17 @@ impl Checker {
         }
     }
 
+    /// The map of `promote`, empty. The caller gives it back in `pmap`.
+    fn take_pmap(&mut self) -> Memo {
+        match self.pmap.take() {
+            Some(mut m) => {
+                m.clear();
+                m
+            }
+            None => Memo::new(),
+        }
+    }
+
     /// A frozen copy of `e` with its free variables, or the dummy term.
     fn keep(&mut self, e: ExprId, map: &mut Memo, budget: &mut usize) -> ExprId {
         if e.tier() != Tier::Scratch {
@@ -486,7 +498,8 @@ impl Checker {
         fvars: bool,
     ) -> Option<ExprId> {
         // An explicit stack, because a term can be deep. A node is pushed once to copy its fields and once more to build it.
-        let mut stack: Vec<(ExprId, bool)> = Vec::new();
+        let mut stack = core::mem::take(&mut self.pstack);
+        stack.truncate(0);
         stack.push((e, false));
         let mut ok = true;
         while ok && stack.len() > 0 {
@@ -502,6 +515,7 @@ impl Checker {
                 }
             }
         }
+        self.pstack = stack;
         if !ok {
             return None;
         }

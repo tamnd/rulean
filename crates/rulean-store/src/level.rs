@@ -199,6 +199,17 @@ impl Store {
         &self.list_items[span.start..span.start + span.len]
     }
 
+    /// Puts the items of a level list in `out` in place of its old items. A vector that the caller keeps has its capacity, so this makes no allocation (spec perf/04.3 A9).
+    pub fn level_list_into(&self, l: LevelListId, out: &mut Vec<LevelId>) {
+        let span = self.list_spans[l.0 as usize];
+        out.truncate(0);
+        let mut i = 0;
+        while i < span.len {
+            out.push(self.list_items[span.start + i]);
+            i += 1;
+        }
+    }
+
     /// A copy of the items of a level list.
     pub fn level_list_vec(&self, l: LevelListId) -> Vec<LevelId> {
         let span = self.list_spans[l.0 as usize];

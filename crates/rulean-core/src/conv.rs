@@ -300,9 +300,10 @@ impl Checker {
             let ty = self.env.at(slot).ty;
             match self.bvar_codomain_sort(ty) {
                 Some(l) => {
-                    let ls = self.st.level_list_vec(us);
+                    let ls = self.take_levels(us);
                     let cst = self.env.at(slot);
                     let l2 = level::instantiate(&mut self.st, l, &cst.lparams, &ls);
+                    self.give_levels(ls);
                     level::is_not_zero(&self.st, l2)
                 }
                 None => false,

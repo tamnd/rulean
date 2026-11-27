@@ -337,12 +337,30 @@ impl Checker {
         }
     }
 
-    /// `inductive_reduce_rec`.
+    /// `inductive_reduce_rec`. The argument vectors come from `vpool`.
     fn inductive_reduce_rec(
         &mut self,
         e: ExprId,
         cheap_rec: bool,
         cheap_proj: bool,
+    ) -> Option<ExprId> {
+        let mut rec_args = self.take_vec();
+        let mut major_args = self.take_vec();
+        let r =
+            self.inductive_reduce_rec_in(e, cheap_rec, cheap_proj, &mut rec_args, &mut major_args);
+        self.give_vec(rec_args);
+        self.give_vec(major_args);
+        r
+    }
+
+    /// The body of `inductive_reduce_rec`. The caller gives two empty vectors.
+    fn inductive_reduce_rec_in(
+        &mut self,
+        e: ExprId,
+        cheap_rec: bool,
+        cheap_proj: bool,
+        rec_args: &mut Vec<ExprId>,
+        major_args: &mut Vec<ExprId>,
     ) -> Option<ExprId> {
         let rec_fn = expr::app_fn(&self.st, e);
         let (rn, rls) = match self.st.node(rec_fn) {
@@ -357,8 +375,7 @@ impl Checker {
             Some(r) => r,
             None => return None,
         };
-        let mut rec_args: Vec<ExprId> = Vec::new();
-        expr::app_args(&self.st, e, &mut rec_args);
+        expr::app_args(&self.st, e, rec_args);
         let major_idx = r.major_idx as usize;
         if major_idx >= rec_args.len() {
             return None;
@@ -399,8 +416,7 @@ impl Checker {
             Some(x) => x,
             None => return None,
         };
-        let mut major_args: Vec<ExprId> = Vec::new();
-        expr::app_args(&self.st, major, &mut major_args);
+        expr::app_args(&self.st, major, major_args);
         let nfields = rule.nfields as usize;
         if nfields > major_args.len() {
             return None;
@@ -489,6 +505,20 @@ impl Checker {
         sname: NameId,
         idx: u32,
     ) -> Option<ExprId> {
+        let mut args = self.take_vec();
+        let r = self.reduce_proj_core_in(c0, sname, idx, &mut args);
+        self.give_vec(args);
+        r
+    }
+
+    /// The body of `reduce_proj_core`. The caller gives an empty vector.
+    fn reduce_proj_core_in(
+        &mut self,
+        c0: ExprId,
+        sname: NameId,
+        idx: u32,
+        args: &mut Vec<ExprId>,
+    ) -> Option<ExprId> {
         let mut c = c0;
         if let Some(s) = self.string_lit(c)
             && self.pin_on(PIN_STRING)
@@ -499,8 +529,7 @@ impl Checker {
                 return None;
             }
         }
-        let mut args: Vec<ExprId> = Vec::new();
-        let mk = expr::app_args(&self.st, c, &mut args);
+        let mk = expr::app_args(&self.st, c, args);
         let n = match self.st.node(mk) {
             Expr::Const(n, _) => n,
             _ => return None,
@@ -692,9 +721,10 @@ impl Checker {
                     return Some(ExprId(r));
                 }
             }
-            // The levels are read only on a miss of both caches, because `level_list_vec` makes a new vector (spec perf/04.3 A9).
-            let ls = self.st.level_list_vec(list);
+            // The levels go into a vector of `lpool`, so a miss of both caches makes no allocation (spec perf/04.3 A9).
+            let ls = self.take_levels(list);
             let r = self.instantiate_value_lparams(d, &ls);
+            self.give_levels(ls);
             self.c_unfold.put(e.0, 0, r.0);
             if key && !self.bad() {
                 self.sess.note(S_UNFOLD, e.0, 0, r.0);
@@ -711,9 +741,12 @@ impl Checker {
             let f0 = expr::app_fn(&self.st, e);
             match self.unfold_definition_core(f0) {
                 Some(f) => {
-                    let mut rev: Vec<ExprId> = Vec::new();
-                    expr::app_rev_args(&self.st, e, &mut rev);
-                    Some(expr::mk_rev_app(&mut self.st, f, &rev))
+                    // The arguments go on `estk`, so this makes no allocation (spec perf/04.3 A9).
+                    let base = self.estk.len();
+                    expr::app_rev_args_push(&self.st, e, &mut self.estk);
+                    let r = expr::mk_rev_app(&mut self.st, f, &self.estk[base..]);
+                    self.estk.truncate(base);
+                    Some(r)
                 }
                 None => None,
             }

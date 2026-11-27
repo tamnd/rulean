@@ -640,12 +640,19 @@ impl Checker {
             _ => return self.f_infer_r(c, e, infer_only),
         };
         let cslot = self.env.find(ctor);
-        let ls = self.st.level_list_vec(us);
-        let is_prop_type = match self.f_struct_prop(slot, np + ni, &ls) {
+        // The levels are used only here, so the vector goes back to `lpool` before the walk (spec perf/04.3 A9).
+        let ls = self.take_levels(us);
+        let prop = self.f_struct_prop(slot, np + ni, &ls);
+        let t = if cslot != 0 && prop.is_some() {
+            self.instantiate_type_lparams(cslot, &ls)
+        } else {
+            self.dummy
+        };
+        self.give_levels(ls);
+        let is_prop_type = match prop {
             Some(b) if cslot != 0 => b,
             _ => return self.f_infer_r(c, e, infer_only),
         };
-        let t = self.instantiate_type_lparams(cslot, &ls);
         let mut v = self.f_eval(ROOT, t);
         let mut ok = true;
         let mut i = 0;

@@ -30,6 +30,8 @@ pub struct Scratch {
     occ: Lossy,
     lps: Lossy,
     eq: Lossy,
+    /// The new levels of a constant in `instantiate_lparams`. A constant has no subterm, so the walk does not use this vector again while it fills it.
+    lvls: Vec<LevelId>,
 }
 
 impl Scratch {
@@ -42,6 +44,7 @@ impl Scratch {
             occ: Lossy::new(),
             lps: Lossy::new(),
             eq: Lossy::new(),
+            lvls: Vec::new(),
         }
     }
 }
@@ -446,18 +449,20 @@ fn lps_node(st: &mut Store, x: &mut Scratch, e: ExprId, ps: &[NameId], ls: &[Lev
             if l2 == l { e } else { st.mk_sort(l2) }
         }
         Expr::Const(n, list) => {
-            let items = st.level_list_vec(list);
-            let mut out: Vec<LevelId> = Vec::with_capacity(items.len());
+            // The items are read one at a time, and the new levels go into `x.lvls`, so this makes no allocation (spec perf/04.3 A9).
+            let len = st.level_list_items(list).len();
+            x.lvls.truncate(0);
             let mut changed = false;
             let mut i = 0;
-            while i < items.len() {
-                let l2 = level::instantiate(st, items[i], ps, ls);
-                changed = changed || l2 != items[i];
-                out.push(l2);
+            while i < len {
+                let l1 = st.level_list_items(list)[i];
+                let l2 = level::instantiate(st, l1, ps, ls);
+                changed = changed || l2 != l1;
+                x.lvls.push(l2);
                 i += 1;
             }
             if changed {
-                let list2 = st.level_list(&out);
+                let list2 = st.level_list(&x.lvls);
                 st.mk_const(n, list2)
             } else {
                 e

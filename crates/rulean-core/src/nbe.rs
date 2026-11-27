@@ -878,7 +878,7 @@ impl Checker {
     }
 
     /// True if the type of the major premise of the recursor of the slot is an inductive type that is never in `Prop`.
-    fn major_not_prop(&mut self, slot: u32, major_idx: u32) -> bool {
+    pub(crate) fn major_not_prop(&mut self, slot: u32, major_idx: u32) -> bool {
         let mut t = self.env.at(slot).ty;
         let mut i = 0;
         while i < major_idx {
@@ -1290,13 +1290,13 @@ enum NatV {
 }
 
 /// A result of `small_op`.
-enum SmallOut {
+pub(crate) enum SmallOut {
     Num(u64),
     Bool(bool),
 }
 
 /// The binary operation `op` of `reduce_nat` on two inline numbers below `SMALL_NAT_LIMIT`, with machine arithmetic. It gives `None` when the result does not fit in a `u64`, and for `Nat.pow` and `Nat.shiftLeft`, which check a count first. Then the operation of engine R computes the result. The rules are the rules of `Nat`: `x - y` is 0 when `y > x`, `x / 0` is 0 and `x % 0` is `x`.
-fn small_op(op: usize, x: u64, y: u64) -> Option<SmallOut> {
+pub(crate) fn small_op(op: usize, x: u64, y: u64) -> Option<SmallOut> {
     match op {
         NAT_ADD => Some(SmallOut::Num(x + y)),
         NAT_SUB => Some(SmallOut::Num(x.saturating_sub(y))),

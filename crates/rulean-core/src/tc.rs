@@ -431,6 +431,10 @@ pub struct Checker {
     pub(crate) c_lps_owner: Memo,
     /// The keys of `c_infer`, `c_whnf_core` and `c_whnf`. The C++ kernel keys these caches with `is_equal`, so terms that are equal up to binder names and binder info share one entry. Key (term, 0) is the first equal term that the checker saw (`canon`). Key (hash, 2) is the last term of the chain of terms with this hash, and key (term, 1) is the next term of the chain.
     pub(crate) c_canon: Memo,
+    /// The closed terms on which engine G bailed in this declaration.
+    pub(crate) c_ground_fail: Memo,
+    /// The state of engine G (spec perf/10).
+    pub(crate) gm: crate::ground::Ground,
     /// The session: judgments on frozen closed terms that stay across declarations (spec 08.4).
     pub sess: Session,
     /// `m_eager_reduce`.
@@ -515,6 +519,8 @@ impl Checker {
             scope: Vec::new(),
             c_infer: Memo::new(),
             c_canon: Memo::new(),
+            c_ground_fail: Memo::new(),
+            gm: crate::ground::Ground::default(),
             c_whnf_core: Memo::new(),
             c_whnf: Memo::new(),
             c_unfold: Memo::new(),
@@ -593,6 +599,8 @@ impl Checker {
         self.c_lps.clear();
         self.c_lps_owner.clear();
         self.c_canon.clear();
+        self.c_ground_fail.clear();
+        self.gm.clear();
     }
 
     /// Removes the counts of the kernel diagnostics.
@@ -691,7 +699,9 @@ impl Checker {
             + self.c_never_proof.bytes()
             + self.c_lps.bytes()
             + self.c_lps_owner.bytes()
-            + self.c_canon.bytes();
+            + self.c_canon.bytes()
+            + self.c_ground_fail.bytes()
+            + self.gm.bytes();
         self.st.memory().total()
             + self.env.bytes()
             + lctx

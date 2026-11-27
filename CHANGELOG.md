@@ -4,6 +4,20 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.8.11] - 2026-11-27
+
+### Changed
+
+- The session keeps check-mode inference results of safe declarations. For a term with a level parameter, the key also has the level parameters of the declaration.
+- A session key can have free variables if the declaration has no let binder until that point. This applies to inference, `whnf_core`, `whnf` and the successful definitional equalities. A scratch key is copied into the frozen tier at the commit.
+- The budget of these copies is 10% of the scratch nodes of the declaration.
+- A new store flag marks the terms with a binder. A term without a binder is alpha-equal only to itself, so `canon` and `expr_equal` stop at once for it.
+- With these changes, engine R uses 90.9 G instructions on Init in place of 137.2 G, and 160.7 G on Std in place of 226.0 G. The peak memory of Init goes from about 590 MB to about 1000 MB.
+
+### Documentation
+
+- The spec has the new sections perf/11.11 to perf/11.17. They record the confirm set, the profile of engine R, the probes of R1, R2 and R3 that did not help, and the session changes of this release.
+
 ## [0.8.10] - 2026-11-27
 
 ### Changed
@@ -500,7 +514,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.10...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.11...HEAD
+[0.8.11]: https://github.com/tamnd/rulean/compare/v0.8.10...v0.8.11
 [0.8.10]: https://github.com/tamnd/rulean/compare/v0.8.9...v0.8.10
 [0.8.9]: https://github.com/tamnd/rulean/compare/v0.8.8...v0.8.9
 [0.8.8]: https://github.com/tamnd/rulean/compare/v0.8.7...v0.8.8

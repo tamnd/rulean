@@ -4,6 +4,22 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.8.9] - 2026-11-27
+
+### Changed
+
+- Engine R gives two closed values of a data type to engine G in lazy delta, after 16 steps on a pair with no result (`ground_cmp`). Engine G computes the two values and stops at the first difference, so the step only refutes. `ite-taken-branch-bad` uses 4.55 G instructions in place of 15.81 G, and the perf suite uses 135.7 G in place of 148.0 G.
+- Engine G keeps a record of each application with the kind of each argument, and it fuses the trivial steps. `magma-list-deep-n36` uses 37.2 G instructions in place of 41.4 G, and the perf suite uses 129.5 G in place of 135.7 G.
+- Engine G opens the wrappers in the body of a definition one time, before it computes the definition. The matchers, `casesOn` and the `_sparseCasesOn` helpers are wrappers. `magma-list-deep-n36` uses 28.1 G instructions in place of 37.2 G, and the perf suite uses 118.4 G in place of 129.5 G.
+- Engine R has a certain refutation for open terms with rigid heads at a data type (`certain_ne`). Lazy delta does not compare the arguments of the same head if a pair of arguments is certainly not equal, and it unfolds the two terms. `loop-unfolded-once-bad` uses 1.39 G instructions in place of 9.37 G, and the perf suite uses 110.6 G in place of 118.4 G. Init does not change.
+- The collector of engine G makes the to-space with the full size of the from-space. `magma-list-deep-n36` uses 27.9 G instructions in place of 28.3 G.
+- Engine F declines a value with more than 64 distinct nodes and no chain of more than 64 nested binders, and engine R checks it. Above 256 nodes, the queries of the declaration use engine R only. The type check uses the same limit. Init with `--engine F` uses 138.3 G instructions in place of 208.9 G, and the perf suite uses 108.5 G in place of 110.6 G.
+
+### Documentation
+
+- The spec has the new part perf/10 on engine G, with the plan of steps G4 to G9 and the measures of each step.
+- The spec has the new part perf/11, with a new profile of Init, the rule that picks the engine for each declaration, and the measures of Std that keep engine R as the default engine.
+
 ## [0.8.8] - 2026-11-27
 
 ### Added
@@ -473,7 +489,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.8...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.9...HEAD
+[0.8.9]: https://github.com/tamnd/rulean/compare/v0.8.8...v0.8.9
 [0.8.8]: https://github.com/tamnd/rulean/compare/v0.8.7...v0.8.8
 [0.8.7]: https://github.com/tamnd/rulean/compare/v0.8.6...v0.8.7
 [0.8.6]: https://github.com/tamnd/rulean/compare/v0.8.5...v0.8.6

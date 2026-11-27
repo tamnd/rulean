@@ -756,17 +756,27 @@ impl Checker {
         }
     }
 
+    /// The `whnf` of an argument of a `Nat` operation. Engine G computes a closed argument first. If it gives no literal, `whnf` does the work.
+    fn nat_arg_whnf(&mut self, a: ExprId) -> ExprId {
+        if let Some(w) = self.ground_scalar(a)
+            && matches!(self.st.node(w), Expr::Lit(Literal::Nat(_)))
+        {
+            return w;
+        }
+        self.whnf(a)
+    }
+
     /// The two arguments of a binary `Nat` operation after `whnf`, if both are literals, as in `nat_lit_id`.
     fn nat_args(&mut self, e: ExprId) -> Option<(Option<NatId>, Option<NatId>)> {
         let f = self.app_fn1(e);
         let a1 = self.app_arg(f);
-        let w1 = self.whnf(a1);
+        let w1 = self.nat_arg_whnf(a1);
         let v1 = match self.nat_lit_id(w1) {
             NatArg::Lit(v) => v,
             NatArg::NotLit => return None,
         };
         let a2 = self.app_arg(e);
-        let w2 = self.whnf(a2);
+        let w2 = self.nat_arg_whnf(a2);
         let v2 = match self.nat_lit_id(w2) {
             NatArg::Lit(v) => v,
             NatArg::NotLit => return None,
@@ -900,7 +910,7 @@ impl Checker {
             let f = self.app_fn1(e);
             if f == self.b.e_nat_succ {
                 let a = self.app_arg(e);
-                let w = self.whnf(a);
+                let w = self.nat_arg_whnf(a);
                 let n = match self.nat_lit_id(w) {
                     NatArg::Lit(n) => n,
                     NatArg::NotLit => return None,

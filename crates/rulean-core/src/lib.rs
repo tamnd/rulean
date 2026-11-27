@@ -30,6 +30,7 @@ pub mod defeq;
 pub mod env;
 pub mod expr;
 pub(crate) mod finfer;
+pub(crate) mod ground;
 pub mod inductive;
 pub mod level;
 pub mod memo;

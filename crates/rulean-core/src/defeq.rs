@@ -659,6 +659,10 @@ impl Checker {
         if r != LBool::Undef {
             return r == LBool::True;
         }
+        // Engine G: a closed term against a scalar is computed to its value in one pass (spec perf/10).
+        if let Some(r) = self.ground_defeq(t, s) {
+            return r;
+        }
         // Proofs by reflection: `t =?= Bool.true` with `t` closed.
         if (!expr::has_fvar(&self.st, t) || self.eager)
             && self.is_constant_named(s, self.b.bool_true)

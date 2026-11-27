@@ -8,7 +8,7 @@
 
 use alloc::vec::Vec;
 use rulean_nat::Nat;
-use rulean_store::ids::{low, raw};
+use rulean_store::ids::{Tier, low, raw};
 use rulean_store::{Expr, ExprId, Literal, NameId, NatId, Raw};
 
 use crate::env::ConstKind;
@@ -21,6 +21,11 @@ use crate::whnf::find_rule;
 
 /// The empty environment.
 const NIL: u32 = u32::MAX;
+/// No term.
+const NIL_E: ExprId = ExprId(Raw::MAX);
+/// The nodes that `g_inline` reads at most for one definition, and the depth of the wrappers that it opens in one place.
+const G_INL_FUEL: u32 = 512;
+const G_INL_DEPTH: u32 = 4;
 
 /// The largest number of cells, environment nodes and fields of one run.
 pub const G_MAX_CELLS: usize = 1 << 25;
@@ -203,6 +208,12 @@ pub struct Ground {
     /// The runs, and the runs that gave a result.
     pub runs: u64,
     pub hits: u64,
+    /// For each slot, a value that `g_inline` does not change. A clear keeps it, because a wrong entry only stops an inline step.
+    plain: Vec<ExprId>,
+    /// For each slot, a frozen value and its frozen result after the inline pass. A clear keeps it.
+    inl_val: Vec<(ExprId, ExprId)>,
+    /// True while the inline pass makes frozen terms. Then it uses only the frozen values of the wrappers.
+    inl_frozen: bool,
 }
 
 /// The number of value nodes that `value_term` reads at most.
@@ -290,6 +301,8 @@ impl Ground {
             + self.frames.capacity() * core::mem::size_of::<FrameAt>()
             + self.nats.capacity() * core::mem::size_of::<Nat>()
             + self.caf.bytes()
+            + self.plain.capacity() * core::mem::size_of::<ExprId>()
+            + self.inl_val.capacity() * 2 * core::mem::size_of::<ExprId>()
             + self.ccache.capacity() * core::mem::size_of::<CEntry>()
             + self.acache.capacity() * 12
             + self.apcache.capacity() * core::mem::size_of::<ARec>()
@@ -1004,18 +1017,198 @@ impl Checker {
         match self.gm.caf.get(raw(s), 0) {
             Some(c) => low(c),
             None => {
-                let c = self.gm.cell(Slot::Thunk(value, NIL));
+                // Only a function goes through the inline pass. For a value that is not a lambda, the pass costs more than it gives.
+                let v = if matches!(self.st.node(value), Expr::Lam(_)) {
+                    self.g_inline_value(s, value)
+                } else {
+                    value
+                };
+                let c = self.gm.cell(Slot::Thunk(v, NIL));
                 self.gm.caf_put(raw(s), 0, c);
                 c
             }
         }
     }
 
-    /// A constant applied to the arguments above the base.
-    fn g_const(&mut self, t: ExprId) -> Ctl {
+    /// The value of the slot `s` after the inline pass. A frozen value gives a frozen result, which stays for the next declarations.
+    fn g_inline_value(&mut self, s: u32, value: ExprId) -> ExprId {
+        let k = s as usize;
+        if k < self.gm.plain.len() && self.gm.plain[k] == value {
+            return value;
+        }
+        let frozen = value.tier() == Tier::Frozen;
+        if frozen && k < self.gm.inl_val.len() && self.gm.inl_val[k].0 == value {
+            return self.gm.inl_val[k].1;
+        }
+        let saved = self.st.uses_scratch();
+        if frozen {
+            self.st.set_scratch(false);
+        }
+        self.gm.inl_frozen = frozen;
+        let mut fuel = G_INL_FUEL;
+        let v = self.g_inline(value, G_INL_DEPTH, &mut fuel);
+        if frozen {
+            self.st.set_scratch(saved);
+        }
+        if v == value {
+            while self.gm.plain.len() <= k {
+                self.gm.plain.push(NIL_E);
+            }
+            self.gm.plain[k] = value;
+        } else if frozen {
+            while self.gm.inl_val.len() <= k {
+                self.gm.inl_val.push((NIL_E, NIL_E));
+            }
+            self.gm.inl_val[k] = (value, v);
+        }
+        v
+    }
+
+    /// The term `e` with each application of a wrapper replaced by the body of the wrapper (spec perf/10, G5b). A wrapper is a definition whose body after its lambdas is an application of a constant, for example a matcher or `casesOn`. Engine G does not read the levels and the types, so the result has the same value as `e`. An argument that is not a variable, a constant, a literal or a lambda goes in only for a parameter that the body uses at most one time and not under a lambda, so no work is done two times.
+    fn g_inline(&mut self, e: ExprId, depth: u32, fuel: &mut u32) -> ExprId {
+        if *fuel == 0 {
+            return e;
+        }
+        *fuel -= 1;
+        match self.st.node(e) {
+            Expr::Lam(b) => {
+                let body = self.g_inline(b.body, depth, fuel);
+                if body == b.body {
+                    e
+                } else {
+                    self.st.mk_lam(b.name, b.info, b.dom, body)
+                }
+            }
+            Expr::App(_, _) => self.g_inline_app(e, depth, fuel),
+            _ => e,
+        }
+    }
+
+    fn g_inline_app(&mut self, e: ExprId, depth: u32, fuel: &mut u32) -> ExprId {
+        let mut args: Vec<ExprId> = Vec::new();
+        let h = expr::app_args(&self.st, e, &mut args);
+        let mut changed = false;
+        let mut i = 0;
+        while i < args.len() {
+            let a = self.g_inline(args[i], depth, fuel);
+            if a != args[i] {
+                changed = true;
+                args[i] = a;
+            }
+            i += 1;
+        }
+        let w = if depth > 0 {
+            self.g_wrapper(h, &args)
+        } else {
+            NIL_E
+        };
+        if w != NIL_E {
+            return self.g_inline(w, depth - 1, fuel);
+        }
+        if changed {
+            self.st.mk_apps(h, &args)
+        } else {
+            e
+        }
+    }
+
+    /// The body of the wrapper `h` applied to `args`, or `NIL_E` if `h` is not a wrapper or an argument cannot go in.
+    fn g_wrapper(&mut self, h: ExprId, args: &[ExprId]) -> ExprId {
+        if !matches!(self.st.node(h), Expr::Const(_, _)) {
+            return NIL_E;
+        }
+        let (s, value) = match self.g_kind(h) {
+            CKind::Defn(s, v) => (s, v),
+            _ => return NIL_E,
+        };
+        if !matches!(self.env.at(s).kind, ConstKind::Defn { .. })
+            || (self.gm.inl_frozen && value.tier() != Tier::Frozen)
+        {
+            return NIL_E;
+        }
+        let mut k = 0;
+        let mut b = value;
+        let mut walking = true;
+        while walking {
+            match self.st.node(b) {
+                Expr::Lam(x) => {
+                    b = x.body;
+                    k += 1;
+                }
+                _ => walking = false,
+            }
+        }
+        if k == 0 || k > args.len() {
+            return NIL_E;
+        }
+        let f = expr::app_fn(&self.st, b);
+        if !matches!(self.st.node(f), Expr::Const(_, _)) || f == h {
+            return NIL_E;
+        }
+        let mut ok = true;
+        let mut j = 0;
+        while ok && j < k {
+            let simple = matches!(
+                self.st.node(args[j]),
+                Expr::BVar(_)
+                    | Expr::Const(_, _)
+                    | Expr::Lit(_)
+                    | Expr::Sort(_)
+                    | Expr::Lam(_)
+                    | Expr::Pi(_)
+            );
+            if !simple {
+                let mut f2 = G_INL_FUEL;
+                ok = self.g_occ(b, (k - 1 - j) as u32, false, &mut f2) <= 1;
+            }
+            j += 1;
+        }
+        if !ok {
+            return NIL_E;
+        }
+        let mut rev: Vec<ExprId> = Vec::with_capacity(args.len());
+        let mut i = args.len();
+        while i > 0 {
+            i -= 1;
+            rev.push(args[i]);
+        }
+        expr::apply_beta(&mut self.st, &mut self.x, value, &rev)
+    }
+
+    /// The uses of the bound variable `i` in `e` that engine G can compute, with a use under a lambda counted as 2. The result is at most 2, and 2 when the fuel ends.
+    fn g_occ(&self, e: ExprId, i: u32, under: bool, fuel: &mut u32) -> u32 {
+        if expr::no_loose_from(&self.st, e, i as u64) {
+            return 0;
+        }
+        if *fuel == 0 {
+            return 2;
+        }
+        *fuel -= 1;
+        let n = match self.st.node(e) {
+            Expr::BVar(j) if j == i => {
+                if under {
+                    2
+                } else {
+                    1
+                }
+            }
+            Expr::App(f, a) => self.g_occ(f, i, under, fuel) + self.g_occ(a, i, under, fuel),
+            Expr::Lam(b) => self.g_occ(b.body, i + 1, true, fuel),
+            Expr::Let(l) => {
+                self.g_occ(l.value, i, under, fuel) + self.g_occ(l.body, i + 1, true, fuel)
+            }
+            Expr::Proj(p) => self.g_occ(p.expr, i, under, fuel),
+            Expr::BVar(_) | Expr::Pi(_) => 0,
+            _ => 2,
+        };
+        if n > 2 { 2 } else { n }
+    }
+
+    /// What `g_const` does with the constant `t`, from the cache of the constants.
+    fn g_kind(&mut self, t: ExprId) -> CKind {
         let i = cache_index(t);
         let ent = self.gm.ccache[i];
-        let kind = if ent.key == t && ent.epoch == self.gm.epoch {
+        if ent.key == t && ent.epoch == self.gm.epoch {
             ent.kind
         } else {
             let k = self.g_resolve(t);
@@ -1027,7 +1220,13 @@ impl Checker {
                 cell: 0,
             };
             k
-        };
+        }
+    }
+
+    /// A constant applied to the arguments above the base.
+    fn g_const(&mut self, t: ExprId) -> Ctl {
+        let i = cache_index(t);
+        let kind = self.g_kind(t);
         let avail = self.gm.avail();
         match kind {
             CKind::Succ => {
@@ -1054,8 +1253,14 @@ impl Checker {
                     return self.g_force(e2.cell);
                 }
                 let c = self.g_caf(s, value);
-                self.gm.ccache[i].hgen = self.gm.hgen;
-                self.gm.ccache[i].cell = c;
+                // The inline pass of `g_caf` can use the same entry for another constant, so all of the entry is written again.
+                self.gm.ccache[i] = CEntry {
+                    key: t,
+                    epoch: self.gm.epoch,
+                    hgen: self.gm.hgen,
+                    kind,
+                    cell: c,
+                };
                 self.g_force(c)
             }
             CKind::Type => Ctl::Ret(GVal::Type),

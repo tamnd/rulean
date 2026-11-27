@@ -24,7 +24,7 @@ commands:
                     --report <file>: write the JSON report
                     --format text|json: the format of standard output
                     --trust-primitives-by-name: keep the extensions on a pin mismatch
-                    --engine F|R: engine F first, or engine R only (R by default for now)
+                    --engine F|R: engine F first (the default), or engine R only
                     --confirm default|all: the queries where engine R confirms engine F
                     --parse-only: parse the export and check nothing
                     --max-memory <size>|none: the memory limit, for example 8G

@@ -696,6 +696,10 @@ impl Checker {
                 return r == LBool::True;
             }
         }
+        // Engine G: two closed terms that compute to different data are not equal (spec perf/10).
+        if self.ground_cmp(t_n, s_n) {
+            return false;
+        }
         let (r, t_n, s_n) = self.lazy_delta_reduction(t_n, s_n);
         if r != LBool::Undef {
             return r == LBool::True;

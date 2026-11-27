@@ -433,6 +433,8 @@ pub struct Checker {
     pub(crate) c_canon: Memo,
     /// The closed terms on which engine G bailed in this declaration.
     pub(crate) c_ground_fail: Memo,
+    /// The pairs of closed terms of `ground_cmp` in this declaration: 1 if they are not equal, 2 if there is no result.
+    pub(crate) c_ground_cmp: Memo,
     /// The state of engine G (spec perf/10).
     pub(crate) gm: crate::ground::Ground,
     /// The session: judgments on frozen closed terms that stay across declarations (spec 08.4).
@@ -520,6 +522,7 @@ impl Checker {
             c_infer: Memo::new(),
             c_canon: Memo::new(),
             c_ground_fail: Memo::new(),
+            c_ground_cmp: Memo::new(),
             gm: crate::ground::Ground::default(),
             c_whnf_core: Memo::new(),
             c_whnf: Memo::new(),
@@ -600,6 +603,7 @@ impl Checker {
         self.c_lps_owner.clear();
         self.c_canon.clear();
         self.c_ground_fail.clear();
+        self.c_ground_cmp.clear();
         self.gm.clear();
     }
 
@@ -701,6 +705,7 @@ impl Checker {
             + self.c_lps_owner.bytes()
             + self.c_canon.bytes()
             + self.c_ground_fail.bytes()
+            + self.c_ground_cmp.bytes()
             + self.gm.bytes();
         self.st.memory().total()
             + self.env.bytes()

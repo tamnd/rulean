@@ -23,6 +23,18 @@ use crate::value::{EnvId, Head, Value, ValueId};
 /// The root context: no entries.
 const ROOT: u32 = 0;
 
+/// The largest value term, in distinct nodes, that engine F checks if the term is not deep. Engine R checks a larger value (spec perf/11).
+const F_TERM_CAP: u32 = 64;
+
+/// The binder depth above which a value term stays with engine F (see `term_walk`).
+const F_DEEP: u32 = 64;
+
+/// The largest number of nodes that `term_walk` reads. It is more than `F_TERM_CAP` and more than `F_DEEP`, so that the walk can find a deep chain in a term with more than `F_TERM_CAP` nodes.
+const F_WALK: u32 = 1024;
+
+/// The size of a value term, in distinct nodes, above which the queries of the declaration use engine R only. It is more than `F_TERM_CAP`, because on a small value the queries of engine R can need the rules of engine F, as in the perf test `ite-taken-branch`.
+const F_R_ONLY: u32 = 256;
+
 /// A node of the context tree.
 #[derive(Clone, Copy, Debug)]
 struct Node {
@@ -56,6 +68,10 @@ pub(crate) struct FInfer {
     types: Memo,
     /// The value at key (term, node).
     values: Memo,
+    /// The terms that `term_walk` saw.
+    seen: Memo,
+    /// The binder depth of each term on the stack of `term_walk`.
+    walk_depth: Vec<u32>,
 }
 
 impl FInfer {
@@ -66,6 +82,8 @@ impl FInfer {
             lets: Memo::new(),
             types: Memo::new(),
             values: Memo::new(),
+            seen: Memo::new(),
+            walk_depth: Vec::new(),
         }
     }
 
@@ -91,6 +109,12 @@ impl Checker {
     /// The body of `f_check_value`. Engine F gives no fault, so the caller removes the free variables of engine F from the scope list.
     fn f_check_value_in(&mut self, value: ExprId, ty: ExprId) -> bool {
         if self.engine == Engine::R || self.bad() || self.va.full() {
+            return false;
+        }
+        // Engine R checks a large value that is not deep. If the value is larger than `F_R_ONLY`, the queries of the declaration use engine R only (spec perf/11).
+        let n = self.term_walk(value);
+        if n > F_TERM_CAP {
+            self.f_declined = n > F_R_ONLY;
             return false;
         }
         self.f_stats.infer += 1;
@@ -141,6 +165,61 @@ impl Checker {
         }
         self.f_stats.infer_ok += 1;
         true
+    }
+
+    /// The number of distinct nodes of the value term `e`, at most `F_WALK + 1`, or 0 if the term has a chain of more than `F_DEEP` nested binders.
+    ///
+    /// Engine R copies the body of a binder when it goes under the binder, so its time grows with the depth of the binders times the size of the term. Engine F does not copy the term. So a deep term stays with engine F, and this gives 0 for it. On Init, the large values are wide proofs with a small depth, and engine R checks them with fewer instructions (spec perf/08.3). The walk goes first into the body of each binder, so it finds a deep chain early. It stops after `F_WALK + 1` nodes, so its cost is at most `F_WALK` steps.
+    fn term_walk(&mut self, e: ExprId) -> u32 {
+        self.fi.seen.clear();
+        let mark = self.estk.len();
+        self.fi.walk_depth.truncate(0);
+        self.estk.push(e);
+        self.fi.walk_depth.push(0);
+        let mut n: u32 = 0;
+        let mut deep = false;
+        while self.estk.len() > mark && n <= F_WALK && !deep {
+            let x = match self.estk.pop() {
+                Some(x) => x,
+                None => e,
+            };
+            // The two stacks have the same length, so `walk_depth` is not empty here.
+            let top = self.fi.walk_depth.len() - 1;
+            let d = self.fi.walk_depth[top];
+            self.fi.walk_depth.truncate(top);
+            if d > F_DEEP {
+                deep = true;
+            } else if !self.fi.seen.contains(x.0, 0) {
+                self.fi.seen.put(x.0, 0, 1);
+                n += 1;
+                match self.st.node(x) {
+                    Expr::App(f, a) => {
+                        self.walk_push(f, d);
+                        self.walk_push(a, d);
+                    }
+                    Expr::Lam(b) | Expr::Pi(b) => {
+                        self.walk_push(b.dom, d);
+                        self.walk_push(b.body, d + 1);
+                    }
+                    Expr::Let(l) => {
+                        self.walk_push(l.ty, d);
+                        self.walk_push(l.value, d);
+                        self.walk_push(l.body, d + 1);
+                    }
+                    Expr::Proj(p) => self.walk_push(p.expr, d),
+                    _ => {}
+                }
+            }
+        }
+        self.estk.truncate(mark);
+        self.fi.walk_depth.truncate(0);
+        if deep { 0 } else { n }
+    }
+
+    /// Pushes a term and its binder depth for `term_walk`.
+    fn walk_push(&mut self, e: ExprId, d: u32) {
+        self.estk.push(e);
+        self.fi.walk_depth.push(d);
     }
 
     /// Makes the root node if the tree is empty.

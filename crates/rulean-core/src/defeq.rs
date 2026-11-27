@@ -1003,8 +1003,10 @@ impl Checker {
         {
             return true;
         }
+        // Only a mark of this call counts.
+        self.known_pair = (self.dummy, self.dummy);
         let r = self.is_def_eq_shared(t, s);
-        // A pair that the quick check found known is already in the caches, so it is not noted again.
+        // The quick check finds this pair again with no work, so it is not put in the caches.
         if r && self.known_pair != (t, s) {
             self.pair_put(true, t, s);
         }

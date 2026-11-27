@@ -620,10 +620,25 @@ fn session_keeps_nothing_from_a_failed_declaration() {
     let ty = id_type_of(&mut t, nat);
     // `zero` does not have the type `(fun T => T) Nat → Nat`.
     let fty = t.pi("n", ty, nat);
+    // The axioms of `nat` are accepted, so their check-mode entries can be in the session already.
+    let stores = t.c.sess.stats.stores;
     let d = t.defn("bad", fty, zero, Safety::Safe);
     assert_eq!(t.add(&Decl::Defn(d)), Some(ErrorKind::DefTypeMismatch));
-    assert!(t.c.sess.is_empty());
-    assert_eq!(t.c.sess.stats.stores, 0);
+    assert_eq!(t.c.sess.stats.stores, stores);
+}
+
+#[test]
+fn session_keeps_check_mode_judgments_of_safe_declarations() {
+    let mut t = T::new();
+    let (nat, _) = t.nat();
+    let ty = id_type_of(&mut t, nat);
+    let d = t.axiom("a", &[], ty, Safety::Safe);
+    assert_eq!(t.add(&d), None);
+    let hits = t.c.sess.stats.hits;
+    // The check of the type of the second axiom is the same check, and the session has the answer.
+    let d = t.axiom("b", &[], ty, Safety::Safe);
+    assert_eq!(t.add(&d), None);
+    assert!(t.c.sess.stats.hits > hits);
 }
 
 #[test]

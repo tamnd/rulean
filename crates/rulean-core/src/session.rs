@@ -26,6 +26,8 @@ pub(crate) const S_WHNF: u8 = 3;
 pub(crate) const S_SUCCESS: u8 = 4;
 /// The tag of an unfolding of a constant with its level list. The key is (constant term, 0).
 pub(crate) const S_UNFOLD: u8 = 5;
+/// The tag of an `infer` entry in check mode, for a term with no level parameter that a safe declaration checked. The key is (term, 0).
+pub(crate) const S_CHECK: u8 = 6;
 
 /// The bytes of one slot: the tag, two keys, the value, the stamp and the reference bit.
 const SLOT_BYTES: usize = 6 + 3 * (Raw::BITS as usize / 8);

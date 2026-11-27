@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 use rulean_format::Safety;
 use rulean_nat::Nat;
 use rulean_store::ids::{low, raw};
-use rulean_store::{BinderInfo, Expr, ExprId, LevelId, LevelListId, Literal, NameId, Store};
+use rulean_store::{BinderInfo, Expr, ExprId, LevelId, LevelListId, Literal, NameId, Raw, Store};
 
 use crate::conv::{Engine, FStats};
 use crate::env::{ConstKind, Env};
@@ -20,7 +20,7 @@ use crate::level::{self, LevelCache};
 use crate::memo::{Intern, Lossy, Memo};
 use crate::pin;
 use crate::profile::{Flags, Profile};
-use crate::session::{S_INFER, Session};
+use crate::session::{S_CHECK, S_INFER, Session};
 use crate::trace::Trace;
 use crate::value::{Arena, ValueId};
 
@@ -397,6 +397,8 @@ pub struct Checker {
     /// The level parameters of the declaration (`m_lparams`). They are checked only if `check_lparams` is true.
     pub(crate) lparams: Vec<NameId>,
     pub(crate) check_lparams: bool,
+    /// The second key of a check-mode `infer` entry of the session: 1 plus the level list of the level parameters of the declaration (spec perf/11.15).
+    pub(crate) lp_key: Raw,
     /// The safety of the declaration (`m_definition_safety`).
     pub(crate) safety: Safety,
     // The local context, indexed by the level of the free variable.
@@ -517,6 +519,7 @@ impl Checker {
             diag_at: Memo::new(),
             lparams: Vec::new(),
             check_lparams: false,
+            lp_key: 0,
             safety: Safety::Safe,
             lctx_name: Vec::new(),
             lctx_info: Vec::new(),
@@ -570,6 +573,13 @@ impl Checker {
 
     /// Starts a declaration: clears the caches, the local context and the fault, and sets the level parameters and the safety (`type_checker(env, lctx, safety)`).
     pub fn begin(&mut self, lparams: Vec<NameId>, safety: Safety) {
+        let mut ls = Vec::with_capacity(lparams.len());
+        let mut i = 0;
+        while i < lparams.len() {
+            ls.push(self.st.level_param(lparams[i]));
+            i += 1;
+        }
+        self.lp_key = raw(self.st.level_list(&ls).0) + 1;
         self.lparams = lparams;
         self.check_lparams = true;
         self.safety = safety;
@@ -1551,10 +1561,20 @@ impl Checker {
         let r = match self.c_infer.get(k.0, raw(mode)) {
             Some(r) => ExprId(r),
             None => {
-                // Only infer-only results go into the session: a check-mode result also depends on the level parameters and the safety of the declaration.
-                let key = infer_only && self.sess_key(e);
+                // A check-mode result also depends on the level parameters and the safety of the declaration. So it goes into the session only for a term with no level parameter in a safe declaration, and a safe declaration can use fewer constants than the other kinds.
+                let tag = if infer_only { S_INFER } else { S_CHECK };
+                let kb = if infer_only {
+                    0
+                } else if self.st.flags(e).has(rulean_store::Flags::HAS_LEVEL_PARAM) {
+                    self.lp_key
+                } else {
+                    0
+                };
+                let key = self.sess_key(e)
+                    && (infer_only
+                        || (self.safety == Safety::Safe && (kb == 0 || self.check_lparams)));
                 let hit = if key {
-                    self.sess_get(S_INFER, e.0, 0)
+                    self.sess_get(tag, e.0, kb)
                 } else {
                     None
                 };
@@ -1568,7 +1588,7 @@ impl Checker {
                         if !self.bad() {
                             self.c_infer.put(k.0, raw(mode), r.0);
                             if key {
-                                self.sess.note(S_INFER, e.0, 0, r.0);
+                                self.sess.note(tag, e.0, kb, r.0);
                             }
                         }
                         r

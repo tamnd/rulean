@@ -104,6 +104,10 @@ No perf test changes by more than 0.15 G. Engine F on Init now uses about as man
 
 A value limit of 32 in place of 64 gave 139.6 G, so the limit stays at 64.
 
-## 11.9 What follows
+## 11.9 The default engine
+
+Section 08.6 kept engine R as the default until engine F is faster on Init and on the perf gate. With 11.8, engine F on Init uses 138.3 G and engine R uses 138.6 G. On the 42 perf tests, 37 are at most 6.0 G with engine F and 33 with engine R, and the sum is 108.5 G with engine F and 284.4 G with engine R. The confirm run with `--confirm all` on the 28 exports of `arena-extra` shows no difference. So `rulean check` now uses engine F by default, and `--engine R` gives engine R only.
+
+## 11.10 What follows
 
 With the rule, engine F on Init uses about the same number of instructions as engine R alone. The exit of M9 needs at most 80 G, so the next work is a faster engine R on wide proofs. Section 08.5 shows the parts: `inst_rec`, the hash-cons walk and `mk_app`. Engine F stays the engine for deep terms and for the evaluation tests.

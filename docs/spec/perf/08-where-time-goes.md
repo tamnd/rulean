@@ -66,4 +66,4 @@ The hash-cons walk `probe` and `mk_app` use about as many samples as `inst_rec`,
 1. `infer_app` in chunks (08.5). Engine R on Init goes from 144.5 G to 140.7 G.
 2. A cheaper stop of engine F. The time of engine F before a stop is lost. A stop that comes earlier loses less time, but a small arena slows the tests of 08.3. A budget of steps that grows with the size of the declaration can stop early on large proofs and still let the small loops of the perf tests run.
 3. Fewer new terms in engine R. Beta and `infer_lambda` make most of the new nodes. A cache of the instantiation of a body with the same arguments removes the nodes that are made again.
-4. The 80 G exit of M9 is not in reach with these steps. Engine F is not faster than engine R on Init, so the default engine stays R until engine F is faster on Init and on the perf gate.
+4. The 80 G exit of M9 is not in reach with these steps. Engine F is not faster than engine R on Init, so the default engine stays R until engine F is faster on Init and on the perf gate. Section 11.9 makes engine F the default after the engine choice of section 11.

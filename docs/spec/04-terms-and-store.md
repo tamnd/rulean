@@ -96,7 +96,7 @@ enum Nat { Small(u64), Large(Limbs) }   -- Large is canonical: at least 2 limbs 
 ```
 
 - The 15 kernel operations (05.8) each have a fast path for `Small` with overflow checks.
-- `Large` uses schoolbook multiplication below 32 limbs, Karatsuba above, and Knuth division (algorithm D). No FFT. Results above 128 MiB are refused by the caller before the operation runs (05.8). The schoolbook loop has the shorter operand in the outer loop, so the inner loop is long. The addition, the subtraction and the bitwise operations have one loop on the limbs of both operands and one loop on the other limbs of the longer operand, with no test of the length in the loops.
+- `Large` uses schoolbook multiplication when an operand has fewer than 48 limbs, Karatsuba above. The Karatsuba step uses the subtractive form and writes the result in place, and an operand that is much longer than the other is cut into parts. The schoolbook loop does four rows in one pass on the long operand (perf/10.9). Division uses Knuth algorithm D. No FFT. Results above 128 MiB are refused by the caller before the operation runs (05.8). The schoolbook loop has the shorter operand in the outer loop, so the inner loop is long. The addition, the subtraction and the bitwise operations have one loop on the limbs of both operands and one loop on the other limbs of the longer operand, with no test of the length in the loops.
 - Each operation has a refinement proof against Lean's `Nat` (10.4.6). The differential test oracles are `num-bigint` and `malachite` (malachite is LGPL and is used only in tests, D§12.5).
 - Literals are interned in a `NatId` table, so equal literals have equal handles.
 

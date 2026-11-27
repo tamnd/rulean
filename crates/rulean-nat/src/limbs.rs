@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 use core::cmp::Ordering;
 
 /// The number of limbs below which multiplication uses the schoolbook method (spec 04.6).
-pub const KARATSUBA_MIN: usize = 32;
+pub const KARATSUBA_MIN: usize = 48;
 
 /// The number of limbs without the leading zero limbs.
 pub fn used_len(a: &[u64]) -> usize {
@@ -135,12 +135,20 @@ pub fn sub(a: &[u64], b: &[u64]) -> Vec<u64> {
 fn add_into(acc: &mut [u64], b: &[u64], offset: usize) {
     let nb = used_len(b);
     let mut carry: u128 = 0;
+    let (x, y) = (&mut acc[offset..offset + nb], &b[..nb]);
     let mut i = 0;
-    while i < nb || carry != 0 {
-        let s = acc[offset + i] as u128 + get(b, i) as u128 + carry;
-        acc[offset + i] = s as u64;
+    while i < nb {
+        let s = x[i] as u128 + y[i] as u128 + carry;
+        x[i] = s as u64;
         carry = s >> 64;
         i += 1;
+    }
+    let mut k = offset + nb;
+    while carry != 0 {
+        let s = acc[k] as u128 + carry;
+        acc[k] = s as u64;
+        carry = s >> 64;
+        k += 1;
     }
 }
 
@@ -148,12 +156,20 @@ fn add_into(acc: &mut [u64], b: &[u64], offset: usize) {
 fn sub_into(acc: &mut [u64], b: &[u64], offset: usize) {
     let nb = used_len(b);
     let mut borrow: u128 = 0;
+    let (x, y) = (&mut acc[offset..offset + nb], &b[..nb]);
     let mut i = 0;
-    while i < nb || borrow != 0 {
-        let d = (1u128 << 64) + acc[offset + i] as u128 - get(b, i) as u128 - borrow;
-        acc[offset + i] = d as u64;
+    while i < nb {
+        let d = (1u128 << 64) + x[i] as u128 - y[i] as u128 - borrow;
+        x[i] = d as u64;
         borrow = 1 - (d >> 64);
         i += 1;
+    }
+    let mut k = offset + nb;
+    while borrow != 0 {
+        let d = (1u128 << 64) + acc[k] as u128 - borrow;
+        acc[k] = d as u64;
+        borrow = 1 - (d >> 64);
+        k += 1;
     }
 }
 
@@ -167,10 +183,57 @@ pub fn mul_school(a: &[u64], b: &[u64]) -> Vec<u64> {
     };
     let nl = used_len(long);
     let ns = used_len(short);
-    let long = &long[..nl];
     let mut r = zeros(nl + ns);
+    school_rows(&mut r, &long[..nl], &short[..ns]);
+    r
+}
+
+/// Writes `long * short` into `r`, which has at least `long.len() + short.len()` limbs and is zero.
+fn school_rows(r: &mut [u64], long: &[u64], short: &[u64]) {
+    let nl = long.len();
+    let ns = short.len();
     // Two rows go in one pass on the long operand, so each limb of the result is read and written half as often. The carries are single limbs: `t` and `u` are at most (2^64 - 1) + (2^64 - 1)^2 + (2^64 - 1) = 2^128 - 1.
     let mut i = 0;
+    while i + 3 < ns {
+        let x0 = short[i] as u128;
+        let x1 = short[i + 1] as u128;
+        let x2 = short[i + 2] as u128;
+        let x3 = short[i + 3] as u128;
+        let row = &mut r[i..i + nl + 4];
+        let (mut c0, mut c1, mut c2, mut c3): (u64, u64, u64, u64) = (0, 0, 0, 0);
+        let (mut p1, mut p2, mut p3): (u64, u64, u64) = (0, 0, 0);
+        let mut j = 0;
+        while j < nl {
+            let l = long[j];
+            let t = row[j] as u128 + x0 * l as u128 + c0 as u128;
+            let u = (t as u64) as u128 + x1 * p1 as u128 + c1 as u128;
+            let v = (u as u64) as u128 + x2 * p2 as u128 + c2 as u128;
+            let w = (v as u64) as u128 + x3 * p3 as u128 + c3 as u128;
+            row[j] = w as u64;
+            c0 = (t >> 64) as u64;
+            c1 = (u >> 64) as u64;
+            c2 = (v >> 64) as u64;
+            c3 = (w >> 64) as u64;
+            p3 = p2;
+            p2 = p1;
+            p1 = l;
+            j += 1;
+        }
+        // Three more columns empty the pipeline: in column nl + k, the rows below k have no more input.
+        let u = c0 as u128 + x1 * p1 as u128 + c1 as u128;
+        let v = (u as u64) as u128 + x2 * p2 as u128 + c2 as u128;
+        let w = (v as u64) as u128 + x3 * p3 as u128 + c3 as u128;
+        row[nl] = w as u64;
+        let (c1, c2, c3) = ((u >> 64) as u64, (v >> 64) as u64, (w >> 64) as u64);
+        let v = c1 as u128 + x2 * p1 as u128 + c2 as u128;
+        let w = (v as u64) as u128 + x3 * p2 as u128 + c3 as u128;
+        row[nl + 1] = w as u64;
+        let (c2, c3) = ((v >> 64) as u64, (w >> 64) as u64);
+        let w = c2 as u128 + x3 * p1 as u128 + c3 as u128;
+        row[nl + 2] = w as u64;
+        row[nl + 3] = (w >> 64) as u64;
+        i += 4;
+    }
     while i + 1 < ns {
         let x0 = short[i] as u128;
         let x1 = short[i + 1] as u128;
@@ -207,7 +270,6 @@ pub fn mul_school(a: &[u64], b: &[u64]) -> Vec<u64> {
         }
         row[nl] = c;
     }
-    r
 }
 
 /// `a * b`. The method is Karatsuba when both operands have at least `KARATSUBA_MIN` limbs, and schoolbook otherwise.
@@ -216,31 +278,82 @@ pub fn mul(a: &[u64], b: &[u64]) -> Vec<u64> {
     let nb = used_len(b);
     if na < KARATSUBA_MIN || nb < KARATSUBA_MIN {
         mul_school(a, b)
+    } else if na == nb {
+        let mut r = zeros(2 * na);
+        karatsuba(&mut r, &a[..na], &b[..nb]);
+        r
     } else {
-        karatsuba(a, b, na, nb)
+        mul_parts(&a[..na], &b[..nb])
     }
 }
 
-/// Karatsuba multiplication: with `a = a1 * B^m + a0` and `b = b1 * B^m + b0`, the product is `z2 * B^2m + z1 * B^m + z0`, where `z1 = (a0 + a1)(b0 + b1) - z0 - z2`.
-fn karatsuba(a: &[u64], b: &[u64], na: usize, nb: usize) -> Vec<u64> {
-    let longer = if na > nb { na } else { nb };
-    let m = longer / 2;
-    let a0 = part(a, 0, m);
-    let a1 = part(a, m, na);
-    let b0 = part(b, 0, m);
-    let b1 = part(b, m, nb);
-    let z0 = mul(&a0, &b0);
-    let z2 = mul(&a1, &b1);
-    let sa = add(&a0, &a1);
-    let sb = add(&b0, &b1);
-    let mut z1 = mul(&sa, &sb);
-    sub_into(&mut z1, &z0, 0);
-    sub_into(&mut z1, &z2, 0);
-    let mut r = zeros(na + nb + 1);
-    add_into(&mut r, &z0, 0);
-    add_into(&mut r, &z1, m);
-    add_into(&mut r, &z2, 2 * m);
+/// `a * b` for operands of different lengths. The longer operand is cut into parts with the length of the shorter operand, and each part is multiplied by the shorter operand.
+fn mul_parts(a: &[u64], b: &[u64]) -> Vec<u64> {
+    let (long, short) = if a.len() >= b.len() { (a, b) } else { (b, a) };
+    let nl = long.len();
+    let ns = short.len();
+    let mut r = zeros(nl + ns);
+    let mut off = 0;
+    while off < nl {
+        let end = if off + ns < nl { off + ns } else { nl };
+        let p = mul(&long[off..end], short);
+        add_into(&mut r, &p, off);
+        off = end;
+    }
     r
+}
+
+/// `r = a * b` with the schoolbook method. The operands have the same length, and `r` has two times this length.
+fn school_into(r: &mut [u64], a: &[u64], b: &[u64]) {
+    let mut k = 0;
+    while k < r.len() {
+        r[k] = 0;
+        k += 1;
+    }
+    school_rows(r, a, b);
+}
+
+/// `out = |x - y|`. The length of `out` is the length of `x`, and `y` is not longer than `x`. The result is true if `x >= y`.
+fn abs_diff(out: &mut [u64], x: &[u64], y: &[u64]) -> bool {
+    let ge = cmp(x, y) != Ordering::Less;
+    let (big, small) = if ge { (x, y) } else { (y, x) };
+    let mut borrow: u128 = 0;
+    let mut i = 0;
+    while i < out.len() {
+        let d = (1u128 << 64) + get(big, i) as u128 - get(small, i) as u128 - borrow;
+        out[i] = d as u64;
+        borrow = 1 - (d >> 64);
+        i += 1;
+    }
+    ge
+}
+
+/// Karatsuba multiplication into `r`: with `a = a1 * B^lo + a0` and `b = b1 * B^lo + b0`, the product is `z2 * B^2lo + z1 * B^lo + z0`, where `z1 = z0 + z2 - (a1 - a0)(b1 - b0)`. The operands have the same length `n`, and `r` has the length `2n`. `z0` and `z2` go directly into `r`, so a step makes only four small arrays. The form with a difference keeps the operands of the middle product at `n - lo` limbs.
+fn karatsuba(r: &mut [u64], a: &[u64], b: &[u64]) {
+    let n = a.len();
+    if n < KARATSUBA_MIN {
+        school_into(r, a, b);
+    } else {
+        let lo = n / 2;
+        let hi = n - lo;
+        karatsuba(&mut r[..2 * lo], &a[..lo], &b[..lo]);
+        karatsuba(&mut r[2 * lo..], &a[lo..], &b[lo..]);
+        let mut da = zeros(hi);
+        let mut db = zeros(hi);
+        let sa = abs_diff(&mut da, &a[lo..], &a[..lo]);
+        let sb = abs_diff(&mut db, &b[lo..], &b[..lo]);
+        let mut m = zeros(2 * hi);
+        karatsuba(&mut m, &da, &db);
+        let mut w = zeros(2 * hi + 1);
+        add_into(&mut w, &r[..2 * lo], 0);
+        add_into(&mut w, &r[2 * lo..], 0);
+        if sa == sb {
+            sub_into(&mut w, &m, 0);
+        } else {
+            add_into(&mut w, &m, 0);
+        }
+        add_into(r, &w, lo);
+    }
 }
 
 /// The number of leading zero bits of a limb.
@@ -389,10 +502,16 @@ fn knuth_d(a: &[u64], b: &[u64], na: usize, n: usize) -> (Vec<u64>, Vec<u64>) {
 /// `a & b`.
 pub fn and(a: &[u64], b: &[u64]) -> Vec<u64> {
     let n = if a.len() < b.len() { a.len() } else { b.len() };
-    let mut r = zeros(n);
-    let (x, y, out) = (&a[..n], &b[..n], &mut r[..n]);
+    let (x, y) = (&a[..n], &b[..n]);
+    // The high limbs of the result are often zero, so the length is found first.
+    let mut top = n;
+    while top > 0 && x[top - 1] & y[top - 1] == 0 {
+        top -= 1;
+    }
+    let mut r = zeros(top);
+    let (x, y, out) = (&x[..top], &y[..top], &mut r[..top]);
     let mut i = 0;
-    while i < n {
+    while i < top {
         out[i] = x[i] & y[i];
         i += 1;
     }
@@ -446,26 +565,58 @@ pub fn shl(a: &[u64], s: u64) -> Vec<u64> {
     let limbs = (s / 64) as usize;
     let bits = (s % 64) as u32;
     let n = used_len(a);
-    let mut r = zeros(limbs);
-    let moved = shl_small(&part(a, 0, n), bits);
-    let mut i = 0;
-    while i < moved.len() {
-        r.push(moved[i]);
-        i += 1;
+    let x = &a[..n];
+    let mut r = zeros(limbs + n + 1);
+    let out = &mut r[limbs..limbs + n + 1];
+    if bits == 0 {
+        let mut i = 0;
+        while i < n {
+            out[i] = x[i];
+            i += 1;
+        }
+    } else if n > 0 {
+        out[0] = x[0] << bits;
+        let (lo, hi) = (&x[..n - 1], &x[1..n]);
+        let o = &mut out[1..n];
+        let mut i = 0;
+        while i < o.len() {
+            o[i] = (hi[i] << bits) | (lo[i] >> (64 - bits));
+            i += 1;
+        }
+        out[n] = x[n - 1] >> (64 - bits);
     }
     r
 }
 
-/// `a / 2^s`, rounded down.
+/// `a / 2^s`, rounded down. The result is built in one pass, without a copy of the input.
 pub fn shr(a: &[u64], s: u64) -> Vec<u64> {
     let n = used_len(a) as u64;
     let limbs = s / 64;
     if limbs >= n {
         Vec::new()
     } else {
-        let lo = limbs as usize;
-        let rest = part(a, lo, n as usize);
-        shr_small(&rest, rest.len(), (s % 64) as u32)
+        let x = &a[limbs as usize..n as usize];
+        let m = x.len();
+        let b = (s % 64) as u32;
+        let mut r = zeros(m);
+        let out = &mut r[..m];
+        if b == 0 {
+            let mut i = 0;
+            while i < m {
+                out[i] = x[i];
+                i += 1;
+            }
+        } else {
+            let (lo, hi) = (&x[..m - 1], &x[1..m]);
+            let o = &mut out[..m - 1];
+            let mut i = 0;
+            while i < o.len() {
+                o[i] = (lo[i] >> b) | (hi[i] << (64 - b));
+                i += 1;
+            }
+            out[m - 1] = x[m - 1] >> b;
+        }
+        r
     }
 }
 

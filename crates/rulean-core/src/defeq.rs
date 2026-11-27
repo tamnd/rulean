@@ -109,9 +109,12 @@ impl Checker {
         if a == b {
             return true;
         }
-        let la = self.st.level_list_vec(a);
-        let lb = self.st.level_list_vec(b);
-        level::is_equivalent_list(&mut self.st, &mut self.lc, &la, &lb)
+        let la = self.take_levels(a);
+        let lb = self.take_levels(b);
+        let r = level::is_equivalent_list(&mut self.st, &mut self.lc, &la, &lb);
+        self.give_levels(la);
+        self.give_levels(lb);
+        r
     }
 
     /// The level list of a constant. The caller has checked that `e` is a constant.
@@ -172,7 +175,7 @@ impl Checker {
         let lam = self.is_lambda(t0);
         let mut t = t0;
         let mut s = s0;
-        let mut subst: Vec<ExprId> = Vec::new();
+        let mut subst = self.take_vec();
         let mut ok = true;
         let mut walking = true;
         while ok && walking && !self.bad() {
@@ -186,12 +189,14 @@ impl Checker {
                 self.is_pi(t) && self.is_pi(s)
             };
         }
-        if !ok || self.bad() {
-            return false;
+        let mut r = false;
+        if ok && !self.bad() {
+            let ti = self.instantiate_rev(t, &subst);
+            let si = self.instantiate_rev(s, &subst);
+            r = self.is_def_eq(ti, si);
         }
-        let ti = self.instantiate_rev(t, &subst);
-        let si = self.instantiate_rev(s, &subst);
-        self.is_def_eq(ti, si)
+        self.give_vec(subst);
+        r
     }
 
     /// `quick_is_def_eq`.
@@ -331,19 +336,18 @@ impl Checker {
         if !self.is_app(t) || !self.is_app(s) {
             return false;
         }
-        let mut t_args: Vec<ExprId> = Vec::new();
-        let mut s_args: Vec<ExprId> = Vec::new();
+        let mut t_args = self.take_vec();
+        let mut s_args = self.take_vec();
         let tf = expr::app_args(&self.st, t, &mut t_args);
         let sf = expr::app_args(&self.st, s, &mut s_args);
-        if !self.is_def_eq(tf, sf) || t_args.len() != s_args.len() {
-            return false;
-        }
-        let mut ok = true;
+        let mut ok = t_args.len() == s_args.len() && self.is_def_eq(tf, sf);
         let mut i = 0;
         while ok && i < t_args.len() {
             ok = self.is_def_eq(t_args[i], s_args[i]);
             i += 1;
         }
+        self.give_vec(t_args);
+        self.give_vec(s_args);
         ok
     }
 
@@ -911,8 +915,8 @@ impl Checker {
         depth: u32,
         full: bool,
     ) -> bool {
-        let mut xs: Vec<ExprId> = Vec::new();
-        let mut ys: Vec<ExprId> = Vec::new();
+        let mut xs = self.take_vec();
+        let mut ys = self.take_vec();
         expr::app_args(&self.st, a, &mut xs);
         expr::app_args(&self.st, b, &mut ys);
         let mut ne = false;
@@ -921,6 +925,8 @@ impl Checker {
             ne = self.certain_ne(xs[i], ys[i], depth, full);
             i += 1;
         }
+        self.give_vec(xs);
+        self.give_vec(ys);
         ne
     }
 

@@ -38,6 +38,9 @@ pub const REC_DEPTH_FACTOR: u64 = 16;
 /// The number of calls of `enter` between two memory checks. A check adds about 30 sizes, so the cost is small.
 const MEMORY_TICKS: u32 = 4096;
 
+/// The largest number of vectors in `vpool` and in `lpool`. It is more than the depth of the nested calls that hold a vector on Init (spec perf/04.3 A9).
+const POOL_MAX: usize = 64;
+
 /// The kind of an error. Each kind is one exception of `kernel_exception.h` or one message of `type_checker.cpp`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ErrorKind {
@@ -364,6 +367,10 @@ pub struct Checker {
     pub(crate) vstk: Vec<ValueId>,
     /// A stack of the arguments of applications in `whnf_core` of engine R, used in the same way as `vstk` (spec perf/04.3 A9).
     pub(crate) estk: Vec<ExprId>,
+    /// Vectors of terms that keep their capacity. A function takes one with `take_vec` and gives it back with `give_vec`, so a hot path makes no allocation, also when it recurses (spec perf/04.3 A9).
+    pub(crate) vpool: Vec<Vec<ExprId>>,
+    /// Vectors of levels, used in the same way as `vpool`.
+    pub(crate) lpool: Vec<Vec<LevelId>>,
     /// The contexts and caches of engine F inference. They are cleared together with the arena.
     pub(crate) fi: FInfer,
     /// The number of binders that `quote` of engine F has opened. Their free variables are not in the local context.
@@ -507,6 +514,8 @@ impl Checker {
             va: Arena::new(),
             vstk: Vec::new(),
             estk: Vec::new(),
+            vpool: Vec::new(),
+            lpool: Vec::new(),
             fi: FInfer::new(),
             f_under: 0,
             c_quote: Lossy::new(),
@@ -1031,6 +1040,34 @@ impl Checker {
         expr::instantiate1(&mut self.st, &mut self.x, e, v)
     }
 
+    /// An empty vector of terms from `vpool`, or a new vector if the pool is empty.
+    pub(crate) fn take_vec(&mut self) -> Vec<ExprId> {
+        self.vpool.pop().unwrap_or_default()
+    }
+
+    /// Gives a vector of terms back to `vpool`. The pool keeps at most `POOL_MAX` vectors.
+    pub(crate) fn give_vec(&mut self, mut v: Vec<ExprId>) {
+        v.truncate(0);
+        if self.vpool.len() < POOL_MAX {
+            self.vpool.push(v);
+        }
+    }
+
+    /// The items of the level list `l` in a vector from `lpool`. The caller gives the vector back with `give_levels`.
+    pub(crate) fn take_levels(&mut self, l: LevelListId) -> Vec<LevelId> {
+        let mut v = self.lpool.pop().unwrap_or_default();
+        self.st.level_list_into(l, &mut v);
+        v
+    }
+
+    /// Gives a vector of levels back to `lpool`.
+    pub(crate) fn give_levels(&mut self, mut v: Vec<LevelId>) {
+        v.truncate(0);
+        if self.lpool.len() < POOL_MAX {
+            self.lpool.push(v);
+        }
+    }
+
     pub(crate) fn instantiate_rev(&mut self, e: ExprId, subst: &[ExprId]) -> ExprId {
         expr::instantiate_rev(&mut self.st, &mut self.x, e, subst)
     }
@@ -1057,9 +1094,10 @@ impl Checker {
                 return ExprId(r);
             }
         }
-        let ls = self.st.level_list_vec(us);
+        let ls = self.take_levels(us);
         let c = self.env.at(slot);
         let r = expr::instantiate_lparams(&mut self.st, &mut self.x, e, &c.lparams, &ls);
+        self.give_levels(ls);
         if mine {
             self.c_lps.put(e.0, raw(us.0), r.0);
         }
@@ -1154,9 +1192,10 @@ impl Checker {
         if slot == 0 {
             return self.dummy;
         }
-        let ls = self.st.level_list_vec(list);
+        // The count of the levels is read in place, so the inference of a constant makes no allocation (spec perf/04.3 A9).
+        let nls = self.st.level_list_items(list).len();
         let c = self.env.at(slot);
-        if c.lparams.len() != ls.len() {
+        if c.lparams.len() != nls {
             return self.fail(ErrorKind::LevelCount, e);
         }
         if !infer_only {
@@ -1168,8 +1207,9 @@ impl Checker {
                 return self.fail(ErrorKind::PartialUse, e);
             }
             let mut i = 0;
-            while i < ls.len() {
-                self.check_level(ls[i], e);
+            while i < nls {
+                let l = self.st.level_list_items(list)[i];
+                self.check_level(l, e);
                 i += 1;
             }
             if self.bad() {
@@ -1183,20 +1223,21 @@ impl Checker {
     /// `infer_lambda`.
     fn infer_lambda(&mut self, e0: ExprId, infer_only: bool) -> ExprId {
         let mark = self.enter_scope();
-        let r = self.infer_lambda_in(e0, infer_only);
+        let mut fvars = self.take_vec();
+        let r = self.infer_lambda_in(e0, infer_only, &mut fvars);
+        self.give_vec(fvars);
         self.leave_scope(mark);
         r
     }
 
     /// The body of `infer_lambda`. The free variables that it makes stay in scope.
-    fn infer_lambda_in(&mut self, e0: ExprId, infer_only: bool) -> ExprId {
-        let mut fvars: Vec<ExprId> = Vec::new();
+    fn infer_lambda_in(&mut self, e0: ExprId, infer_only: bool, fvars: &mut Vec<ExprId>) -> ExprId {
         let mut e = e0;
         let mut walking = true;
         while walking && !self.bad() {
             match self.st.node(e) {
                 Expr::Lam(b) => {
-                    let d = self.instantiate_rev(b.dom, &fvars);
+                    let d = self.instantiate_rev(b.dom, fvars);
                     if !infer_only {
                         let t = self.infer_type_core(d, infer_only);
                         self.ensure_sort_core(t, d);
@@ -1211,33 +1252,41 @@ impl Checker {
         if self.bad() {
             return self.dummy;
         }
-        let body = self.instantiate_rev(e, &fvars);
+        let body = self.instantiate_rev(e, fvars);
         let r = self.infer_type_core(body, infer_only);
         if self.bad() {
             return self.dummy;
         }
         let r = expr::cheap_beta_reduce(&mut self.st, r);
-        self.mk_binding(&fvars, r, false, false)
+        self.mk_binding(fvars, r, false, false)
     }
 
     /// `infer_pi`.
     fn infer_pi(&mut self, e0: ExprId, infer_only: bool) -> ExprId {
         let mark = self.enter_scope();
-        let r = self.infer_pi_in(e0, infer_only);
+        let mut fvars = self.take_vec();
+        let mut us = self.take_levels(self.st.level_list_empty());
+        let r = self.infer_pi_in(e0, infer_only, &mut fvars, &mut us);
+        self.give_vec(fvars);
+        self.give_levels(us);
         self.leave_scope(mark);
         r
     }
 
     /// The body of `infer_pi`. The free variables that it makes stay in scope.
-    fn infer_pi_in(&mut self, e0: ExprId, infer_only: bool) -> ExprId {
-        let mut fvars: Vec<ExprId> = Vec::new();
-        let mut us: Vec<LevelId> = Vec::new();
+    fn infer_pi_in(
+        &mut self,
+        e0: ExprId,
+        infer_only: bool,
+        fvars: &mut Vec<ExprId>,
+        us: &mut Vec<LevelId>,
+    ) -> ExprId {
         let mut e = e0;
         let mut walking = true;
         while walking && !self.bad() {
             match self.st.node(e) {
                 Expr::Pi(b) => {
-                    let d = self.instantiate_rev(b.dom, &fvars);
+                    let d = self.instantiate_rev(b.dom, fvars);
                     let t = self.infer_type_core(d, infer_only);
                     let t1 = self.ensure_sort_core(t, d);
                     let u = self.sort_level(t1);
@@ -1252,7 +1301,7 @@ impl Checker {
         if self.bad() {
             return self.dummy;
         }
-        let body = self.instantiate_rev(e, &fvars);
+        let body = self.instantiate_rev(e, fvars);
         let t = self.infer_type_core(body, infer_only);
         let s = self.ensure_sort_core(t, body);
         if self.bad() {
@@ -1286,7 +1335,7 @@ impl Checker {
 
     /// The check branch of `infer_app`. It does the checks of the C++ kernel for each argument in the same order, but it infers the type of the head one time and does not infer the type of each partial application. The pi type of the head is instantiated in chunks, as in `infer_app_only`, and the domain of each binder is instantiated with the arguments before it. Thus the body of the pi type is not instantiated again for each argument.
     fn infer_app_check(&mut self, e: ExprId) -> ExprId {
-        let mut nodes: Vec<ExprId> = Vec::new();
+        let mut nodes = self.take_vec();
         let mut f = e;
         let mut walking = true;
         while walking {
@@ -1298,7 +1347,7 @@ impl Checker {
                 _ => walking = false,
             }
         }
-        let mut args: Vec<ExprId> = Vec::new();
+        let mut args = self.take_vec();
         let f = expr::app_args(&self.st, e, &mut args);
         let mut f_type = self.infer_type_core(f, false);
         let n = args.len();
@@ -1310,10 +1359,14 @@ impl Checker {
             j = k;
             i += 1;
         }
-        if self.bad() {
-            return self.dummy;
-        }
-        self.instantiate_rev(f_type, &args[j..n])
+        let r = if self.bad() {
+            self.dummy
+        } else {
+            self.instantiate_rev(f_type, &args[j..n])
+        };
+        self.give_vec(nodes);
+        self.give_vec(args);
+        r
     }
 
     /// One step of `infer_app_check` for the argument `i`, at the application node `e`. `f_type` is a pi type or a term whose loose bound variables are the arguments `j..i`. It gives the body of the pi type and the new start of the chunk.
@@ -1356,7 +1409,7 @@ impl Checker {
 
     /// The infer-only branch of `infer_app`. It instantiates the arguments in chunks.
     fn infer_app_only(&mut self, e: ExprId) -> ExprId {
-        let mut args: Vec<ExprId> = Vec::new();
+        let mut args = self.take_vec();
         let f = expr::app_args(&self.st, e, &mut args);
         let mut f_type = self.infer_type_core(f, true);
         let mut j = 0;
@@ -1368,10 +1421,13 @@ impl Checker {
             j = k;
             i += 1;
         }
-        if self.bad() {
-            return self.dummy;
-        }
-        self.instantiate_rev(f_type, &args[j..nargs])
+        let r = if self.bad() {
+            self.dummy
+        } else {
+            self.instantiate_rev(f_type, &args[j..nargs])
+        };
+        self.give_vec(args);
+        r
     }
 
     /// One step of `infer_app_only`. It gives the new function type and the new start of the chunk.
@@ -1397,21 +1453,22 @@ impl Checker {
     /// `infer_let`.
     fn infer_let(&mut self, e0: ExprId, infer_only: bool) -> ExprId {
         let mark = self.enter_scope();
-        let r = self.infer_let_in(e0, infer_only);
+        let mut fvars = self.take_vec();
+        let r = self.infer_let_in(e0, infer_only, &mut fvars);
+        self.give_vec(fvars);
         self.leave_scope(mark);
         r
     }
 
     /// The body of `infer_let`. The free variables that it makes stay in scope.
-    fn infer_let_in(&mut self, e0: ExprId, infer_only: bool) -> ExprId {
-        let mut fvars: Vec<ExprId> = Vec::new();
+    fn infer_let_in(&mut self, e0: ExprId, infer_only: bool, fvars: &mut Vec<ExprId>) -> ExprId {
         let mut e = e0;
         let mut walking = true;
         while walking && !self.bad() {
             match self.st.node(e) {
                 Expr::Let(l) => {
-                    let ty = self.instantiate_rev(l.ty, &fvars);
-                    let val = self.instantiate_rev(l.value, &fvars);
+                    let ty = self.instantiate_rev(l.ty, fvars);
+                    let val = self.instantiate_rev(l.value, fvars);
                     if !infer_only {
                         let t = self.infer_type_core(ty, infer_only);
                         self.ensure_sort_core(t, ty);
@@ -1430,13 +1487,13 @@ impl Checker {
         if self.bad() {
             return self.dummy;
         }
-        let body = self.instantiate_rev(e, &fvars);
+        let body = self.instantiate_rev(e, fvars);
         let r = self.infer_type_core(body, infer_only);
         if self.bad() {
             return self.dummy;
         }
         let r = expr::cheap_beta_reduce(&mut self.st, r);
-        self.mk_binding(&fvars, r, false, true)
+        self.mk_binding(fvars, r, false, true)
     }
 
     /// The data of the inductive type of a slot that `infer_proj` needs: the number of parameters, the number of indices, the number of constructors and the first constructor.

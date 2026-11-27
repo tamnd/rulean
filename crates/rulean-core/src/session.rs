@@ -385,8 +385,11 @@ impl Checker {
         let mut i = 0;
         while i < pending.len() {
             let (tag, a, b, v) = pending[i];
-            let local = tag == S_INFER || tag == S_CHECK;
-            let scratch_key = local && ExprId(a).tier() == Tier::Scratch;
+            let local = tag != S_UNFOLD;
+            let pair = tag == S_SUCCESS;
+            let scratch_key = local
+                && (ExprId(a).tier() == Tier::Scratch
+                    || (pair && ExprId(b).tier() == Tier::Scratch));
             let a2 = if scratch_key && lbudget == 0 {
                 None
             } else if scratch_key {
@@ -394,13 +397,31 @@ impl Checker {
             } else {
                 Some(ExprId(a))
             };
+            let b2 = match a2 {
+                Some(_) if pair && ExprId(b).tier() == Tier::Scratch => {
+                    self.promote(ExprId(b), &mut map, &mut lbudget, true)
+                }
+                Some(_) => Some(ExprId(b)),
+                None => None,
+            };
+            let a2 = match b2 {
+                Some(_) => a2,
+                None => None,
+            };
+            let b = match b2 {
+                Some(x) if pair => x.0,
+                _ => b,
+            };
             let v2 = match a2 {
                 None => None,
                 Some(_) if value_is_term(tag) && ExprId(v).tier() == Tier::Scratch => {
                     if scratch_key {
                         self.promote(ExprId(v), &mut map, &mut lbudget, true)
                     } else {
-                        self.promote(ExprId(v), &mut map, &mut budget, local)
+                        // A value can have a free variable only if its key has one, or if it is a type that the local context gives.
+                        let fv =
+                            tag == S_INFER || tag == S_CHECK || expr::has_fvar(&self.st, ExprId(a));
+                        self.promote(ExprId(v), &mut map, &mut budget, fv)
                     }
                 }
                 Some(_) => Some(ExprId(v)),
@@ -670,6 +691,35 @@ mod tests {
         c.sess.note(S_WHNF, key.0, 0, x.0);
         c.sess_commit();
         assert_eq!(c.sess.stats.drops, 1);
+    }
+
+    #[test]
+    fn commit_promotes_both_scratch_terms_of_a_pair() {
+        let (mut c, _) = checker_with_scratch(400);
+        let ty = c.st.mk_bvar(9);
+        let x = c.st.mk_fvar(0, ty);
+        let y = c.st.mk_fvar(1, ty);
+        let (a, b) = if c.st.hash(x) <= c.st.hash(y) {
+            (x, y)
+        } else {
+            (y, x)
+        };
+        c.sess.note(S_SUCCESS, a.0, b.0, 1);
+        c.sess_commit();
+        c.st.clear_scratch();
+        assert_eq!(c.sess.stats.drops, 0);
+        // The copies have the same hash, so the same order, and building the terms again finds the copies.
+        let ty = c.st.mk_bvar(9);
+        let x = c.st.mk_fvar(0, ty);
+        let y = c.st.mk_fvar(1, ty);
+        assert_eq!(x.tier(), Tier::Frozen);
+        assert_eq!(y.tier(), Tier::Frozen);
+        let (a, b) = if c.st.hash(x) <= c.st.hash(y) {
+            (x, y)
+        } else {
+            (y, x)
+        };
+        assert!(c.sess.get(S_SUCCESS, a.0, b.0, c.sess_cut()).is_some());
     }
 
     #[test]

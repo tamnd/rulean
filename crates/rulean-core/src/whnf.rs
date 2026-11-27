@@ -5,7 +5,7 @@
 use alloc::vec::Vec;
 use rulean_format::Hints;
 use rulean_nat::Nat;
-use rulean_store::{Expr, ExprId, LevelListId, Literal, NameId, NatId};
+use rulean_store::{Expr, ExprId, LevelListId, Literal, NameId, NatId, Tier};
 
 use crate::env::{ConstKind, RuleInfo};
 use crate::expr;
@@ -559,8 +559,8 @@ impl Checker {
         if let Some(r) = self.c_whnf_core.get(k.0, 0) {
             return ExprId(r);
         }
-        let key = !cheap_rec && !cheap_proj && self.sess_key(e);
-        if key {
+        let key = !cheap_rec && !cheap_proj && self.sess_key_local(e);
+        if key && e.tier() == Tier::Frozen {
             if let Some(r) = self.sess_get(S_WHNF_CORE, e.0, 0) {
                 self.c_whnf_core.put(k.0, 0, r);
                 return ExprId(r);
@@ -956,8 +956,8 @@ impl Checker {
         if let Some(r) = self.c_whnf.get(k.0, 0) {
             return ExprId(r);
         }
-        let key = self.sess_key(e);
-        if key {
+        let key = self.sess_key_local(e);
+        if key && e.tier() == Tier::Frozen {
             if let Some(r) = self.sess_get(S_WHNF, e.0, 0) {
                 self.c_whnf.put(k.0, 0, r);
                 return ExprId(r);

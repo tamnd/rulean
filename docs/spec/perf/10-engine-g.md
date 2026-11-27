@@ -129,3 +129,36 @@ Step G7 (no second check after a "not equal" from engine F) was also measured. E
 | `bad/loop-unfolded-once-bad` | 9.37 G | 1.39 G | nano-lean 0.26 G |
 | sum of the perf tests | 118.4 G | 110.6 G | nano-lean 86.3 G |
 | Init, `--engine F --threads 1` | 208.6 G | 208.9 G | |
+
+## 10.9 The large numbers of engine G
+
+`gf3-matrix-product` uses 17.8 G on main, and the official kernel uses 10.9 G. So on this test rulean was slower than the official kernel. The test multiplies packed vectors: each value is a `Nat` of about 610,000 bits (about 9,500 limbs), and each step multiplies it by a part of about 781 bits. A count of the calls of the schoolbook loop gave 9,260 products of a number with 8,192 to 32,767 limbs and a number with 8 to 31 limbs, for a total of 1.14 G limb products. The other products are small. A sample of the old build gave 52% of the samples in the schoolbook loop, 19% in `__bzero`, and the rest in `memmove`, `madvise` and the bitwise operations.
+
+The changes are these.
+
+1. Engine G reads the operands of a `Nat` operation in place. Before, it copied each large operand, and each copy cost a memory copy and a free.
+2. Karatsuba uses the subtractive form and writes the result in place. It starts at 48 limbs, not 32. An operand that is much longer than the other is cut into parts with the length of the shorter operand.
+3. The shifts do not copy the input before the shift, and `land` finds the length of the result before it writes it.
+4. The schoolbook loop does four rows in one pass on the long operand, not two. Each carry is one limb, because each sum is at most 2^128 - 1.
+
+A probe that built the results with `push` in place of a zeroed buffer gave 18.6 G. The loop with `push` has a test of the capacity at each limb, so the compiler does not vectorize it. The zeroed buffer stays.
+
+A microbench (`natbench`, not in the repository) gave these counts. They are instructions for the full run.
+
+| Operation | Before | After |
+|---|---|---|
+| 10 products of two numbers of 9,531 limbs | 2.05 G | 1.27 G |
+| 200 products of 10,000 limbs by 12 limbs | 220.8 M | 205.8 M |
+
+The steps on `gf3-matrix-product`, with `rulean check --threads 1`:
+
+| Build | Instructions |
+|---|---|
+| main | 17.77 G |
+| 1 and 2 | 16.67 G |
+| and 3 | 16.48 G |
+| and 4 | 15.95 G |
+
+The change does not change the work on the corpora. With engine R and one thread, Init goes from 137.33 G to 137.40 G and Std goes from 226.16 G to 225.63 G. Both differences are below the 1% tolerance of the work gate. The perf total with engine F is 106.4 G. All 225 Arena tests give the expected verdict.
+
+The oracle tests of `rulean-nat` compare each operation with `num-bigint` on random operands, also on long operands with a short operand of an odd or an even length. The schoolbook loop now uses about 8.6 instructions for each limb product, so the loop is still about 60% of the test. A faster loop needs code outside the Aeneas subset, for example assembly as in GMP, and is not part of this step.

@@ -462,15 +462,6 @@ impl Ground {
             }
         }
     }
-
-    /// The number of a `Nat` value.
-    fn nat_of(&self, v: GVal) -> Option<Nat> {
-        match v {
-            GVal::Small(x) => Some(Nat::from_u64(x)),
-            GVal::Big(i) => Some(self.nats[i as usize].clone()),
-            _ => None,
-        }
-    }
 }
 
 impl Checker {
@@ -1406,15 +1397,35 @@ impl Checker {
                 None => {}
             }
         }
-        let (a, b) = match (self.gm.nat_of(x), self.gm.nat_of(y)) {
-            (Some(a), Some(b)) => (a, b),
+        // The operands are read in place. A copy of a large number costs a memory copy and a free for each operation (spec perf/10.9).
+        let sa;
+        let sb;
+        let a: &Nat = match x {
+            GVal::Small(v) => {
+                sa = Nat::from_u64(v);
+                &sa
+            }
+            GVal::Big(i) => &self.gm.nats[i as usize],
             _ => return Ctl::Bail,
         };
-        if op == OP_SUCC {
-            let r = a.succ();
-            return self.g_sized(r);
+        let b: &Nat = match y {
+            GVal::Small(v) => {
+                sb = Nat::from_u64(v);
+                &sb
+            }
+            GVal::Big(i) => &self.gm.nats[i as usize],
+            _ => return Ctl::Bail,
+        };
+        let out = if op == OP_SUCC {
+            sized(a.succ(), self.nat_max)
+        } else {
+            nat_big(op as usize, a, b, self.nat_max)
+        };
+        match out {
+            BigOut::Num(r) => Ctl::Ret(self.gm.nat_val(r)),
+            BigOut::Bool(t) => Ctl::Ret(self.g_bool(t)),
+            BigOut::Bail => Ctl::Bail,
         }
-        self.g_nat_big(op as usize, &a, &b)
     }
 
     fn g_bool(&self, t: bool) -> GVal {
@@ -1425,54 +1436,63 @@ impl Checker {
         };
         GVal::Ctor(c, 0, 0)
     }
+}
 
-    fn g_sized(&mut self, r: Nat) -> Ctl {
-        if Checker::nat_size(&r) > self.nat_max {
-            return Ctl::Bail;
-        }
-        Ctl::Ret(self.gm.nat_val(r))
+/// The result of `nat_big`.
+enum BigOut {
+    Num(Nat),
+    Bool(bool),
+    Bail,
+}
+
+/// `r`, or a bail if its size is above `nat_max`.
+fn sized(r: Nat, nat_max: u64) -> BigOut {
+    if Checker::nat_size(&r) > nat_max {
+        BigOut::Bail
+    } else {
+        BigOut::Num(r)
     }
+}
 
-    /// The binary operation of `nat_bin` on two numbers, with a bail in place of each fault.
-    fn g_nat_big(&mut self, op: usize, a: &Nat, b: &Nat) -> Ctl {
-        if op == NAT_POW || op == NAT_SHL {
-            let k = match b.to_u64() {
-                Some(k) if k <= u32::MAX as u64 => k,
-                _ => return Ctl::Bail,
-            };
-            if op == NAT_POW {
-                let one = Nat::from_u64(1);
-                if a.compare(&one) == core::cmp::Ordering::Greater
-                    && k != 0
-                    && Checker::nat_size(a) > self.nat_max / k
-                {
-                    return Ctl::Bail;
-                }
-                return Ctl::Ret(self.gm.nat_val(a.pow(k)));
+/// The binary operation of `nat_bin` on two numbers, with a bail in place of each fault.
+fn nat_big(op: usize, a: &Nat, b: &Nat, nat_max: u64) -> BigOut {
+    if op == NAT_POW || op == NAT_SHL {
+        let k = match b.to_u64() {
+            Some(k) if k <= u32::MAX as u64 => k,
+            _ => return BigOut::Bail,
+        };
+        if op == NAT_POW {
+            let one = Nat::from_u64(1);
+            if a.compare(&one) == core::cmp::Ordering::Greater
+                && k != 0
+                && Checker::nat_size(a) > nat_max / k
+            {
+                return BigOut::Bail;
             }
-            if a.is_zero() {
-                return Ctl::Ret(GVal::Small(0));
-            }
-            if Checker::nat_size(a) + k / 8 + 1 > self.nat_max {
-                return Ctl::Bail;
-            }
-            return Ctl::Ret(self.gm.nat_val(a.shift_left(k)));
+            return BigOut::Num(a.pow(k));
         }
-        match op {
-            crate::tc::NAT_ADD => self.g_sized(a.add(b)),
-            crate::tc::NAT_SUB => self.g_sized(a.sub(b)),
-            crate::tc::NAT_MUL => self.g_sized(a.mul(b)),
-            crate::tc::NAT_GCD => Ctl::Ret(self.gm.nat_val(a.gcd(b))),
-            crate::tc::NAT_MOD => Ctl::Ret(self.gm.nat_val(a.rem(b))),
-            crate::tc::NAT_DIV => Ctl::Ret(self.gm.nat_val(a.div(b))),
-            crate::tc::NAT_BEQ => Ctl::Ret(self.g_bool(a.beq(b))),
-            crate::tc::NAT_BLE => Ctl::Ret(self.g_bool(a.ble(b))),
-            crate::tc::NAT_LAND => Ctl::Ret(self.gm.nat_val(a.land(b))),
-            crate::tc::NAT_LOR => Ctl::Ret(self.gm.nat_val(a.lor(b))),
-            crate::tc::NAT_XOR => Ctl::Ret(self.gm.nat_val(a.xor(b))),
-            crate::tc::NAT_SHR => Ctl::Ret(self.gm.nat_val(a.shift_right_nat(b))),
-            _ => Ctl::Bail,
+        if a.is_zero() {
+            return BigOut::Num(Nat::from_u64(0));
         }
+        if Checker::nat_size(a) + k / 8 + 1 > nat_max {
+            return BigOut::Bail;
+        }
+        return BigOut::Num(a.shift_left(k));
+    }
+    match op {
+        crate::tc::NAT_ADD => sized(a.add(b), nat_max),
+        crate::tc::NAT_SUB => sized(a.sub(b), nat_max),
+        crate::tc::NAT_MUL => sized(a.mul(b), nat_max),
+        crate::tc::NAT_GCD => BigOut::Num(a.gcd(b)),
+        crate::tc::NAT_MOD => BigOut::Num(a.rem(b)),
+        crate::tc::NAT_DIV => BigOut::Num(a.div(b)),
+        crate::tc::NAT_BEQ => BigOut::Bool(a.beq(b)),
+        crate::tc::NAT_BLE => BigOut::Bool(a.ble(b)),
+        crate::tc::NAT_LAND => BigOut::Num(a.land(b)),
+        crate::tc::NAT_LOR => BigOut::Num(a.lor(b)),
+        crate::tc::NAT_XOR => BigOut::Num(a.xor(b)),
+        crate::tc::NAT_SHR => BigOut::Num(a.shift_right_nat(b)),
+        _ => BigOut::Bail,
     }
 }
 

@@ -197,3 +197,19 @@ The session of 08.4 kept only infer-only results, because a check-mode result al
 | #245 | 126.4 G | 206.6 G |
 
 This is the first change since 11.10 that makes engine R faster on Init. The work that it removes is the same work in two declarations, not a repeated step in one declaration. So the next work looks for other work that the declarations repeat.
+
+## 11.16 Session keys with free variables
+
+The session of 08.4 used a key only if the term had no free variable and was in the frozen tier. Most terms that the type check of a declaration infers are in the binders of the declaration, so they have free variables. A free variable is a hash-consed node `FVar(level, ty)`, and the local context of a declaration only grows. So two declarations that open the same binders in the same order make the same free variable nodes. A let binder is different, because the value of the free variable is not in the node. PR #247 permits a key with free variables if the declaration has no let binder until that point.
+
+A key in the scratch tier is promoted to the frozen tier at the commit of the declaration. These promotions have a budget of 2% of the scratch size. A budget of 10% made the gf3 test slower and used much more memory. A lookup is done only with a frozen key, because a scratch key cannot be in the table before the commit.
+
+PR #248 uses the same rule for the results of `whnf_core`, `whnf` and the successful definitional equalities. For a pair, both terms are promoted, and the order by hash does not change, because the hash is structural.
+
+| Build | Init, engine R | Std, engine R |
+|---|---|---|
+| #245 | 126.4 G | 206.6 G |
+| #247: inferences with free variables | 106.6 G | 180.1 G |
+| #248: all tags but unfold | 103.9 G | 178.2 G |
+
+The goal of M9 for Init is at most 80 G. The next work looks at the profile after #248.

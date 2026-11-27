@@ -16,7 +16,7 @@ use crate::expr;
 use crate::memo::Memo;
 use crate::nbe::{SmallOut, small_op};
 use crate::tc::{Checker, NAT_POW, NAT_SHL};
-use crate::value::SMALL_NAT_LIMIT;
+use crate::value::{EnvId, Head, SMALL_NAT_LIMIT, Value, ValueId, small_get};
 use crate::whnf::find_rule;
 
 /// The empty environment.
@@ -171,6 +171,78 @@ pub struct Ground {
     /// The runs, and the runs that gave a result.
     pub runs: u64,
     pub hits: u64,
+}
+
+/// The number of value nodes that `value_term` reads at most.
+const VT_FUEL: u32 = 64;
+
+impl Checker {
+    /// A closed term with the value `v`. The value must be a suspended closed argument, a `Nat` literal, or a constant or a folded definition applied to such values. The function reads at most `VT_FUEL` nodes, so it is cheap. Engine F uses it to give a closed query to engine G.
+    fn value_term(&mut self, v: ValueId, fuel: &mut u32) -> Option<ExprId> {
+        if *fuel == 0 {
+            return None;
+        }
+        *fuel -= 1;
+        match self.va.get(v) {
+            Value::Susp(env, e, slot) => {
+                if env == EnvId::NIL {
+                    Some(e)
+                } else {
+                    match self.va.slot_get(slot) {
+                        Some(w) => self.value_term(w, fuel),
+                        None => None,
+                    }
+                }
+            }
+            Value::Small(lo, hi) => Some(self.mk_nat(Nat::from_u64(small_get(lo, hi)))),
+            Value::Lit(Literal::Nat(n)) => Some(self.st.mk_nat_lit(n)),
+            Value::Glued(c, us, sp, _) | Value::Neu(Head::Const(c, us), sp) => {
+                let mut args = Vec::new();
+                let n = self.va.spine_push_args(sp, &mut args);
+                let mut t = self.st.mk_const(c, us);
+                let mut i = 0;
+                let mut ok = true;
+                while ok && i < n {
+                    match self.value_term(args[i], fuel) {
+                        Some(a) => t = self.st.mk_app(t, a),
+                        None => ok = false,
+                    }
+                    i += 1;
+                }
+                if ok { Some(t) } else { None }
+            }
+            _ => None,
+        }
+    }
+
+    /// True if the value `v` is `Bool.true`, `Bool.false`, `Nat.zero` or a `Nat` literal. The function does not evaluate `v`.
+    fn value_scalar(&self, v: ValueId) -> bool {
+        match self.va.get(v) {
+            Value::Small(..) | Value::Lit(Literal::Nat(_)) => true,
+            Value::Neu(Head::Const(c, _), sp) => {
+                self.va.spine_len(sp) == 0
+                    && (c == self.b.bool_true || c == self.b.bool_false || c == self.b.nat_zero)
+            }
+            _ => false,
+        }
+    }
+
+    /// `a =?= b` with engine G, when one value is a scalar and `value_term` gives a closed term for the other value. Without this step, engine F evaluates the closed term with its own `Nat` operations, fills its arena, and engine R then does the same work again with engine G.
+    pub(crate) fn conv_ground(&mut self, a: ValueId, b: ValueId) -> Option<bool> {
+        if !(self.value_scalar(a) || self.value_scalar(b)) {
+            return None;
+        }
+        let mut fuel = VT_FUEL;
+        let t = match self.value_term(a, &mut fuel) {
+            Some(t) => t,
+            None => return None,
+        };
+        let s = match self.value_term(b, &mut fuel) {
+            Some(s) => s,
+            None => return None,
+        };
+        self.ground_defeq(t, s)
+    }
 }
 
 impl Ground {

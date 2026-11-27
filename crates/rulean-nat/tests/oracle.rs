@@ -132,6 +132,35 @@ fn karatsuba_agrees_with_num_bigint() {
 }
 
 #[test]
+fn schoolbook_rows_agree_with_num_bigint() {
+    // A long operand and a short operand with an odd or an even number of limbs, as in the products of packed vectors.
+    let mut rng = Rng(5);
+    for (na, nb) in [
+        (1000, 1),
+        (1000, 2),
+        (1000, 3),
+        (999, 12),
+        (998, 13),
+        (40, 31),
+    ] {
+        let a: Vec<u64> = (0..na).map(|_| rng.next()).collect();
+        let b: Vec<u64> = (0..nb).map(|_| rng.next()).collect();
+        check(
+            "schoolbook",
+            Nat::from_limbs(b.clone()).mul(&Nat::from_limbs(a.clone())),
+            big(&a) * big(&b),
+        );
+        let x = vec![u64::MAX; na];
+        let y = vec![u64::MAX; nb];
+        check(
+            "schoolbook ones",
+            Nat::from_limbs(x.clone()).mul(&Nat::from_limbs(y.clone())),
+            big(&x) * big(&y),
+        );
+    }
+}
+
+#[test]
 fn large_division_agrees_with_num_bigint() {
     let mut rng = Rng(11);
     for _ in 0..200 {

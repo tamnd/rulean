@@ -197,6 +197,7 @@ impl Checker {
     /// `quick_is_def_eq`.
     fn quick_is_def_eq(&mut self, t: ExprId, s: ExprId) -> LBool {
         if self.eq(t, s) || self.pair_seen(true, t, s) || self.sess_seen(t, s) {
+            self.known_pair = (t, s);
             return LBool::True;
         }
         match (self.st.node(t), self.st.node(s)) {
@@ -1003,7 +1004,8 @@ impl Checker {
             return true;
         }
         let r = self.is_def_eq_shared(t, s);
-        if r {
+        // A pair that the quick check found known is already in the caches, so it is not noted again.
+        if r && self.known_pair != (t, s) {
             self.pair_put(true, t, s);
         }
         r

@@ -403,6 +403,8 @@ pub struct Checker {
     pub(crate) lp_key: Raw,
     /// True if a local of the declaration has a value. Then the session takes no key with free variables (spec perf/11.16).
     pub(crate) lctx_let: bool,
+    /// The last pair that `quick_is_def_eq` found equal with no work: alpha-equal, or in a success cache. `is_def_eq` does not put this pair in the caches again (spec perf/11.18).
+    pub(crate) known_pair: (ExprId, ExprId),
     /// The safety of the declaration (`m_definition_safety`).
     pub(crate) safety: Safety,
     // The local context, indexed by the level of the free variable.
@@ -525,6 +527,7 @@ impl Checker {
             check_lparams: false,
             lp_key: 0,
             lctx_let: false,
+            known_pair: (ExprId(0), ExprId(0)),
             safety: Safety::Safe,
             lctx_name: Vec::new(),
             lctx_info: Vec::new(),

@@ -192,7 +192,7 @@ pub fn mul_school(a: &[u64], b: &[u64]) -> Vec<u64> {
 fn school_rows(r: &mut [u64], long: &[u64], short: &[u64]) {
     let nl = long.len();
     let ns = short.len();
-    // The rows are written in `r` at the offset `i`, with no sub-slice, so the loops have no reborrow. Two rows go in one pass on the long operand, so each limb of the result is read and written half as often. The carries are single limbs: `t` and `u` are at most (2^64 - 1) + (2^64 - 1)^2 + (2^64 - 1) = 2^128 - 1.
+    // The rows are written in `r` at the offset `i`, with no sub-slice, so the loops have no reborrow. The inner loop of four rows reads the earlier limbs of `long` again, so that the loop carries only the carries. Two rows go in one pass on the long operand, so each limb of the result is read and written half as often. The carries are single limbs: `t` and `u` are at most (2^64 - 1) + (2^64 - 1)^2 + (2^64 - 1) = 2^128 - 1.
     let mut i = 0;
     while i + 3 < ns {
         let x0 = short[i] as u128;
@@ -203,12 +203,12 @@ fn school_rows(r: &mut [u64], long: &[u64], short: &[u64]) {
         let mut c1: u64 = 0;
         let mut c2: u64 = 0;
         let mut c3: u64 = 0;
-        let mut p1: u64 = 0;
-        let mut p2: u64 = 0;
-        let mut p3: u64 = 0;
         let mut j = 0;
         while j < nl {
             let l = long[j];
+            let p1 = if j >= 1 { long[j - 1] } else { 0 };
+            let p2 = if j >= 2 { long[j - 2] } else { 0 };
+            let p3 = if j >= 3 { long[j - 3] } else { 0 };
             let t = r[i + j] as u128 + x0 * l as u128 + c0 as u128;
             let u = (t as u64) as u128 + x1 * p1 as u128 + c1 as u128;
             let v = (u as u64) as u128 + x2 * p2 as u128 + c2 as u128;
@@ -218,11 +218,12 @@ fn school_rows(r: &mut [u64], long: &[u64], short: &[u64]) {
             c1 = (u >> 64) as u64;
             c2 = (v >> 64) as u64;
             c3 = (w >> 64) as u64;
-            p3 = p2;
-            p2 = p1;
-            p1 = l;
             j += 1;
         }
+        // The pipeline needs the last three limbs of the long operand.
+        let p1 = long[nl - 1];
+        let p2 = if nl >= 2 { long[nl - 2] } else { 0 };
+        let p3 = if nl >= 3 { long[nl - 3] } else { 0 };
         // Three more columns empty the pipeline: in column nl + k, the rows below k have no more input.
         let u = c0 as u128 + x1 * p1 as u128 + c1 as u128;
         let v = (u as u64) as u128 + x2 * p2 as u128 + c2 as u128;

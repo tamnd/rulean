@@ -3,7 +3,7 @@
 //! This module is a transcription of `is_def_eq_core` and its helpers in `type_checker.cpp` of the official kernel v4.35.0. The order of the steps is the same as the order in the official function, because the order changes which terms the checker unfolds.
 
 use alloc::vec::Vec;
-use rulean_store::{Expr, ExprId, LevelListId, Literal, NameId};
+use rulean_store::{Expr, ExprId, LevelListId, Literal, NameId, Tier};
 
 use crate::conv::Engine;
 use crate::env::{ConstKind, compare_hints};
@@ -61,7 +61,11 @@ impl Checker {
 
     /// True if the session has the success of the pair. A hit also goes into the success cache of the declaration.
     fn sess_seen(&mut self, t: ExprId, s: ExprId) -> bool {
-        if !self.sess_key(t) || !self.sess_key(s) {
+        if !self.sess_key_local(t)
+            || !self.sess_key_local(s)
+            || t.tier() != Tier::Frozen
+            || s.tier() != Tier::Frozen
+        {
             return false;
         }
         let ht = self.st.hash(t);
@@ -89,7 +93,7 @@ impl Checker {
         };
         if success {
             self.c_success.put(a.0, b.0, 1);
-            if !self.bad() && self.sess_key(a) && self.sess_key(b) {
+            if !self.bad() && self.sess_key_local(a) && self.sess_key_local(b) {
                 self.sess.note(S_SUCCESS, a.0, b.0, 1);
             }
         } else {

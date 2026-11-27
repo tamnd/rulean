@@ -21,6 +21,7 @@ rulean must be at least 10 times faster than each popular Lean 4 kernel on the s
 | 09-rivals.md | what the fastest rivals do, and the changes to engine F that follow |
 | 10-engine-g.md | engine G, the machine for closed terms, the step `ground_cmp`, the large numbers, and the next work |
 | 11-engine-choice.md | a new profile of Init, and the rule that picks engine F or engine R for each declaration |
+| 12-first-principles.md | the cost of a check from first principles, where rulean makes terms, and the design of shared values for engine F |
 
 ## Rules for this part
 

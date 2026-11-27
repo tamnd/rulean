@@ -12,7 +12,7 @@ The check of one declaration must do three things.
 
 The rules do not need new terms. A new term is necessary only where the result goes out of the kernel, for example the type of a declaration that the session stores. All other terms that the kernel builds are a cost of the method, not of the rules.
 
-Init has about 300 k declarations. Spec 04.10 gives a budget of about 270 k instructions for each declaration at the target. A hash-consed node costs about 60 to 100 instructions to make (hash, probe, compare, write). So the budget is about 3000 new nodes for each declaration, if the check does nothing else.
+Init has 58,547 declarations. The target of 22.4 G for Init gives a budget of about 380 k instructions for each declaration. Today engine R uses about 1.4 M instructions for each declaration. A hash-consed node costs about 60 to 100 instructions to make (hash, probe, compare, write). So the budget is about 4000 new nodes for each declaration, if the check does nothing else. Today the check makes about 1530 new nodes for each declaration, and the other work (walks, probes, reduction) costs more than the nodes.
 
 ## 12.2 What rulean does today
 
@@ -20,7 +20,7 @@ All counts are from `rulean check --threads 1` on Init, after #259, on the machi
 
 ### Engine R
 
-Engine R checks with substitution on hash-consed terms. On Init it makes 89.8 M new interned nodes, which is about 300 nodes for each declaration on average, and much more for the large ones. It makes 10.5 M calls to `instantiate`: 3.46 M forward and 7.05 M reverse.
+Engine R checks with substitution on hash-consed terms. On Init it makes 89.8 M new interned nodes, which is about 1530 nodes for each declaration on average, and much more for the large ones. It makes 10.5 M calls to `instantiate`: 3.46 M forward and 7.05 M reverse.
 
 | Function | Samples (of 5806 in the check) |
 |---|---|
@@ -114,3 +114,39 @@ The machine of section 03 is shared with other work, and in November 2026 it has
 ## 12.7 Results that did not help
 
 The results of 11.21 apply here. A cache of whole calls to `instantiate` made more work than it saved, because the memo of `inst_rec` already finds most of the repeated nodes. This supports P1: the gain is to make fewer terms, not to find the terms that we made before.
+
+## 12.8 Results of step 1 and of the tiers
+
+### Step 1 did not help
+
+Step 1 of 12.5 interns each spine and each environment in the arena, removes the value keys, and keeps the cache of `unfold_glued` in the slot of the value. The branch is not merged. The results on Init are the minimum of interleaved runs.
+
+| Build | Mode | Init (instructions) |
+|---|---|---|
+| main at #259 | default | 85.7 G |
+| step 1, full hash table | default | 86.9 G |
+| main at #259 | engine F alone | 202.9 G |
+| step 1, full hash table | engine F alone | 243.3 G |
+| step 1, direct-mapped table of 4096 entries | engine F alone | about 274 G |
+
+In the default mode the change is about 1.2 G slower. With engine F alone it is 42 G slower, and the direct-mapped table makes it worse, because the misses make more values. The shared slots also change the work of engine F: the count of steps goes up by about 7%, and engine R confirms more results. A shared value has one slot, but the same value in two contexts can need two different cache entries. Thus P2 in this form is not a gain. The keys cost less than the intern of each spine and each environment.
+
+### Engine R does most of the check
+
+In the default mode, engine F checks only small values and deep types, so engine R checks nearly all of Init. The counters of a probe binary give these counts for engine R on Init.
+
+| Counter | Count |
+|---|---|
+| interns | 91.7 M |
+| walks | 61.3 M |
+| walks of the frozen tier | 26.2 M, with 12.8 M hits |
+| walks of the scratch tier | 35.1 M, with 2.8 M hits (8%) |
+
+The scratch tier finds only 8% of its walks. The profile of 12.2 shows that `inst_rec` is about 31% of the check and the probes of the large tables are about 23%. If all the cost of `instantiate` went away, Init would be about 55 G. Thus the target of 22.4 G needs a change of the whole check, not a change of one part. The two possible paths are these.
+
+1. Engine R makes fewer terms in `infer_lambda`, `infer_app` and the beta step, and it probes smaller tables.
+2. Engine F becomes able to check all of Init with less work than engine R, so that the default mode can use it for each declaration.
+
+### A smaller scratch table did not help
+
+A branch made the scratch table and the memo smaller when they are cleared after a declaration (a factor of 8, with a minimum of 2^14 slots). The goal was fewer cache misses. Init with engine R went from 80.1 G to 82.2 G and 83.6 G for the two variants, and the cycles did not show a clear gain. The branch is not merged.

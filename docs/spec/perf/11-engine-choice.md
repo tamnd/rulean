@@ -160,3 +160,17 @@ The callers of `inst_rec` are the beta step of `whnf_core_app` (about 60% of its
 Engine R on Init uses 137.4 G instructions. The exit of M9 needs at most 80 G, and nano-lean uses 24.3 G (01). The profile of 11.12 and the probes of 11.10 show that a faster substitution is not enough, because the cost is in the number of substitutions and new nodes. nano-lean and gruszka make no substitution: they evaluate with an environment, and they share each value and its results (09.3, 09.4). Engine F has the evaluation with an environment, but not the shared values. So with the rule of 11.7, engine R checks most values of Init.
 
 So the path to the exit of M9 is the plan R1 to R6 of 09.5 for engine F, and not more work on engine R. When engine F uses fewer instructions than engine R on wide values, the limits of 11.7 go up, and engine F checks more of Init. The first step is R1, a closure that keeps only the used part of its environment, because R2 and R3 need equal closures for the same work. Each step is measured on Init with engine F and with the limits of 11.7 set very high, so that the measure shows engine F alone, and on the perf tests. Engine F stays the engine for deep terms and for the evaluation tests.
+
+## 11.14 The probes of R1 and R3
+
+Each probe below is a change that we measured and did not keep. The column "engine F alone" is Init with engine F and with the limits of 11.7 set to 5000, as 11.13 gives. The column "rule" is Init with engine F and the limits of 11.7.
+
+| Probe | Engine F alone | Rule | Perf total |
+|---|---|---|---|
+| main with #243 | 211.74 G | 138.36 G | 106.4 G |
+| R1 and R3 | 213.99 G | 138.53 G | 105.9 G |
+| R3 only | 210.87 G | | |
+
+R1 cuts the environment of a closure and of a suspension to the part that the body uses. It copies at most 4 values, and else it keeps the full environment. R1 alone did not decrease the count. R3 is a lossy cache of the evaluation of a closed application, with 2^13 slots. It keeps a result only when the evaluation did not use a fallback. R1 and R3 together make engine F alone 1.1% slower. R3 alone makes it 0.4% faster, and this gain is too small for a new cache in the hot path.
+
+The copy of R1 makes new environments, so two closures for the same work do not share an environment, and the value keys of the closures cost more. R3 finds few repeated closed applications, because the values of engine F are not shared. So R1 and R3 need R2 first. The next step is R2, the shared values of 09.5.

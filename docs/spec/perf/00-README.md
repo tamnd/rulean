@@ -19,6 +19,7 @@ rulean must be at least 10 times faster than each popular Lean 4 kernel on the s
 | 07-plan.md | the milestones, the work items, the gates and the releases |
 | 08-where-time-goes.md | the measures of Init after the first M9 steps, and the work that follows |
 | 09-rivals.md | what the fastest rivals do, and the changes to engine F that follow |
+| 10-engine-g.md | engine G, the machine for closed terms, the step `ground_cmp`, and the next work |
 
 ## Rules for this part
 

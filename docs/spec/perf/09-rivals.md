@@ -14,15 +14,17 @@ The table gives the sum of the instructions on the 44 perf tests of the Arena re
 | official-nightly | nightly | 44 | 959.2 G |
 | rulean v0.8.7 | 7288838 | 42 | 449.2 G |
 
-On some tests the gap is very large:
+On some tests the gap is very large. The best rival is the checker with the smallest count and a correct verdict on the test:
 
 | Test | rulean | Best rival |
 |---|---|---|
-| `magma-list-pair-n21` | 89.5 G | 0.5 G (lean4lean) |
-| `magma-list-deep-n36` | 153.1 G | 0.7 G (lean4lean) |
-| `gf3-matrix-product` | 40.7 G | 0.5 G (lean4lean) |
+| `magma-list-pair-n21` | 89.5 G | 6.7 G (rpylean) |
+| `magma-list-deep-n36` | 153.1 G | 1.6 G (rpylean) |
+| `gf3-matrix-product` | 40.7 G | 5.0 G (nano-lean) |
 | `ite-taken-branch-bad` | 25.4 G | 1.6 G (nano-lean) |
 | `grind-ring-5` | 6.4 G | 1.3 G (nano-lean) |
+
+A first version of this table gave 0.5 G and 0.7 G for lean4lean. On these tests lean4lean rejects a good declaration, so its counts are not used.
 
 ## 09.2 Why engine F is slow on these tests
 

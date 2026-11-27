@@ -99,8 +99,33 @@ A profile of `magma-list-deep-n36` gives 827 samples in `ground_loop`, and 424 o
 | G4 | `ground_cmp` in lazy delta, after 16 steps (done) | Cheap refutations of closed data, with no cost on Init |
 | G5 | A compiled form of each application, with the kind of each argument found one time. A flat environment in an array. The recursor data kept for each recursor. | A smaller cost for each step of engine G |
 | G6 | A memo of thunks at the key (term, cut environment), as in `nl-ref` | Shared work for the same closed subterm, linear `shared-subterm` |
-| G7 | After a "not equal" from engine F, engine R does not check the query again | No double work on the bad tests |
-| G8 | Argument probes with a budget and a cache of failures | Cheap refutations on open terms, for example `short-circuit-and-bad` |
+| G7 | After a "not equal" from engine F, engine R does not check the query again (measured, no change, not merged, see 10.8) | No double work on the bad tests |
+| G8 | `certain_ne`, a certain refutation of open terms with rigid heads, in lazy delta (done, see 10.8) | Cheap refutations on open terms, for example `loop-unfolded-once-bad` |
 | G9 | Derived rules (case trees) | Fewer layers of `brecOn` and matchers |
 
 Each step must keep the verdicts of 07.4 and the Arena tests. Each step is measured on Init and on the perf tests, and a step that does not help is not merged.
+
+## 10.8 The step `certain_ne` (G8)
+
+On each bad perf test, the top query of engine F stops with `ArenaFull`, and engine R then checks the declaration. So the cost of a bad test is the cost of engine R on a query that is not equal. On `loop-unfolded-once-bad`, engine R unfolds the two loops in lock step. At each step, lazy delta finds `Bool.and A B` against `Bool.and A' B'` with the same head, and `is_def_eq_args` compares `B` against `B'` first, because it starts at the last argument. `B` is the rest of the loop, so each step compares the full rest of the loop before it unfolds `Bool.and`. The first arguments are `g w (0 + k)` and `g w (0 + k + 1)`, and these terms are certainly not equal.
+
+`certain_ne(a, b)` is true only if the official kernel returns false for `a =?= b`. It is true if the two terms in weak head normal form have one of these shapes, and the type of `a` is a data type:
+
+- Two different `Nat` literals.
+- Two different constructors, or the same constructor with a field that is certainly not equal.
+- A constructor or a literal against a rigid term.
+- Two rigid terms with different heads, or the same head and an argument that is certainly not equal.
+
+A rigid term is an application of a free variable with no value, a recursor that is stuck on a rigid major premise, or a projection of a rigid term. The recursor must not be K-like, and the type of its major premise must have two or more constructors. A data type is an inductive type with two or more constructors in a sort that is not zero for all values of the level parameters. So structure eta, the unit-like rule and proof irrelevance do not apply. For such terms, lazy delta cannot unfold a head, `is_def_eq_app` finds a pair that is not equal, and no later step of `is_def_eq_core` applies. This is the argument of `ground_cmp` (10.3) for open terms. The search stops at a depth of 3. The type is inferred last, because the shape test is cheaper.
+
+Engine R uses the step in `lazy_delta_both`. If a pair of arguments of the two applications is certainly not equal, `is_def_eq_args` cannot succeed, so the step does not call it and unfolds the two terms. The step only removes a call that returns false, so it does not change a result of the query. At this point the arguments go through `whnf_core` and not `whnf`, so the step does not unfold an argument that lazy delta does not unfold. The arguments under a rigid head go through `whnf`.
+
+A second use in `is_def_eq_app` was tested and not kept. It made `loop-unfolded-once-bad` 0.1 G faster, but it made `refute-cheap-last` go from 0.53 G to 0.64 G, because the search computed the fields of `N.S` chains that `is_def_eq` compares lazily.
+
+Step G7 (no second check after a "not equal" from engine F) was also measured. Engine F stops with `ArenaFull` on all bad perf tests before it gives a "not equal", so G7 gave no change and was not merged. An arena of 2^19 to 2^23 nodes does not help, because the search of engine F on a query that is not equal grows with the arena.
+
+| Test | Before | After | Best rival |
+|---|---|---|---|
+| `bad/loop-unfolded-once-bad` | 9.37 G | 1.39 G | nano-lean 0.26 G |
+| sum of the perf tests | 118.4 G | 110.6 G | nano-lean 86.3 G |
+| Init, `--engine F --threads 1` | 208.6 G | 208.9 G | |

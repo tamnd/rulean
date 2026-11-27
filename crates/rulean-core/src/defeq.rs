@@ -19,6 +19,17 @@ use rulean_format::Hints;
 /// The number of steps of `lazy_delta_reduction` before `ground_cmp` runs.
 const G_CMP_AFTER: u32 = 16;
 
+/// The head kinds of `certain_ne`.
+const HK_NONE: u32 = 0;
+const HK_FVAR: u32 = 1;
+const HK_REC: u32 = 2;
+const HK_PROJ: u32 = 3;
+const HK_CTOR: u32 = 4;
+const HK_LIT: u32 = 5;
+
+/// The depth of the argument search of `certain_ne`.
+const NE_DEPTH: u32 = 3;
+
 /// The result of one step of lazy delta reduction (`reduction_status`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Status {
@@ -397,7 +408,9 @@ impl Checker {
             let sf = expr::app_fn(&self.st, s);
             let tl = self.const_levels(tf);
             let sl = self.const_levels(sf);
-            if self.is_def_eq_levels(tl, sl) && self.is_def_eq_args(t, s) {
+            // G8: if a pair of arguments is certainly not equal, `is_def_eq_args` cannot succeed, so the unfold comes first.
+            let ne = self.certain_ne_args(t, s, 0, NE_DEPTH, false);
+            if !ne && self.is_def_eq_levels(tl, sl) && self.is_def_eq_args(t, s) {
                 return (Status::Equal, t, s);
             }
             self.pair_put(false, t, s);
@@ -782,6 +795,198 @@ impl Checker {
             self.note(Rule::UnitLike, anon);
         }
         u
+    }
+
+    // Certain refutations (spec perf/10, G8).
+
+    /// The head of a term in weak head normal form, for `certain_ne`. `HK_NONE` is a term that can still reduce or that a rule other than `is_def_eq_app` can make equal to another term.
+    fn head_kind(&mut self, e: ExprId) -> u32 {
+        if let Expr::Lit(Literal::Nat(_)) = self.st.node(e) {
+            return HK_LIT;
+        }
+        let f = expr::app_fn(&self.st, e);
+        match self.st.node(f) {
+            Expr::FVar(_, _) => {
+                if self.is_let_fvar(f) {
+                    HK_NONE
+                } else {
+                    HK_FVAR
+                }
+            }
+            Expr::Const(n, _) => {
+                if self.ctor_shape(n).is_some() {
+                    HK_CTOR
+                } else if self.stuck_rec_major(e).is_some() {
+                    HK_REC
+                } else {
+                    HK_NONE
+                }
+            }
+            Expr::Proj(p) => {
+                let v = self.whnf(p.expr);
+                let k = self.head_kind(v);
+                if k == HK_FVAR || k == HK_REC || k == HK_PROJ {
+                    HK_PROJ
+                } else {
+                    HK_NONE
+                }
+            }
+            _ => HK_NONE,
+        }
+    }
+
+    /// The major premise of `e` if `e` is an application of a recursor that is not K-like, the type of the major premise has two or more constructors, and the major premise in weak head normal form has a rigid head.
+    fn stuck_rec_major(&mut self, e: ExprId) -> Option<ExprId> {
+        let n = self.const_name(expr::app_fn(&self.st, e));
+        let slot = self.env.find(n);
+        let r = if slot == 0 {
+            None
+        } else {
+            self.rec_shape(slot)
+        };
+        let mut args: Vec<ExprId> = Vec::new();
+        expr::app_args(&self.st, e, &mut args);
+        let (k, idx) = match r {
+            Some(r) => (r.k, r.major_idx as usize),
+            None => (true, 0),
+        };
+        if k || idx >= args.len() {
+            return None;
+        }
+        let mi = self.major_induct(slot, idx as u32);
+        if !self.many_ctors(mi) {
+            return None;
+        }
+        let m = self.whnf(args[idx]);
+        let hk = self.head_kind(m);
+        if hk == HK_FVAR || hk == HK_REC || hk == HK_PROJ {
+            Some(m)
+        } else {
+            None
+        }
+    }
+
+    /// True if `n` is an inductive type with two or more constructors. Such a type has no structure eta and is not unit-like.
+    fn many_ctors(&mut self, n: NameId) -> bool {
+        let s = self.env.find(n);
+        if s == 0 {
+            return false;
+        }
+        match &self.env.at(s).kind {
+            ConstKind::Induct(i) => i.ctors.len() >= 2,
+            _ => false,
+        }
+    }
+
+    /// True if the type of `e` is an inductive type with two or more constructors in a sort that is not zero for all values of the level parameters. So proof irrelevance, structure eta and the unit-like rule do not apply to `e`.
+    fn is_data_value(&mut self, e: ExprId) -> bool {
+        let ty = self.infer(e);
+        let w = self.whnf(ty);
+        let wn = self.const_name(expr::app_fn(&self.st, w));
+        if self.bad() || !self.many_ctors(wn) {
+            return false;
+        }
+        let tt = self.infer(w);
+        let s = self.whnf(tt);
+        if self.bad() {
+            return false;
+        }
+        match self.st.node(s) {
+            Expr::Sort(l) => level::is_not_zero(&self.st, l),
+            _ => false,
+        }
+    }
+
+    /// True if some pair of arguments of `a` and `b` from index `from` is certainly not equal. The two terms have the same number of arguments.
+    fn certain_ne_args(
+        &mut self,
+        a: ExprId,
+        b: ExprId,
+        from: usize,
+        depth: u32,
+        full: bool,
+    ) -> bool {
+        let mut xs: Vec<ExprId> = Vec::new();
+        let mut ys: Vec<ExprId> = Vec::new();
+        expr::app_args(&self.st, a, &mut xs);
+        expr::app_args(&self.st, b, &mut ys);
+        let mut ne = false;
+        let mut i = from;
+        while !ne && xs.len() == ys.len() && i < xs.len() {
+            ne = self.certain_ne(xs[i], ys[i], depth, full);
+            i += 1;
+        }
+        ne
+    }
+
+    /// The structure step of `certain_ne`, for two terms in weak head normal form with the head kinds `ka` and `kb`.
+    fn certain_ne_shape(&mut self, a: ExprId, b: ExprId, ka: u32, kb: u32, depth: u32) -> bool {
+        let fa = expr::app_fn(&self.st, a);
+        let fb = expr::app_fn(&self.st, b);
+        let rigid_a = ka == HK_FVAR || ka == HK_REC || ka == HK_PROJ;
+        let rigid_b = kb == HK_FVAR || kb == HK_REC || kb == HK_PROJ;
+        if ka != kb {
+            // A literal against a constructor needs the literal as a constructor, so this step does not decide it.
+            rigid_a || rigid_b
+        } else if ka == HK_LIT {
+            match (self.st.node(a), self.st.node(b)) {
+                (Expr::Lit(x), Expr::Lit(y)) => !self.lit_eq(x, y),
+                _ => false,
+            }
+        } else if ka == HK_CTOR || ka == HK_FVAR {
+            if fa != fb {
+                true
+            } else {
+                // The arguments are searched only at a data type, because a search at a structure cannot give a refutation.
+                let (from, data) = match self.st.node(fa) {
+                    Expr::Const(n, _) => match self.ctor_shape(n) {
+                        Some((i, p, _)) => (p as usize, self.many_ctors(i)),
+                        None => (0, false),
+                    },
+                    _ => (0, self.is_data_value(a)),
+                };
+                data && self.certain_ne_args(a, b, from, depth - 1, true)
+            }
+        } else if ka == HK_REC {
+            if self.const_name(fa) != self.const_name(fb) {
+                true
+            } else {
+                let ma = self.stuck_rec_major(a);
+                let mb = self.stuck_rec_major(b);
+                match (ma, mb) {
+                    (Some(x), Some(y)) => self.certain_ne(x, y, depth - 1, true),
+                    _ => false,
+                }
+            }
+        } else {
+            false
+        }
+    }
+
+    /// `certain_ne`: true only if the official kernel returns false for `a =?= b`. Both terms in weak head normal form have rigid heads or are constructors or literals, the heads or some arguments at a data type are certainly not equal, and the type of `a` is a data type. Then no step of `is_def_eq_core` makes the terms equal: lazy delta reduction cannot unfold them, `is_def_eq_app` finds a pair that is not equal, and eta, structure eta, proof irrelevance and the unit-like rule do not apply. This is the argument of `ground_cmp` (G4) for open terms. The result does not use engine F.
+    ///
+    /// With `full` false, the terms go through `whnf_core` and not `whnf`, so a term with a definition at its head is not unfolded. Lazy delta reduction uses this form, because there an unfold of an argument can cost more than the query.
+    pub(crate) fn certain_ne(&mut self, a0: ExprId, b0: ExprId, depth: u32, full: bool) -> bool {
+        if depth == 0 || a0 == b0 {
+            return false;
+        }
+        let (a, b) = if full {
+            (self.whnf(a0), self.whnf(b0))
+        } else {
+            (
+                self.whnf_core(a0, false, false),
+                self.whnf_core(b0, false, false),
+            )
+        };
+        if self.bad() || a == b {
+            return false;
+        }
+        let ka = self.head_kind(a);
+        let kb = self.head_kind(b);
+        if ka == HK_NONE || kb == HK_NONE || self.bad() {
+            return false;
+        }
+        self.certain_ne_shape(a, b, ka, kb, depth) && !self.bad() && self.is_data_value(a)
     }
 
     /// `is_def_eq`: definitional equality. With `Engine::F`, engine F tries the query first (spec 05.1). A true result goes into the success cache.

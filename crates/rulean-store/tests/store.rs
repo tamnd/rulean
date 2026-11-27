@@ -84,6 +84,10 @@ fn loose_ranges_and_flags() {
     assert_eq!(s.loose_range(let_), 1);
     assert!(s.flags(let_).has(Flags::HAS_LET));
     assert!(!s.flags(lam).has(Flags::HAS_LET));
+    assert!(s.flags(let_).has(Flags::HAS_BINDER));
+    assert!(s.flags(lam).has(Flags::HAS_BINDER));
+    assert!(s.flags(pi).has(Flags::HAS_BINDER));
+    assert!(!s.flags(app).has(Flags::HAS_BINDER));
     // A large index saturates, and a saturated range stays saturated under binders.
     let big = s.mk_bvar(u32::MAX);
     assert_eq!(s.loose_range(big), SATURATED);

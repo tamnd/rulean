@@ -131,6 +131,32 @@ A sample of engine R on Std gives these shares of the self time: `inst_rec` 15.7
 
 The memo of `inst_rec` is necessary, because the terms share many nodes. But its size is not the problem, and a cache of the results from one call to the next does not find enough repeated calls. So the cost of engine R is in the work of each substitution, and the next work must make fewer substitutions, not faster ones.
 
-## 11.11 What follows
+## 11.11 The confirm set after the rule
 
-With the rule, engine F on Init uses about the same number of instructions as engine R alone, and on Std it uses 6% more. The exit of M9 needs at most 80 G, so the next work is a faster engine R on wide proofs. Section 08.5 shows the parts: `inst_rec`, the hash-cons walk and `mk_app`. Engine F stays the engine for deep terms and for the evaluation tests.
+Item A3 of 04.3 asks for at most 1000 confirmations on Init, and it removes each pair of the confirm set that has no reason. A run of Init with engine F, on main with #241, gave 128,333 queries of engine F, 2,528 confirmations of engine R and 0 disagreements. Before the rule of 11.7, the count was 13,207 confirmations.
+
+| Build | Init, engine F |
+|---|---|
+| main with #241 | 138.36 G |
+| no confirmation (not sound, only a measure of the cost) | 137.32 G |
+
+So the confirm set now costs 1.04 G, or 0.75% of the run. The 225 Arena tests give the expected verdict also with no confirmation. This is not a reason to remove a pair, because with the rule of 11.7 engine R checks most values, and engine F can miss the corner cases of spec 05.1 for this reason. The pairs of the confirm set are a type-directed rule and a delta step. These are the cases where the official order is not transitive (spec 05.1), so the hypothesis of the lemmas of rows O8 to O11, that the official order decides definitional equality, is false for them. So a lemma of this form cannot give a reason for a pair, and the confirm set does not change. A3 stays open. Its gain is at most 1.04 G on Init, so it is not on the path to the target of 80 G.
+
+## 11.12 The profile of engine R
+
+A sample of engine R on Init, on main with #241, gives these shares of the samples of the worker (10,548 samples, with each function counted only where it is at the top of the stack).
+
+| Part | Share |
+|---|---|
+| The hash-cons walk: `mk_app`, `probe`, `intern_expr` and `push_node` | 28% |
+| `inst_rec` | 16% |
+| `canon` and `Memo::put` | 10% |
+| `app_fn`, `whnf_core` and `app_rev_args` | 10% |
+
+The callers of `inst_rec` are the beta step of `whnf_core_app` (about 60% of its samples), `infer_lambda` (18%), `infer_app` (13%) and `infer_pi` (4%). The beta step already instantiates all the arguments of a chain of lambdas in one call. So, as 11.10 found, the next work must make fewer substitutions and fewer new nodes, not faster ones.
+
+## 11.13 What follows
+
+Engine R on Init uses 137.4 G instructions. The exit of M9 needs at most 80 G, and nano-lean uses 24.3 G (01). The profile of 11.12 and the probes of 11.10 show that a faster substitution is not enough, because the cost is in the number of substitutions and new nodes. nano-lean and gruszka make no substitution: they evaluate with an environment, and they share each value and its results (09.3, 09.4). Engine F has the evaluation with an environment, but not the shared values. So with the rule of 11.7, engine R checks most values of Init.
+
+So the path to the exit of M9 is the plan R1 to R6 of 09.5 for engine F, and not more work on engine R. When engine F uses fewer instructions than engine R on wide values, the limits of 11.7 go up, and engine F checks more of Init. The first step is R1, a closure that keeps only the used part of its environment, because R2 and R3 need equal closures for the same work. Each step is measured on Init with engine F and with the limits of 11.7 set very high, so that the measure shows engine F alone, and on the perf tests. Engine F stays the engine for deep terms and for the evaluation tests.

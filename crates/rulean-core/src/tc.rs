@@ -371,6 +371,10 @@ pub struct Checker {
     pub(crate) vpool: Vec<Vec<ExprId>>,
     /// Vectors of levels, used in the same way as `vpool`.
     pub(crate) lpool: Vec<Vec<LevelId>>,
+    /// The map of the copies of `promote` in the session. A commit takes it, clears it and gives it back, so it keeps its capacity (spec perf/11.21).
+    pub(crate) pmap: Option<Memo>,
+    /// The stack of `promote`, used in the same way as `pmap`.
+    pub(crate) pstack: Vec<(ExprId, bool)>,
     /// The contexts and caches of engine F inference. They are cleared together with the arena.
     pub(crate) fi: FInfer,
     /// The number of binders that `quote` of engine F has opened. Their free variables are not in the local context.
@@ -516,6 +520,8 @@ impl Checker {
             estk: Vec::new(),
             vpool: Vec::new(),
             lpool: Vec::new(),
+            pmap: None,
+            pstack: Vec::new(),
             fi: FInfer::new(),
             f_under: 0,
             c_quote: Lossy::new(),

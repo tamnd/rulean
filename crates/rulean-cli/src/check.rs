@@ -580,12 +580,12 @@ pub(crate) fn done(o: &Options, mut rep: Report, start: Instant) -> Run {
     }
 }
 
-/// The engine of the run. Engine F is the default (spec 09.2). The Arena runs with `--confirm all` show no difference, and with the engine choice of spec perf/11, engine F on Init uses no more instructions than engine R. `--engine R` gives engine R only.
+/// The engine of the run. Engine R is the default in this version, because engine F is new and the Arena runs with `--confirm all` must first show no difference (spec 05.1). Spec 09.2 makes engine F the default later.
 pub(crate) fn engine_of(o: &Options) -> Engine {
-    if o.engine_set && o.engine_r {
-        Engine::R
-    } else {
+    if o.engine_set && !o.engine_r {
         Engine::F
+    } else {
+        Engine::R
     }
 }
 
@@ -1066,7 +1066,7 @@ mod tests {
         let o = options(&strs(&["x", "--engine=R"])).expect("valid");
         assert_eq!(engine_of(&o), Engine::R);
         let o = options(&strs(&["x"])).expect("valid");
-        assert_eq!(engine_of(&o), Engine::F);
+        assert_eq!(engine_of(&o), Engine::R);
         assert!(options(&strs(&["x", "--engine", "G"])).is_err());
         assert!(options(&strs(&["x", "--confirm", "some"])).is_err());
         assert!(

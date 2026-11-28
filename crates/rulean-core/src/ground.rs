@@ -482,7 +482,7 @@ impl Ground {
 }
 
 impl Checker {
-    /// True if engine G may run on `e`: the term is closed and compound, and no mode needs the steps of engine R (the rule trace, the kernel diagnostics, the heartbeat and depth limits, and pinning).
+    /// True if engine G may run on `e`: the term is closed and compound, and no mode needs the steps of engine R (the rule trace, the kernel diagnostics, the heartbeat and depth limits, the budget of an engine R query before engine F, and pinning).
     fn ground_ok(&self, e: ExprId) -> bool {
         let compound = matches!(
             self.st.node(e),
@@ -492,6 +492,7 @@ impl Checker {
             && !self.trace_on
             && !self.diag_on
             && self.max_heartbeat == 0
+            && self.r_lim == 0
             && self.max_rec_depth == 0
             && self.pin_off == 0
             && !expr::has_fvar(&self.st, e)

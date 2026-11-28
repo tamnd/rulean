@@ -17,6 +17,9 @@ use crate::tc::{
 };
 use crate::trace::Rule;
 
+/// The largest literal, in bytes, that an engine R query before engine F reads or makes (see `r_nat_big`).
+const R_NAT_BYTES: u64 = 512;
+
 /// The data of a recursor that `inductive_reduce_rec` needs.
 #[derive(Clone, Copy)]
 pub(crate) struct RecShape {
@@ -888,6 +891,10 @@ impl Checker {
         n2: Option<NatId>,
     ) -> Option<ExprId> {
         let zero = Nat::zero();
+        if self.r_lim != 0 && self.r_nat_big(op, n1, n2) {
+            self.r_stop(e);
+            return None;
+        }
         if op == NAT_POW || op == NAT_SHL {
             let v1 = self.nat_ref(n1, &zero).clone();
             let v2 = self.nat_ref(n2, &zero).clone();
@@ -919,6 +926,27 @@ impl Checker {
             NatOut::Bool(b) => Some(self.mk_bool(b)),
             NatOut::None => None,
         }
+    }
+
+    /// True if the operation `op` reads or makes a literal of more than `R_NAT_BYTES` bytes. An engine R query before engine F stops at such an operation, because one step of it can take more time than the whole query in engine F (spec perf/11.23).
+    fn r_nat_big(&self, op: usize, n1: Option<NatId>, n2: Option<NatId>) -> bool {
+        let zero = Nat::zero();
+        let a = Checker::nat_size(self.nat_ref(n1, &zero));
+        let b = self.nat_ref(n2, &zero);
+        let out = if op == NAT_POW {
+            match b.to_u64() {
+                Some(k) => a.saturating_mul(k),
+                None => u64::MAX,
+            }
+        } else if op == NAT_SHL {
+            match b.to_u64() {
+                Some(k) => a.saturating_add(k / 8),
+                None => u64::MAX,
+            }
+        } else {
+            a.saturating_add(Checker::nat_size(b))
+        };
+        out > R_NAT_BYTES
     }
 
     /// The index of the binary operation `f` in the `nat_ops` table, or the length of the table.

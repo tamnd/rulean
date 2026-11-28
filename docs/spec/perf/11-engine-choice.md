@@ -315,3 +315,31 @@ No perf test uses more steps. On Init, engine F now takes 126,946 queries in pla
 We also tried a change that did not help, and we did not merge it. `is_def_eq_shared` looked in the equality caches of engine R before engine F, and an "equal" answer of engine F went into the cache. This removed 36% of the queries of engine F on Init, but the instruction count did not change.
 
 Engine R alone is still faster on Init, by about 4 G. The other cost of engine F on Init is the queries, the walk of `term_walk` and the deep types.
+
+## 11.23 Engine R first, with a budget
+
+Engine F is not faster on each query. On Init, most queries are small, and engine R answers them with its caches in fewer instructions than engine F needs to evaluate the two terms in the arena. Engine F is faster on the hard queries, where engine R unfolds again and again or copies large terms. So each query of engine R that goes to engine F now goes first to engine R with a small budget. If engine R decides the query in the budget, its answer is the answer. If engine R uses the budget, `r_first` removes the fault, the scope entries and the failures that the try put in the cache, and engine F takes the query as before. The caches of engine R put a result only when there is no fault, so a stopped try leaves no wrong result in them. Under `--confirm all`, there is no try, so that engine F still answers each query and engine R confirms it.
+
+The budget has two limits, because one heartbeat does not have a fixed cost.
+
+1. `R_BUDGET`, 1024 heartbeats.
+2. `R_INTERNS`, 1024 interns in the store. One heartbeat of `beta-ladder` copies a large term, and with heartbeats only, the test went from 0.099 G to 2.926 G.
+
+Two more rules apply in the try. Engine G does not run in the try, because one call of engine G can compute a large value with no heartbeat. With engine G in the try, `unfold-before-literal` went from 0.033 G to 5.09 G. A `Nat` operation that reads or makes a literal of more than 512 bytes also stops the try.
+
+The search used the minimum instruction count of two runs on each of the 42 Arena perf tests.
+
+| Interns | Perf total | `loop-unfolded-once` | `proj-lazy-struct` | `unfold-before-literal` | Init, two runs |
+|---|---|---|---|---|---|
+| no try (#269) | 106.20 G | 1.036 G | 0.118 G | 0.034 G | 83.1 G, 83.3 G |
+| 512 | 106.24 G | 1.045 G | 0.029 G | 0.035 G | 83.1 G, 83.5 G |
+| 1024 | 105.36 G | 0.859 G | 0.029 G | 0.037 G | 82.4 G, 82.8 G |
+| 2048 | 105.81 G | 0.854 G | 0.029 G | 0.039 G | 82.1 G, 82.2 G |
+| 4096 | 106.35 G | 0.855 G | 0.029 G | 0.043 G | 82.2 G, 82.3 G |
+
+We use 1024, because no perf test is more than 10% slower with it. The steps of engine F on Init go from 42.13 M to 33.08 M. Engine F now takes few queries on Init, so the cost of engine F mode on Init is no longer in the queries.
+
+We also tried two changes that did not help, and we did not merge them.
+
+1. `term_walk` counted the nodes of the tree, not the distinct nodes, so that a value with a large tree went to engine R only. Init went from 42.13 M to 36.72 M steps, but `discarded-argument` went from 0.025 G to 0.254 G and `discarded-argument-match` from 0.027 G to 0.439 G. The value of these tests has 210 distinct nodes and 409 nodes in the tree. On Init, the values with at most 256 distinct nodes and more than 256 nodes in the tree have all ratios of tree to distinct nodes, so no bound on the ratio keeps the two tests and the gain.
+2. A check of `has_binder` before the walk of a type. It gave the same steps and no change in instructions above the noise.

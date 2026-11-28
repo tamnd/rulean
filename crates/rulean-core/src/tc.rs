@@ -387,8 +387,17 @@ pub struct Checker {
     pub engine: Engine,
     /// `--confirm all`: engine R confirms each "equal" answer of engine F.
     pub confirm_all: bool,
-    /// The largest value term, in distinct nodes, that engine F checks if the term is not deep. The default is 0, so engine F checks only a deep value, as for a type (spec perf/04.13). A test can set a larger cap to check the inference of engine F on small values.
+    /// The largest value term, in distinct nodes, that engine F checks if the term is not deep. The default is 0, so engine F checks only a deep value, as for a type (spec perf/11.22). A test can set a larger cap to check the inference of engine F on small values.
     pub f_term_cap: u32,
+    /// The heartbeats of an engine R query before each query of engine F, or 0 for no such query (spec perf/11.23). The tests of engine F set it to 0.
+    pub r_first_beats: u64,
+    pub(crate) r_first_out: bool,
+    /// The heartbeat limit of an engine R query that comes before engine F, or 0 if there is none.
+    pub(crate) r_lim: u64,
+    /// The limit of the store interns for the same query.
+    pub(crate) r_ilim: u64,
+    /// True if the engine R query stopped at `r_lim`.
+    pub(crate) r_over: bool,
     /// The counts of engine F since the checker was made.
     pub f_stats: FStats,
     /// The rules that the current engine F query used, as the bits `F_DELTA` and `F_TYPED`.
@@ -530,6 +539,11 @@ impl Checker {
             q_depth: 0,
             engine: Engine::R,
             f_term_cap: 0,
+            r_first_beats: crate::conv::R_BUDGET,
+            r_first_out: false,
+            r_lim: 0,
+            r_ilim: 0,
+            r_over: false,
             confirm_all: false,
             f_stats: FStats::default(),
             f_bits: 0,
@@ -787,12 +801,25 @@ impl Checker {
             self.fail(ErrorKind::Heartbeat, at);
             return false;
         }
+        if self.r_lim != 0 && (self.heartbeats > self.r_lim || self.st.interns() > self.r_ilim) {
+            self.leave_beat();
+            self.r_stop(at);
+            return false;
+        }
         if self.env.missed() {
             self.leave_beat();
             self.fail(ErrorKind::Missed, at);
             return false;
         }
         true
+    }
+
+    /// Stops an engine R query that comes before engine F (see `r_lim`).
+    pub(crate) fn r_stop(&mut self, at: ExprId) {
+        if self.fault.is_none() {
+            self.r_over = true;
+            self.fail(ErrorKind::Heartbeat, at);
+        }
     }
 
     /// The end of a call level of `enter_beat`.

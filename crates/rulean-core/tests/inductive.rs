@@ -528,6 +528,7 @@ fn confirm_env() -> T {
     add_box(&mut t);
     t.c.engine = Engine::F;
     t.c.f_term_cap = 64;
+    t.c.r_first_beats = 0;
     let ty = t.sort(1);
     add_const(&mut t, "A", ty, None);
     let a = t.k("A");

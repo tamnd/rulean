@@ -18,6 +18,7 @@ impl T {
         c.begin(Vec::new(), Safety::Safe);
         c.engine = Engine::F;
         c.f_term_cap = 64;
+        c.r_first_beats = 0;
         let l = c.st.level_zero();
         let l1 = c.st.level_succ(l);
         let ty = c.st.mk_sort(l1);

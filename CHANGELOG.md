@@ -4,6 +4,26 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 
 ## [Unreleased]
 
+## [0.8.12] - 2026-11-28
+
+### Changed
+
+- The quick check does not note again a definitional equality pair that it found known (#254).
+- Engine F checks only a deep type or a deep value. The walk that finds a deep term reads at most 256 nodes (#256, #269).
+- Engine R and engine F reuse the vectors of their hot paths, and `promote` reuses its map and its stack in the session (#257, #259).
+- `infer_lambda` keeps the domains of the binders and does not infer them again (#264).
+- The hot path of engine F does not call `malloc`. `g_wrapper` takes its argument vector from the pool (#267, #268).
+- In engine F mode, engine R tries each shared query first with a budget of 1024 heartbeats and 1024 new terms. If the budget is used, engine F takes the query (#270).
+- With these changes, engine R uses about 79.5 G instructions on Init in place of 90.9 G, and engine F uses about 82.6 G. The total of the perf tests with engine F is about 105.4 G.
+
+### Fixed
+
+- The extract job of CI and the work baseline are correct again (#262, #265).
+
+### Documentation
+
+- The spec has the new sections perf/11.18 to perf/11.23 and the new spec perf/12, the check from first principles (#255, #258, #261, #263, #266, #270).
+
 ## [0.8.11] - 2026-11-27
 
 ### Changed
@@ -514,7 +534,8 @@ All changes that a user can see are in this file. The format follows Keep a Chan
 - `cargo xtask subset` checks that the core crates stay in the Aeneas subset of spec 10.6. `cargo xtask all` runs it.
 - The core crates declare `#![forbid(unsafe_code)]`.
 
-[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.11...HEAD
+[Unreleased]: https://github.com/tamnd/rulean/compare/v0.8.12...HEAD
+[0.8.12]: https://github.com/tamnd/rulean/compare/v0.8.11...v0.8.12
 [0.8.11]: https://github.com/tamnd/rulean/compare/v0.8.10...v0.8.11
 [0.8.10]: https://github.com/tamnd/rulean/compare/v0.8.9...v0.8.10
 [0.8.9]: https://github.com/tamnd/rulean/compare/v0.8.8...v0.8.9

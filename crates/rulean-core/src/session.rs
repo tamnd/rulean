@@ -32,8 +32,14 @@ pub(crate) const S_CHECK: u8 = 6;
 /// The copies of the entries with a scratch key use at most 1 / `LOCAL_SHARE` of the scratch nodes of the declaration (spec perf/11.16 and 11.17). On Init, 1/10 uses 10% fewer instructions than 1/50.
 const LOCAL_SHARE: usize = 10;
 
-/// The bytes of one slot: the tag, two keys, the value, the stamp and the reference bit.
+/// The bytes of one slot in the size limit of a session: the tag, two keys, the value, the stamp and the reference bit. A `Slot` packs the tag and the reference bit into the stamp word, so it is a little smaller. The limit keeps this count, so the number of slots does not change with the layout.
 const SLOT_BYTES: usize = 6 + 3 * (Raw::BITS as usize / 8);
+/// The bits of the stamp word of a `Slot` below the stamp: the tag in bits 0 to 2 and the reference bit in bit 3.
+const META_BITS: u32 = 4;
+/// The largest stamp that a `Slot` can keep. An entry with a larger stamp is not stored, and this is always safe.
+const MAX_STAMP: u32 = (1 << (32 - META_BITS)) - 1;
+const TAG_MASK: u32 = 7;
+const REF_BIT: u32 = 8;
 const WAYS: usize = 4;
 const FIRST_SLOTS: usize = 1 << 12;
 const SEED: u32 = 0x5345_5353;
@@ -56,17 +62,42 @@ pub struct SessionStats {
     pub promoted: u64,
 }
 
+/// One slot of the session table. The keys, the value and the stamp word are in one record, so a bucket of 4 slots with 32-bit handles is 64 bytes, one cache line, and a lookup reads one line (spec perf/11.26). The stamp word has the stamp in the high 28 bits, the reference bit in bit 3 and the tag in bits 0 to 2. Tag 0 is a free slot.
+#[derive(Clone, Copy, Debug)]
+struct Slot {
+    a: Raw,
+    b: Raw,
+    v: Raw,
+    meta: u32,
+}
+
+impl Slot {
+    const FREE: Slot = Slot {
+        a: 0,
+        b: 0,
+        v: 0,
+        meta: 0,
+    };
+
+    fn tag(&self) -> u8 {
+        (self.meta & TAG_MASK) as u8
+    }
+
+    fn stamp(&self) -> u32 {
+        self.meta >> META_BITS
+    }
+
+    fn refd(&self) -> bool {
+        self.meta & REF_BIT != 0
+    }
+}
+
 /// The session table of one worker.
 #[derive(Clone, Debug)]
 pub struct Session {
     /// True if the checker uses the session.
     pub on: bool,
-    tag: Vec<u8>,
-    ka: Vec<Raw>,
-    kb: Vec<Raw>,
-    val: Vec<Raw>,
-    stamp: Vec<u32>,
-    refd: Vec<u8>,
+    slots: Vec<Slot>,
     len: usize,
     max_slots: usize,
     hand: usize,
@@ -103,12 +134,7 @@ impl Session {
     pub fn new(bytes: usize) -> Session {
         Session {
             on: true,
-            tag: Vec::new(),
-            ka: Vec::new(),
-            kb: Vec::new(),
-            val: Vec::new(),
-            stamp: Vec::new(),
-            refd: Vec::new(),
+            slots: Vec::new(),
             len: 0,
             max_slots: slots_for(bytes),
             hand: 0,
@@ -132,11 +158,7 @@ impl Session {
 
     /// The number of bytes of the table and the pending entries, without the allocator overhead.
     pub fn bytes(&self) -> usize {
-        let raw = core::mem::size_of::<Raw>();
-        self.tag.capacity()
-            + (self.ka.capacity() + self.kb.capacity() + self.val.capacity()) * raw
-            + self.stamp.capacity() * 4
-            + self.refd.capacity()
+        self.slots.capacity() * core::mem::size_of::<Slot>()
             + self.pending.capacity() * core::mem::size_of::<(u8, Raw, Raw, Raw)>()
     }
 
@@ -148,8 +170,8 @@ impl Session {
     /// Removes all entries and all pending entries. The counts stay.
     pub fn clear(&mut self) {
         let mut i = 0;
-        while i < self.tag.len() {
-            self.tag[i] = 0;
+        while i < self.slots.len() {
+            self.slots[i] = Slot::FREE;
             i += 1;
         }
         self.len = 0;
@@ -157,7 +179,7 @@ impl Session {
     }
 
     fn bucket(&self, tag: u8, a: Raw, b: Raw) -> usize {
-        let mask = self.tag.len() - 1;
+        let mask = self.slots.len() - 1;
         (slot_hash(tag, a, b) as usize & mask) & !(WAYS - 1)
     }
 
@@ -167,12 +189,12 @@ impl Session {
             return None;
         }
         let i = self.find(tag, a, b);
-        if i == usize::MAX || self.stamp[i] > cut {
+        if i == usize::MAX || self.slots[i].stamp() > cut {
             return None;
         }
-        self.refd[i] = 1;
+        self.slots[i].meta |= REF_BIT;
         self.stats.hits += 1;
-        Some(self.val[i])
+        Some(self.slots[i].v)
     }
 
     /// The slot of the key, or `usize::MAX`.
@@ -181,7 +203,8 @@ impl Session {
         let mut found = usize::MAX;
         let mut i = start;
         while i < start + WAYS && found == usize::MAX {
-            if self.tag[i] == tag && self.ka[i] == a && self.kb[i] == b {
+            let x = self.slots[i];
+            if x.tag() == tag && x.a == a && x.b == b {
                 found = i;
             }
             i += 1;
@@ -196,31 +219,22 @@ impl Session {
 
     /// Doubles the table, or makes the first table.
     fn grow(&mut self) {
-        let n = if self.tag.is_empty() {
+        let n = if self.slots.is_empty() {
             let mut f = FIRST_SLOTS;
             if f > self.max_slots {
                 f = self.max_slots;
             }
             f
         } else {
-            self.tag.len() * 2
+            self.slots.len() * 2
         };
-        let old_tag = core::mem::take(&mut self.tag);
-        let old_ka = core::mem::take(&mut self.ka);
-        let old_kb = core::mem::take(&mut self.kb);
-        let old_val = core::mem::take(&mut self.val);
-        let old_stamp = core::mem::take(&mut self.stamp);
-        self.tag = zeros_u8(n);
-        self.ka = zeros_raw(n);
-        self.kb = zeros_raw(n);
-        self.val = zeros_raw(n);
-        self.stamp = zeros_u32(n);
-        self.refd = zeros_u8(n);
+        let old = core::mem::replace(&mut self.slots, free_slots(n));
         self.len = 0;
         let mut i = 0;
-        while i < old_tag.len() {
-            if old_tag[i] != 0 {
-                self.put(old_tag[i], old_ka[i], old_kb[i], old_val[i], old_stamp[i]);
+        while i < old.len() {
+            let x = old[i];
+            if x.tag() != 0 {
+                self.put(x.tag(), x.a, x.b, x.v, x.stamp());
             }
             i += 1;
         }
@@ -228,7 +242,11 @@ impl Session {
 
     /// Writes an entry. An entry with the same key gets the new value and the smaller stamp. In a full bucket a CLOCK step evicts one entry.
     pub(crate) fn store(&mut self, tag: u8, a: Raw, b: Raw, v: Raw, stamp: u32) {
-        if self.tag.is_empty() || (self.len * 2 > self.tag.len() && self.tag.len() < self.max_slots)
+        if stamp > MAX_STAMP || tag == 0 || tag as u32 > TAG_MASK {
+            return;
+        }
+        if self.slots.is_empty()
+            || (self.len * 2 > self.slots.len() && self.slots.len() < self.max_slots)
         {
             self.grow();
         }
@@ -241,9 +259,10 @@ impl Session {
     fn put(&mut self, tag: u8, a: Raw, b: Raw, v: Raw, stamp: u32) -> bool {
         let old = self.find(tag, a, b);
         if old != usize::MAX {
-            if stamp < self.stamp[old] {
-                self.val[old] = v;
-                self.stamp[old] = stamp;
+            let x = self.slots[old];
+            if stamp < x.stamp() {
+                self.slots[old].v = v;
+                self.slots[old].meta = (stamp << META_BITS) | (x.meta & (REF_BIT | TAG_MASK));
             }
             return false;
         }
@@ -251,7 +270,7 @@ impl Session {
         let mut free = usize::MAX;
         let mut i = start;
         while i < start + WAYS {
-            if self.tag[i] == 0 && free == usize::MAX {
+            if self.slots[i].tag() == 0 && free == usize::MAX {
                 free = i;
             }
             i += 1;
@@ -261,10 +280,10 @@ impl Session {
             let mut k = 0;
             while free == usize::MAX {
                 let j = start + (self.hand + k) % WAYS;
-                if self.refd[j] == 0 {
+                if !self.slots[j].refd() {
                     free = j;
                 } else {
-                    self.refd[j] = 0;
+                    self.slots[j].meta &= !REF_BIT;
                 }
                 k += 1;
             }
@@ -272,45 +291,23 @@ impl Session {
             self.len -= 1;
             self.stats.evictions += 1;
         }
-        self.tag[free] = tag;
-        self.ka[free] = a;
-        self.kb[free] = b;
-        self.val[free] = v;
-        self.stamp[free] = stamp;
-        self.refd[free] = 0;
+        self.slots[free] = Slot {
+            a,
+            b,
+            v,
+            meta: (stamp << META_BITS) | tag as u32,
+        };
         self.len += 1;
         true
     }
 }
 
-/// A vector of `n` zeros of the handle type.
-fn zeros_raw(n: usize) -> Vec<Raw> {
-    let mut v: Vec<Raw> = Vec::with_capacity(n);
+/// A vector of `n` free slots.
+fn free_slots(n: usize) -> Vec<Slot> {
+    let mut v: Vec<Slot> = Vec::with_capacity(n);
     let mut i = 0;
     while i < n {
-        v.push(0);
-        i += 1;
-    }
-    v
-}
-
-/// A vector of `n` zeros.
-fn zeros_u32(n: usize) -> Vec<u32> {
-    let mut v: Vec<u32> = Vec::with_capacity(n);
-    let mut i = 0;
-    while i < n {
-        v.push(0);
-        i += 1;
-    }
-    v
-}
-
-/// A vector of `n` zeros.
-fn zeros_u8(n: usize) -> Vec<u8> {
-    let mut v: Vec<u8> = Vec::with_capacity(n);
-    let mut i = 0;
-    while i < n {
-        v.push(0);
+        v.push(Slot::FREE);
         i += 1;
     }
     v

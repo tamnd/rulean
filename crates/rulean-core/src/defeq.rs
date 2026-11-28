@@ -1004,12 +1004,14 @@ impl Checker {
 
     /// `is_def_eq`: definitional equality. With `Engine::F`, engine F tries the query first (spec 05.1). A true result goes into the success cache.
     pub fn is_def_eq(&mut self, t: ExprId, s: ExprId) -> bool {
-        // Engine F does not read the success caches, so a known success is found here first. Engine R finds it in `quick_is_def_eq`.
-        if self.engine == Engine::F
-            && self.eq_depth == 0
-            && (self.pair_seen(true, t, s) || self.sess_seen(t, s))
-        {
-            return true;
+        // Engine F does not read the success caches, so a known success is found here first. Engine R finds it in `quick_is_def_eq`. On Init, 7.7 M of the 8.9 M queries at this point have the same handle on the two sides, so the same handle comes first and the two lookups do not run for it (spec perf/11.25).
+        if self.engine == Engine::F && self.eq_depth == 0 {
+            if t == s {
+                return true;
+            }
+            if self.pair_seen(true, t, s) || self.sess_seen(t, s) {
+                return true;
+            }
         }
         // Only a mark of this call counts.
         self.known_pair = (self.dummy, self.dummy);

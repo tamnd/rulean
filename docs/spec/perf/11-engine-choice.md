@@ -364,3 +364,20 @@ We also tried two changes that did not help, and we did not merge them.
 
 1. The store kept the tree size and the binder depth of each node in its side record, so that the test of a deep term was one read. The side record went from 8 to 12 bytes, and each new node read the side records of its fields. With the same decisions as the walk, Init went from 83.5 G to 86.2 G. With the tree size in place of the distinct nodes, Init used 84.3 G, as in 11.23.
 2. Engine G before engine R in each query of engine F mode was off. Init did not change.
+
+## 11.25 The same handle before the caches
+
+With engine F, `is_def_eq` looks up a query in the success cache and in the session before the query goes to `is_def_eq_shared`. Engine F does not read these caches, so this first check finds a known success. Engine R does the same lookups in `quick_is_def_eq`, but only after the test for alpha equality.
+
+On Init, 8.9 M queries come to this check, and 7.7 M of them have the same handle on the two sides. For each of these queries, the check did two lookups in large tables, and each lookup read memory that was not in the processor cache. The answer is always true, so the lookups did no useful work. A sample of the process shows the cost in `pair_seen`, `sess_seen` and `Session::find`, about 50 ns for each query.
+
+The check now gives true for the same handle first, and it does the two lookups only for the other 1.2 M queries. A probe that does the lookups and ignores the result costs 3.7 G instructions more than a probe with no lookups, so most of this cost goes away.
+
+| Build | Engine F on Init |
+|---|---|
+| main | 82.0 G, 82.5 G, 84.2 G |
+| same handle first | 80.4 G, 80.9 G, 81.3 G |
+
+The runs are interleaved, with a load average of about 24 on the machine, so the absolute numbers are high. In each pair the change saves 1.6 G to 2.9 G. The steps go down from 33.08 M to 32.02 M, and the verdicts do not change. Engine R does not use this check, so engine R does not change.
+
+Two other probes did not help, and they are not merged. A probe that moved the check after `r_first` let more pairs go to `ground_defeq` first. A probe that marked a missed pair, so that `quick_is_def_eq` did not look it up again, saved about 0.3 G only. The cost was in the queries with the same handle, not in the second lookup.

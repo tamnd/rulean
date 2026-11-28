@@ -375,9 +375,9 @@ The check now gives true for the same handle first, and it does the two lookups 
 
 | Build | Engine F on Init |
 |---|---|
-| main | 82.0 G, 82.5 G, 84.2 G |
-| same handle first | 80.4 G, 80.9 G, 81.3 G |
+| main | 82.0 G, 82.5 G, 84.2 G, 82.3 G, 82.5 G, 82.2 G |
+| same handle first | 80.4 G, 80.9 G, 81.3 G, 81.3 G, 81.2 G, 80.2 G |
 
-The runs are interleaved, with a load average of about 24 on the machine, so the absolute numbers are high. In each pair the change saves 1.6 G to 2.9 G. The steps go down from 33.08 M to 32.02 M, and the verdicts do not change. Engine R does not use this check, so engine R does not change.
+The runs are interleaved, with a load average of 20 to 28 on the machine, so the absolute numbers are high. In each pair the change saves 1.0 G to 2.9 G. On a quiet machine main uses 81.1 G to 81.3 G, so the change gives about 79.5 G to 80.2 G. A run on a quiet machine must confirm the 80 G target of M9. The steps go down from 33.08 M to 32.02 M, and the verdicts do not change. Engine R does not use this check, so engine R does not change.
 
 Two other probes did not help, and they are not merged. A probe that moved the check after `r_first` let more pairs go to `ground_defeq` first. A probe that marked a missed pair, so that `quick_is_def_eq` did not look it up again, saved about 0.3 G only. The cost was in the queries with the same handle, not in the second lookup.

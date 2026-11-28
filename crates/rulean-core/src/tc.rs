@@ -1230,14 +1230,22 @@ impl Checker {
     fn infer_lambda(&mut self, e0: ExprId, infer_only: bool) -> ExprId {
         let mark = self.enter_scope();
         let mut fvars = self.take_vec();
-        let r = self.infer_lambda_in(e0, infer_only, &mut fvars);
+        let mut doms = self.take_vec();
+        let r = self.infer_lambda_in(e0, infer_only, &mut fvars, &mut doms);
         self.give_vec(fvars);
+        self.give_vec(doms);
         self.leave_scope(mark);
         r
     }
 
-    /// The body of `infer_lambda`. The free variables that it makes stay in scope.
-    fn infer_lambda_in(&mut self, e0: ExprId, infer_only: bool, fvars: &mut Vec<ExprId>) -> ExprId {
+    /// The body of `infer_lambda`. The free variables that it makes stay in scope. `doms` gets the domain of each binder as it is in `e0`.
+    fn infer_lambda_in(
+        &mut self,
+        e0: ExprId,
+        infer_only: bool,
+        fvars: &mut Vec<ExprId>,
+        doms: &mut Vec<ExprId>,
+    ) -> ExprId {
         let mut e = e0;
         let mut walking = true;
         while walking && !self.bad() {
@@ -1250,6 +1258,7 @@ impl Checker {
                     }
                     let fv = self.mk_local(b.name, b.info, d, None);
                     fvars.push(fv);
+                    doms.push(b.dom);
                     e = b.body;
                 }
                 _ => walking = false,
@@ -1264,7 +1273,24 @@ impl Checker {
             return self.dummy;
         }
         let r = expr::cheap_beta_reduce(&mut self.st, r);
-        self.mk_binding(fvars, r, false, false)
+        self.mk_pi_doms(fvars, doms, r)
+    }
+
+    /// `mk_binding(fvars, r)` for a pi type, where `doms[i]` is the type of `fvars[i]` with `fvars[..i]` abstracted. `e0` of `infer_lambda` has no loose bound variable, so its domain at the depth `i` is this term, and the abstraction of the types of the free variables is not necessary (spec perf/12.8).
+    fn mk_pi_doms(&mut self, fvars: &[ExprId], doms: &[ExprId], b: ExprId) -> ExprId {
+        let mut r = expr::abstract_fvars(&mut self.st, &mut self.x, b, fvars);
+        let mut i = fvars.len();
+        while i > 0 {
+            i -= 1;
+            let lvl = match self.st.node(fvars[i]) {
+                Expr::FVar(l, _) => l as usize,
+                _ => 0,
+            };
+            r = self
+                .st
+                .mk_pi(self.lctx_name[lvl], self.lctx_info[lvl], doms[i], r);
+        }
+        r
     }
 
     /// `infer_pi`.

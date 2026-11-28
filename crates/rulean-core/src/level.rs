@@ -243,6 +243,64 @@ pub fn name_cmp(st: &Store, a: NameId, b: NameId) -> i32 {
     if a == b {
         return 0;
     }
+    // The fast path makes no vector (spec perf/04.3 A9). Names are hash-consed, so two names with the same parent and different ids differ in the last component.
+    let da = name_depth(st, a);
+    let db = name_depth(st, b);
+    let mut x = name_up(st, a, da.saturating_sub(db));
+    let mut y = name_up(st, b, db.saturating_sub(da));
+    if x == y {
+        return if da < db { -1 } else { 1 };
+    }
+    let mut px = name_up(st, x, 1);
+    let mut py = name_up(st, y, 1);
+    while px != py {
+        x = px;
+        y = py;
+        px = name_up(st, x, 1);
+        py = name_up(st, y, 1);
+    }
+    let r = limb_cmp(st, x, y);
+    if r != 0 {
+        return r;
+    }
+    name_cmp_slow(st, a, b)
+}
+
+/// The number of components of `n`.
+fn name_depth(st: &Store, n: NameId) -> usize {
+    let mut d = 0;
+    let mut cur = n;
+    let mut walking = true;
+    while walking {
+        match st.name(cur) {
+            Name::Anon => walking = false,
+            Name::Str(pre, _) | Name::Num(pre, _) => {
+                d += 1;
+                cur = pre;
+            }
+        }
+    }
+    d
+}
+
+/// The ancestor of `n` that is `k` components up.
+fn name_up(st: &Store, n: NameId, k: usize) -> NameId {
+    let mut cur = n;
+    let mut i = 0;
+    while i < k {
+        match st.name(cur) {
+            Name::Anon => i = k,
+            Name::Str(pre, _) | Name::Num(pre, _) => {
+                cur = pre;
+                i += 1;
+            }
+        }
+    }
+    cur
+}
+
+/// `name_cmp` with vectors of the components. It is used only when two different ids have equal components.
+fn name_cmp_slow(st: &Store, a: NameId, b: NameId) -> i32 {
     let la = name_limbs(st, a);
     let lb = name_limbs(st, b);
     let mut r: i32 = 0;

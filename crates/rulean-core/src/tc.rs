@@ -1548,8 +1548,7 @@ impl Checker {
         if self.bad() {
             return self.dummy;
         }
-        let mut args: Vec<ExprId> = Vec::new();
-        let i_fn = expr::app_args(&self.st, ty, &mut args);
+        let i_fn = expr::app_fn(&self.st, ty);
         let (i_name, i_levels) = match self.st.node(i_fn) {
             Expr::Const(n, ls) => (n, ls),
             _ => return self.fail(ErrorKind::InvalidProj, e),
@@ -1565,15 +1564,19 @@ impl Checker {
             Some(x) => x,
             None => return self.fail(ErrorKind::InvalidProj, e),
         };
-        if nctors != 1 || args.len() != (nparams + nindices) as usize {
+        if nctors != 1 || expr::app_num_args(&self.st, ty) != (nparams + nindices) as usize {
             return self.fail(ErrorKind::InvalidProj, e);
         }
         let c_slot = self.get_const(ctor, e);
         if c_slot == 0 {
             return self.dummy;
         }
-        let ls = self.st.level_list_vec(i_levels);
+        // The levels and the arguments go in vectors from the pools, so the check makes no new vector (spec perf/04.3 A9).
+        let ls = self.take_levels(i_levels);
         let mut r = self.instantiate_type_lparams(c_slot, &ls);
+        self.give_levels(ls);
+        let mut args = self.take_vec();
+        expr::app_args(&self.st, ty, &mut args);
         let mut i = 0;
         while i < nparams as usize && !self.bad() {
             r = self.whnf(r);
@@ -1585,6 +1588,7 @@ impl Checker {
             }
             i += 1;
         }
+        self.give_vec(args);
         if self.bad() {
             return self.dummy;
         }

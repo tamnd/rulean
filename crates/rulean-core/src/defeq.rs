@@ -285,11 +285,10 @@ impl Checker {
             Some(x) => x,
             None => return false,
         };
-        let mut s_args: Vec<ExprId> = Vec::new();
-        expr::app_args(&self.st, s, &mut s_args);
+        let n_args = expr::app_num_args(&self.st, s);
         let nargs = (nparams + nfields) as usize;
         // With `eta_partial_ctor` (lean4#15373), a constructor application with too few arguments is also allowed.
-        if s_args.len() > nargs || (s_args.len() < nargs && !self.flags.eta_partial_ctor) {
+        if n_args > nargs || (n_args < nargs && !self.flags.eta_partial_ctor) {
             return false;
         }
         if !self.is_non_rec_structure(induct, s) {
@@ -301,6 +300,8 @@ impl Checker {
             return false;
         }
         // The type of a partial constructor application is the rest of the constructor type, so it is a pi type with no `whnf`. Each binder gets a free variable, and both sides are applied to it.
+        let mut s_args = self.take_vec();
+        expr::app_args(&self.st, s, &mut s_args);
         let mut t = t;
         let mut s_type = st;
         let mut more = true;
@@ -314,16 +315,14 @@ impl Checker {
                 more = false;
             }
         }
-        if s_args.len() != nargs || self.bad() {
-            return false;
-        }
-        let mut ok = true;
+        let mut ok = s_args.len() == nargs && !self.bad();
         let mut i = nparams as usize;
         while ok && i < s_args.len() {
             let p = self.st.mk_proj(induct, (i - nparams as usize) as u32, t);
             ok = self.is_def_eq(p, s_args[i]);
             i += 1;
         }
+        self.give_vec(s_args);
         ok
     }
 
@@ -853,20 +852,23 @@ impl Checker {
         } else {
             self.rec_shape(slot)
         };
-        let mut args: Vec<ExprId> = Vec::new();
-        expr::app_args(&self.st, e, &mut args);
         let (k, idx) = match r {
             Some(r) => (r.k, r.major_idx as usize),
             None => (true, 0),
         };
-        if k || idx >= args.len() {
+        if k {
             return None;
         }
+        // The major premise is read in place, so the check makes no vector of the arguments (spec perf/04.3 A9).
+        let major = match expr::app_arg(&self.st, e, idx) {
+            Some(a) => a,
+            None => return None,
+        };
         let mi = self.major_induct(slot, idx as u32);
         if !self.many_ctors(mi) {
             return None;
         }
-        let m = self.whnf(args[idx]);
+        let m = self.whnf(major);
         let hk = self.head_kind(m);
         if hk == HK_FVAR || hk == HK_REC || hk == HK_PROJ {
             Some(m)

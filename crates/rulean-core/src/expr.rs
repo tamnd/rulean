@@ -529,6 +529,27 @@ pub fn app_num_args(st: &Store, e: ExprId) -> usize {
     n
 }
 
+/// The argument `i` of an application spine, counted from the first, or None if the spine has `i` or fewer arguments. It makes no vector.
+pub fn app_arg(st: &Store, e: ExprId, i: usize) -> Option<ExprId> {
+    let n = app_num_args(st, e);
+    if i >= n {
+        return None;
+    }
+    let mut skip = n - 1 - i;
+    let mut cur = e;
+    while skip > 0 {
+        cur = match st.node(cur) {
+            Expr::App(f, _) => f,
+            _ => cur,
+        };
+        skip -= 1;
+    }
+    match st.node(cur) {
+        Expr::App(_, a) => Some(a),
+        _ => None,
+    }
+}
+
 /// Writes the arguments of an application spine to `out`, from the last to the first, and gives the head (`get_app_rev_args`). `out` is cleared first.
 pub fn app_rev_args(st: &Store, e: ExprId, out: &mut Vec<ExprId>) -> ExprId {
     out.truncate(0);

@@ -381,3 +381,16 @@ The check now gives true for the same handle first, and it does the two lookups 
 The runs are interleaved, with a load average of 20 to 28 on the machine, so the absolute numbers are high. In each pair the change saves 1.0 G to 2.9 G. On a quiet machine main uses 81.1 G to 81.3 G, so the change gives about 79.5 G to 80.2 G. A run on a quiet machine must confirm the 80 G target of M9. The steps go down from 33.08 M to 32.02 M, and the verdicts do not change. Engine R does not use this check, so engine R does not change.
 
 Two other probes did not help, and they are not merged. A probe that moved the check after `r_first` let more pairs go to `ground_defeq` first. A probe that marked a missed pair, so that `quick_is_def_eq` did not look it up again, saved about 0.3 G only. The cost was in the queries with the same handle, not in the second lookup.
+
+## 11.26 One cache line for one bucket
+
+The session table kept each field of a slot in a separate array: the tag, the two keys, the value, the stamp and the reference bit. A lookup reads the 4 slots of a bucket, so one lookup read up to 6 cache lines, one for each array. A sample of the process showed `Session::find` at about 2 percent of the time with the two engines, and most of this time was a wait for memory.
+
+Each slot is now one record of 16 bytes: the two keys, the value and a stamp word. The stamp word has the stamp in the high 28 bits, the reference bit in bit 3 and the tag in bits 0 to 2. A bucket of 4 slots is 64 bytes, so a lookup reads one cache line. The table does not store an entry with a stamp that is larger than 2^28 - 1. It is always safe to not store an entry, and Init uses stamps much smaller than this limit. The size limit of a session keeps the old count of bytes for each slot, so the number of slots does not change.
+
+| Build | Engine F on Init | Engine R on Init |
+|---|---|---|
+| main with #273 | 79.8 G, 80.2 G, 79.9 G | 79.3 G, 79.3 G |
+| one record for each slot | 79.6 G, 79.5 G, 79.9 G | 78.9 G, 78.9 G |
+
+The runs are interleaved. The peak memory goes down by about 30 MB, and the steps and the verdicts do not change.

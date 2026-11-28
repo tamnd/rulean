@@ -660,6 +660,7 @@ fn engine_f(confirm_all: bool) -> T {
     let mut t = T::new();
     t.c.engine = Engine::F;
     t.c.f_term_cap = 64;
+    t.c.r_first_beats = 0;
     t.c.confirm_all = confirm_all;
     t
 }

@@ -45,10 +45,18 @@ pub struct FStats {
     pub infer: u64,
     /// The type checks and value checks that engine F inference accepted. Engine R did the others.
     pub infer_ok: u64,
+    /// The queries where engine R used its budget first.
+    pub r_over: u64,
 }
 
 /// The largest number of nodes that `same_value` visits. The check runs at each step of `conv`, and a failed check on a deep value runs again on each part of it, so a large budget costs time. On the Init export of v4.36.0, engine F uses 458 G instructions with 16, 435 G with 64, 423 G with 256 and 417 G with 1024. On the 42 Arena perf tests, the budget 256 makes `magma-list-pair-n21` slower (113.4 G to 120.6 G instructions), and 1024 makes `church-numerals` slower (0.1 G to 1.7 G).
 const SAME_BUDGET: u32 = 64;
+
+/// The default of `Checker::r_first_beats`: the heartbeats of an engine R query before engine F (spec perf/11.23). Engine R answers most queries of Init in fewer steps than engine F, and engine F answers the hard queries. On the 42 Arena perf tests, a budget of 1024 with `R_INTERNS` 1024 makes `loop-unfolded-once` 17% faster and `proj-lazy-struct` 4 times faster, and no test more than 10% slower.
+pub const R_BUDGET: u64 = 1024;
+
+/// The store interns of an engine R query before engine F. One heartbeat can copy a large term, as in the perf test `beta-ladder`, so the heartbeats alone do not bound the time of the query.
+const R_INTERNS: u64 = 1024;
 
 /// The largest number of delta steps on the side of a taken branch in `conv_lazy_delta` (row O8 of spec 05.7.3).
 const TAKEN_STEPS: u32 = 32;
@@ -84,6 +92,9 @@ impl Checker {
         // A closed term against a scalar goes to engine G first, so that engine F does not evaluate the term one more time.
         if let Some(r) = self.ground_defeq(t, s) {
             return r;
+        }
+        if self.r_first_beats > 0 && !self.confirm_all && self.r_first(t, s) {
+            return self.r_first_out;
         }
         self.f_stats.queries += 1;
         let depth = self.depth;
@@ -123,6 +134,30 @@ impl Checker {
             self.note(Rule::FDisagree, anon);
         }
         r
+    }
+
+    /// Engine R tries the query with a budget of `r_first_beats` heartbeats and `R_INTERNS` interns. It gives true if engine R decided the query, with the answer in `r_first_out`. If engine R used the budget, it removes the fault and the failures that engine R cached, and gives false.
+    fn r_first(&mut self, t: ExprId, s: ExprId) -> bool {
+        let fmark = self.c_failure.len();
+        let depth = self.depth;
+        let smark = self.scope.len();
+        self.r_lim = self.heartbeats.saturating_add(self.r_first_beats);
+        self.r_ilim = self.st.interns().saturating_add(R_INTERNS);
+        self.r_over = false;
+        let r = self.is_def_eq_r(t, s);
+        self.r_lim = 0;
+        if self.r_over {
+            self.r_over = false;
+            self.fault = None;
+            self.depth = depth;
+            self.scope.truncate(smark);
+            self.c_failure.truncate(fmark);
+            self.f_stats.r_over += 1;
+            false
+        } else {
+            self.r_first_out = r;
+            true
+        }
     }
 
     /// An engine R query. Its sub-queries do not use engine F.

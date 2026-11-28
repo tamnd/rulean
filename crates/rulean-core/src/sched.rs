@@ -427,6 +427,7 @@ fn add_f(a: &mut FStats, b: &FStats) {
     a.faults += b.faults;
     a.infer += b.infer;
     a.infer_ok += b.infer_ok;
+    a.r_over += b.r_over;
 }
 
 /// Adds the counts of `b` to `a`.

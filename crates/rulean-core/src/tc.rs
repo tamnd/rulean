@@ -387,7 +387,7 @@ pub struct Checker {
     pub engine: Engine,
     /// `--confirm all`: engine R confirms each "equal" answer of engine F.
     pub confirm_all: bool,
-    /// The largest value term, in distinct nodes, that engine F checks if the term is not deep. The default is 0, so engine F checks only a deep value, as for a type (spec perf/04.13). A test can set a larger cap to check the inference of engine F on small values.
+    /// The largest value term, in distinct nodes, that engine F checks if the term is not deep. The default is 0, so engine F checks only a deep value, as for a type (spec perf/11.22). A test can set a larger cap to check the inference of engine F on small values.
     pub f_term_cap: u32,
     /// The heartbeats of an engine R query before each query of engine F, or 0 for no such query (spec perf/11.23). The tests of engine F set it to 0.
     pub r_first_beats: u64,

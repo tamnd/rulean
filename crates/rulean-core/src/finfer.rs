@@ -108,7 +108,7 @@ impl Checker {
         if self.engine == Engine::R || self.bad() || self.va.full() {
             return false;
         }
-        // Engine R checks a value that is not deep, unless the value has at most `f_term_cap` nodes. The queries of engine R still use engine F. If the value is larger than `F_R_ONLY`, the queries of the declaration use engine R only (spec perf/11, perf/04.13).
+        // Engine R checks a value that is not deep, unless the value has at most `f_term_cap` nodes. The queries of engine R still use engine F. If the value is larger than `F_R_ONLY`, the queries of the declaration use engine R only (spec perf/11.22).
         let n = self.term_walk(value);
         if n > self.f_term_cap {
             self.f_declined = n > F_R_ONLY;

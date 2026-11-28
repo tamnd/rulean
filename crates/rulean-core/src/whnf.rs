@@ -168,8 +168,7 @@ impl Checker {
 
     /// `mk_nullary_cnstr`: the first constructor of the head of `ty`, applied to the first `nparams` arguments of `ty`.
     fn mk_nullary_cnstr(&mut self, ty: ExprId, nparams: u32) -> Option<ExprId> {
-        let mut args: Vec<ExprId> = Vec::new();
-        let d = expr::app_args(&self.st, ty, &mut args);
+        let d = expr::app_fn(&self.st, ty);
         let (dn, dls) = match self.st.node(d) {
             Expr::Const(n, ls) => (n, ls),
             _ => return None,
@@ -178,15 +177,19 @@ impl Checker {
             Some(c) => c,
             None => return None,
         };
+        // The arguments go in a vector from the pool, so the check makes no new vector (spec perf/04.3 A9).
+        let mut args = self.take_vec();
+        expr::app_args(&self.st, ty, &mut args);
         args.truncate(nparams as usize);
         let k = self.st.mk_const(c, dls);
-        Some(self.st.mk_apps(k, &args))
+        let r = self.st.mk_apps(k, &args);
+        self.give_vec(args);
+        Some(r)
     }
 
     /// `expand_eta_struct`: `mk e.1 ... e.n` for a term `e` of type `e_type`.
     fn expand_eta_struct(&mut self, e_type: ExprId, e: ExprId) -> ExprId {
-        let mut args: Vec<ExprId> = Vec::new();
-        let i_fn = expr::app_args(&self.st, e_type, &mut args);
+        let i_fn = expr::app_fn(&self.st, e_type);
         let (i_name, i_levels) = match self.st.node(i_fn) {
             Expr::Const(n, ls) => (n, ls),
             _ => return e,
@@ -199,9 +202,12 @@ impl Checker {
             Some((_, p, f)) => (p, f),
             None => return self.fail(ErrorKind::BadConst, e),
         };
+        let mut args = self.take_vec();
+        expr::app_args(&self.st, e_type, &mut args);
         args.truncate(nparams as usize);
         let k = self.st.mk_const(c, i_levels);
         let mut r = self.st.mk_apps(k, &args);
+        self.give_vec(args);
         let mut i = 0;
         while i < nfields {
             let p = self.st.mk_proj(i_name, i, e);

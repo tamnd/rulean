@@ -240,18 +240,21 @@ impl Checker {
             Value::Small(lo, hi) => Some(self.mk_nat(Nat::from_u64(small_get(lo, hi)))),
             Value::Lit(Literal::Nat(n)) => Some(self.st.mk_nat_lit(n)),
             Value::Glued(c, us, sp, _) | Value::Neu(Head::Const(c, us), sp) => {
-                let mut args = Vec::new();
-                let n = self.va.spine_push_args(sp, &mut args);
+                // The arguments go on the stack `vstk`, so the walk makes no vector (spec perf/04.3 A9).
+                let base = self.vstk.len();
+                let n = self.va.spine_push_args(sp, &mut self.vstk);
                 let mut t = self.st.mk_const(c, us);
                 let mut i = 0;
                 let mut ok = true;
                 while ok && i < n {
-                    match self.value_term(args[i], fuel) {
+                    let v = self.vstk[base + i];
+                    match self.value_term(v, fuel) {
                         Some(a) => t = self.st.mk_app(t, a),
                         None => ok = false,
                     }
                     i += 1;
                 }
+                self.vstk.truncate(base);
                 if ok { Some(t) } else { None }
             }
             _ => None,
@@ -341,9 +344,19 @@ impl Ground {
         self.epoch = self.epoch.wrapping_add(1) & 0x7fff_ffff;
         self.hgen = self.hgen.wrapping_add(1) & 0x7fff_ffff;
         self.caf.clear();
-        self.caf_keys = Vec::new();
-        self.codes = Vec::new();
-        self.ccells = Vec::new();
+        // A small array keeps its memory, so the next run of the machine does no `malloc` for it (spec perf/04.3 A9).
+        if self.caf_keys.capacity() > (1 << 16)
+            || self.codes.capacity() > (1 << 16)
+            || self.ccells.capacity() > (1 << 16)
+        {
+            self.caf_keys = Vec::new();
+            self.codes = Vec::new();
+            self.ccells = Vec::new();
+        } else {
+            self.caf_keys.truncate(0);
+            self.codes.truncate(0);
+            self.ccells.truncate(0);
+        }
         self.cgen = self.cgen.wrapping_add(1) & 0x7fff_ffff;
         self.gc_at = G_GC_FIRST;
         self.nat_words = 0;
@@ -361,7 +374,11 @@ impl Ground {
             self.args.truncate(0);
             self.frames.truncate(0);
         }
-        self.nats = Vec::new();
+        if self.nats.capacity() > (1 << 16) {
+            self.nats = Vec::new();
+        } else {
+            self.nats.truncate(0);
+        }
         self.tmp.truncate(0);
         self.roots.truncate(0);
     }
@@ -1076,7 +1093,7 @@ impl Checker {
     }
 
     fn g_inline_app(&mut self, e: ExprId, depth: u32, fuel: &mut u32) -> ExprId {
-        let mut args: Vec<ExprId> = Vec::new();
+        let mut args = self.take_vec();
         let h = expr::app_args(&self.st, e, &mut args);
         let mut changed = false;
         let mut i = 0;
@@ -1093,13 +1110,18 @@ impl Checker {
         } else {
             NIL_E
         };
-        if w != NIL_E {
-            return self.g_inline(w, depth - 1, fuel);
-        }
-        if changed {
+        let r = if w != NIL_E {
+            NIL_E
+        } else if changed {
             self.st.mk_apps(h, &args)
         } else {
             e
+        };
+        self.give_vec(args);
+        if w != NIL_E {
+            self.g_inline(w, depth - 1, fuel)
+        } else {
+            r
         }
     }
 

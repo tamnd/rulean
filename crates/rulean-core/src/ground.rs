@@ -1179,13 +1179,16 @@ impl Checker {
         if !ok {
             return NIL_E;
         }
-        let mut rev: Vec<ExprId> = Vec::with_capacity(args.len());
+        // The reversed arguments go in a vector from the pool (spec perf/04.3 A9).
+        let mut rev = self.take_vec();
         let mut i = args.len();
         while i > 0 {
             i -= 1;
             rev.push(args[i]);
         }
-        expr::apply_beta(&mut self.st, &mut self.x, value, &rev)
+        let r = expr::apply_beta(&mut self.st, &mut self.x, value, &rev);
+        self.give_vec(rev);
+        r
     }
 
     /// The uses of the bound variable `i` in `e` that engine G can compute, with a use under a lambda counted as 2. The result is at most 2, and 2 when the fuel ends.

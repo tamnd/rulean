@@ -343,3 +343,24 @@ We also tried two changes that did not help, and we did not merge them.
 
 1. `term_walk` counted the nodes of the tree, not the distinct nodes, so that a value with a large tree went to engine R only. Init went from 42.13 M to 36.72 M steps, but `discarded-argument` went from 0.025 G to 0.254 G and `discarded-argument-match` from 0.027 G to 0.439 G. The value of these tests has 210 distinct nodes and 409 nodes in the tree. On Init, the values with at most 256 distinct nodes and more than 256 nodes in the tree have all ratios of tree to distinct nodes, so no bound on the ratio keeps the two tests and the gain.
 2. A check of `has_binder` before the walk of a type. It gave the same steps and no change in instructions above the noise.
+
+## 11.24 The cost of the walk
+
+After #270, engine F mode on Init uses about 82.6 G instructions, and engine R mode uses about 79.6 G. To find the cost of each part of engine F mode, we made three probes. Each probe has the same decisions as main, or a known change of the decisions.
+
+| Probe | What it does | Init, two runs |
+|---|---|---|
+| main (#270) | engine F mode | 82.6 G, 82.6 G |
+| all declined | no walk, and each declaration uses engine R only | 80.4 G, 80.7 G |
+| walk only | the walks of `term_walk` run, then each declaration uses engine R only | 82.2 G, 82.5 G |
+
+So the walks of the values and the types use about 1.8 G on Init, and this is the largest cost of engine F mode. The walk reads at most 257 nodes of each value and of each type, so a node costs about 60 instructions. Most of these instructions are in the `Memo` that keeps the nodes that the walk saw: the hash of a pair, the order list for `truncate`, and the check for growth.
+
+The walk now uses a `WalkSet`. It is an open table with 1024 slots, a key and an epoch in each slot, and Fibonacci hashing. The walk puts at most 257 nodes in the set, so the load stays below 1/2, and the table never grows. The table has 8 KiB, so it stays in the first level of the processor cache. The stack of the walk has the term and its binder depth in one item, so a step does one push and one pop in place of two.
+
+The decisions do not change, so the steps on Init stay at 33.08 M. Engine F mode on Init goes from 82.7 G, 82.7 G to 81.6 G, 81.3 G.
+
+We also tried two changes that did not help, and we did not merge them.
+
+1. The store kept the tree size and the binder depth of each node in its side record, so that the test of a deep term was one read. The side record went from 8 to 12 bytes, and each new node read the side records of its fields. With the same decisions as the walk, Init went from 83.5 G to 86.2 G. With the tree size in place of the distinct nodes, Init used 84.3 G, as in 11.23.
+2. Engine G before engine R in each query of engine F mode was off. Init did not change.

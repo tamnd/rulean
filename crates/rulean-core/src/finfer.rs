@@ -23,16 +23,13 @@ use crate::value::{EnvId, Head, Value, ValueId};
 /// The root context: no entries.
 const ROOT: u32 = 0;
 
-/// The largest value term, in distinct nodes, that engine F checks if the term is not deep. Engine R checks a larger value (spec perf/11).
-const F_TERM_CAP: u32 = 64;
-
 /// The binder depth above which a value term stays with engine F (see `term_walk`).
 const F_DEEP: u32 = 64;
 
-/// The largest number of nodes that `term_walk` reads. It is more than `F_TERM_CAP` and more than `F_DEEP`, so that the walk can find a deep chain in a term with more than `F_TERM_CAP` nodes. The walk goes first into the body of each binder, so a deep chain is found early. It is not less than `F_R_ONLY`, because the walk must count a value with more than `F_R_ONLY` nodes (spec perf/11.19).
+/// The largest number of nodes that `term_walk` reads. It is more than `F_DEEP`, so that the walk can find a deep chain in a term with many nodes. The walk goes first into the body of each binder, so a deep chain is found early. It is not less than `F_R_ONLY`, because the walk must count a value with more than `F_R_ONLY` nodes (spec perf/11.19).
 const F_WALK: u32 = 256;
 
-/// The size of a value term, in distinct nodes, above which the queries of the declaration use engine R only. It is more than `F_TERM_CAP`, because on a small value the queries of engine R can need the rules of engine F, as in the perf test `ite-taken-branch`.
+/// The size of a value term, in distinct nodes, above which the queries of the declaration use engine R only. On a value with fewer nodes, the queries of engine R can need the rules of engine F, as in the perf test `ite-taken-branch`.
 const F_R_ONLY: u32 = 256;
 
 /// A node of the context tree.
@@ -111,9 +108,9 @@ impl Checker {
         if self.engine == Engine::R || self.bad() || self.va.full() {
             return false;
         }
-        // Engine R checks a large value that is not deep. If the value is larger than `F_R_ONLY`, the queries of the declaration use engine R only (spec perf/11).
+        // Engine R checks a value that is not deep, unless the value has at most `f_term_cap` nodes. The queries of engine R still use engine F. If the value is larger than `F_R_ONLY`, the queries of the declaration use engine R only (spec perf/11, perf/04.13).
         let n = self.term_walk(value);
-        if n > F_TERM_CAP {
+        if n > self.f_term_cap {
             self.f_declined = n > F_R_ONLY;
             return false;
         }

@@ -294,3 +294,24 @@ We also tried two changes that did not help, and we did not merge them.
 2. A cache of calls with one argument only. It was 0.8 G slower than no cache.
 
 A larger budget for the scratch store of the session (one fifth in place of one tenth) gave less instructions on Init, but more memory, up to 1.6 GB on Std, and the runs were too noisy to show a real gain. We did not change the budget.
+
+## 11.22 Values to engine R
+
+After #268, a breakdown of the work of engine F on Init used the deterministic counts of the report, because the load on the machine made the instruction counts change by more than 10 G between two runs of the same binary. Engine R alone uses 37.3 M steps. Engine F uses 47.9 M steps. A test build in which engine F checks no small value uses 41.6 M steps, and a test build in which engine F takes no query of engine R uses 46.7 M steps. Thus the value checks of engine F cost about 5.9 M steps on Init, and the queries cost less than 1 M steps.
+
+The value checks also do not help the perf tests. The large gains of engine F, as in `ite-taken-branch` and `short-circuit-and`, come from the queries of engine R, and these stay. PR #269 makes the cap a field of the type checker, `f_term_cap`, with the default 0. Engine F now checks a value only if `term_walk` finds a deep chain, as for a type (11.19). The tests of the inference of engine F set the cap to 64.
+
+| Measure | Before (#268) | After (#269) |
+|---|---|---|
+| Init, engine F, steps | 47.92 M | 42.13 M |
+| Init, engine F, minimum of two runs | 84.3 G | 83.6 G |
+| Steps of all perf tests, engine F | 15.50 M | 13.60 M |
+| `prop-struct-projections`, minimum of three runs | 0.413 G | 0.214 G |
+| `gf3-matrix-product`, minimum of three runs | 17.83 G | 17.67 G |
+| `grind-ring-5`, minimum of three runs | 5.44 G | 5.40 G |
+
+No perf test uses more steps. On Init, engine F now takes 126,946 queries in place of 101,037, because engine R now checks the values and asks more queries. The verdicts do not change.
+
+We also tried a change that did not help, and we did not merge it. `is_def_eq_shared` looked in the equality caches of engine R before engine F, and an "equal" answer of engine F went into the cache. This removed 36% of the queries of engine F on Init, but the instruction count did not change.
+
+Engine R alone is still faster on Init, by about 4 G. The other cost of engine F on Init is the queries, the walk of `term_walk` and the deep types.

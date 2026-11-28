@@ -12,7 +12,7 @@
 
 use alloc::vec::Vec;
 use rulean_store::ids::{low, raw};
-use rulean_store::{BinderInfo, Expr, ExprId, NameId};
+use rulean_store::{BinderInfo, Expr, ExprId, NameId, Raw};
 
 use crate::conv::{Engine, F_DELTA, F_TYPED};
 use crate::level;
@@ -31,6 +31,72 @@ const F_WALK: u32 = 256;
 
 /// The size of a value term, in distinct nodes, above which the queries of the declaration use engine R only. On a value with fewer nodes, the queries of engine R can need the rules of engine F, as in the perf test `ite-taken-branch`.
 const F_R_ONLY: u32 = 256;
+
+/// The number of slots of a `WalkSet`. `term_walk` puts at most `F_WALK + 1` terms in the set, so the load stays below 1/2 and a probe always finds a free slot.
+const WALK_SLOTS: usize = 1024;
+
+/// The set of the terms that `term_walk` saw. It has a fixed size of 8 KiB, so it stays in the first level of the processor cache, and `clear` is O(1) with epochs. A slot keeps the full handle, so a hash collision only makes a probe longer.
+#[derive(Clone, Debug)]
+struct WalkSet {
+    keys: Vec<Raw>,
+    epochs: Vec<u32>,
+    epoch: u32,
+}
+
+impl WalkSet {
+    fn new() -> WalkSet {
+        let mut keys = Vec::with_capacity(WALK_SLOTS);
+        let mut epochs = Vec::with_capacity(WALK_SLOTS);
+        let mut i = 0;
+        while i < WALK_SLOTS {
+            keys.push(0);
+            epochs.push(0);
+            i += 1;
+        }
+        WalkSet {
+            keys,
+            epochs,
+            epoch: 1,
+        }
+    }
+
+    /// Makes the set empty.
+    fn clear(&mut self) {
+        if self.epoch < u32::MAX {
+            self.epoch += 1;
+        } else {
+            let mut i = 0;
+            while i < WALK_SLOTS {
+                self.epochs[i] = 0;
+                i += 1;
+            }
+            self.epoch = 1;
+        }
+    }
+
+    /// Puts `x` in the set. True if `x` was not in the set. The handle type is `u64` with the `wide` feature, so the cast is not always a change.
+    #[allow(clippy::unnecessary_cast)]
+    fn add(&mut self, x: Raw) -> bool {
+        // Fibonacci hashing: the top bits of the low 32 bits of the product.
+        let p = ((x as u64) & 0xffff_ffff) * 0x9e37_79b1;
+        let mut pos = ((p & 0xffff_ffff) >> 22) as usize;
+        let mut fresh = true;
+        let mut walking = true;
+        while walking {
+            if self.epochs[pos] != self.epoch {
+                self.epochs[pos] = self.epoch;
+                self.keys[pos] = x;
+                walking = false;
+            } else if self.keys[pos] == x {
+                fresh = false;
+                walking = false;
+            } else {
+                pos = (pos + 1) & (WALK_SLOTS - 1);
+            }
+        }
+        fresh
+    }
+}
 
 /// A node of the context tree.
 #[derive(Clone, Copy, Debug)]
@@ -66,9 +132,9 @@ pub(crate) struct FInfer {
     /// The value at key (term, node).
     values: Memo,
     /// The terms that `term_walk` saw.
-    seen: Memo,
-    /// The binder depth of each term on the stack of `term_walk`.
-    walk_depth: Vec<u32>,
+    seen: WalkSet,
+    /// The stack of `term_walk`: a term and its binder depth.
+    walk: Vec<(ExprId, u32)>,
 }
 
 impl FInfer {
@@ -79,8 +145,8 @@ impl FInfer {
             lets: Memo::new(),
             types: Memo::new(),
             values: Memo::new(),
-            seen: Memo::new(),
-            walk_depth: Vec::new(),
+            seen: WalkSet::new(),
+            walk: Vec::new(),
         }
     }
 
@@ -170,57 +236,44 @@ impl Checker {
 
     /// The number of distinct nodes of the value term `e`, at most `F_WALK + 1`, or 0 if the term has a chain of more than `F_DEEP` nested binders.
     ///
-    /// Engine R copies the body of a binder when it goes under the binder, so its time grows with the depth of the binders times the size of the term. Engine F does not copy the term. So a deep term stays with engine F, and this gives 0 for it. On Init, the large values are wide proofs with a small depth, and engine R checks them with fewer instructions (spec perf/08.3). The walk goes first into the body of each binder, so it finds a deep chain early. It stops after `F_WALK + 1` nodes, so its cost is at most `F_WALK` steps.
+    /// Engine R copies the body of a binder when it goes under the binder, so its time grows with the depth of the binders times the size of the term. Engine F does not copy the term. So a deep term stays with engine F, and this gives 0 for it. On Init, the large values are wide proofs with a small depth, and engine R checks them with fewer instructions (spec perf/08.3). The walk goes first into the body of each binder, so it finds a deep chain early. It stops after `F_WALK + 1` nodes, so its cost is at most `F_WALK` steps. The set of the nodes that it saw is a `WalkSet` (spec perf/11.24).
     fn term_walk(&mut self, e: ExprId) -> u32 {
         self.fi.seen.clear();
-        let mark = self.estk.len();
-        self.fi.walk_depth.truncate(0);
-        self.estk.push(e);
-        self.fi.walk_depth.push(0);
+        self.fi.walk.truncate(0);
+        self.fi.walk.push((e, 0));
         let mut n: u32 = 0;
         let mut deep = false;
-        while self.estk.len() > mark && n <= F_WALK && !deep {
-            let x = match self.estk.pop() {
-                Some(x) => x,
-                None => e,
+        while n <= F_WALK && !deep && !self.fi.walk.is_empty() {
+            // The stack is not empty here. The other arm gives the root again, and the root is in the set.
+            let (x, d) = match self.fi.walk.pop() {
+                Some(t) => t,
+                None => (e, 0),
             };
-            // The two stacks have the same length, so `walk_depth` is not empty here.
-            let top = self.fi.walk_depth.len() - 1;
-            let d = self.fi.walk_depth[top];
-            self.fi.walk_depth.truncate(top);
             if d > F_DEEP {
                 deep = true;
-            } else if !self.fi.seen.contains(x.0, 0) {
-                self.fi.seen.put(x.0, 0, 1);
+            } else if self.fi.seen.add(x.0) {
                 n += 1;
                 match self.st.node(x) {
                     Expr::App(f, a) => {
-                        self.walk_push(f, d);
-                        self.walk_push(a, d);
+                        self.fi.walk.push((f, d));
+                        self.fi.walk.push((a, d));
                     }
                     Expr::Lam(b) | Expr::Pi(b) => {
-                        self.walk_push(b.dom, d);
-                        self.walk_push(b.body, d + 1);
+                        self.fi.walk.push((b.dom, d));
+                        self.fi.walk.push((b.body, d + 1));
                     }
                     Expr::Let(l) => {
-                        self.walk_push(l.ty, d);
-                        self.walk_push(l.value, d);
-                        self.walk_push(l.body, d + 1);
+                        self.fi.walk.push((l.ty, d));
+                        self.fi.walk.push((l.value, d));
+                        self.fi.walk.push((l.body, d + 1));
                     }
-                    Expr::Proj(p) => self.walk_push(p.expr, d),
+                    Expr::Proj(p) => self.fi.walk.push((p.expr, d)),
                     _ => {}
                 }
             }
         }
-        self.estk.truncate(mark);
-        self.fi.walk_depth.truncate(0);
+        self.fi.walk.truncate(0);
         if deep { 0 } else { n }
-    }
-
-    /// Pushes a term and its binder depth for `term_walk`.
-    fn walk_push(&mut self, e: ExprId, d: u32) {
-        self.estk.push(e);
-        self.fi.walk_depth.push(d);
     }
 
     /// Makes the root node if the tree is empty.

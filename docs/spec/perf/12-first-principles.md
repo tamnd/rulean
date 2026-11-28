@@ -150,3 +150,33 @@ The scratch tier finds only 8% of its walks. The profile of 12.2 shows that `ins
 ### A smaller scratch table did not help
 
 A branch made the scratch table and the memo smaller when they are cleared after a declaration (a factor of 8, with a minimum of 2^14 slots). The goal was fewer cache misses. Init with engine R went from 80.1 G to 82.2 G and 83.6 G for the two variants, and the cycles did not show a clear gain. The branch is not merged.
+
+## 12.9 Where engine R makes its terms
+
+A probe binary (not merged) counts the interns at each site that instantiates a term, on Init with one thread, after #264. The total is 90.3 M interns.
+
+| Site | Interns | Calls |
+|---|---|---|
+| beta in `whnf_core_app` | 28.5 M | 3.79 M |
+| `infer_app_check` | 12.4 M | 11.15 M |
+| body of `infer_lambda` | 10.8 M | 0.26 M |
+| abstraction of the type in `infer_lambda` | 4.3 M | 0.26 M |
+| body and domains of `infer_pi` | 2.2 M | 0.72 M |
+| other calls of `instantiate_rev` | 1.5 M | 0.46 M |
+| domains of `infer_lambda` | 0.5 M | 0.50 M |
+| levels of constants (type and value) | 0.8 M | 0.63 M |
+| `let` in `whnf_core` | 0.2 M | 0.02 M |
+
+The other interns (about 29 M) come from `unfold_definition`, `promote` and the other functions that make terms. A sample of 25 s of the check gives these inclusive counts, of 9100 samples in `check_export`.
+
+| Function | Samples |
+|---|---|
+| `lazy_delta_reduction_step` | 3795 |
+| `inst_rec` | 3455 |
+| `whnf_core_app` | 3206 |
+| `mk_app` | 3192 |
+| `probe` | 1894 |
+
+Thus the construction of terms is about half of the check, and the beta step of the lazy delta reduction is the largest part of it. The table probe is mostly one cache miss on the first slot, because the slots keep the hash and the walk reads the node only when the hash is the same.
+
+Inference on open terms (no instantiation of the body of a binder) can remove at most the body and the abstraction of `infer_lambda` and the body of `infer_pi`, which is about 16 M interns (18%). Some of this cost comes back, because a dependent argument must be closed before it goes into the type. The beta step stays. So this change alone cannot give the target of 12.1. The beta step of the lazy delta reduction makes a full term for each unfolded definition, and most of these terms are used only for one comparison. A design that reaches the target must make the comparison without these terms. Engine F does this with values, but 12.8 shows that today it does more work than engine R.

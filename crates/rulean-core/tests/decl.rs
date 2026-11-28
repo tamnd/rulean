@@ -659,6 +659,7 @@ fn session_off_keeps_nothing() {
 fn engine_f(confirm_all: bool) -> T {
     let mut t = T::new();
     t.c.engine = Engine::F;
+    t.c.f_term_cap = 64;
     t.c.confirm_all = confirm_all;
     t
 }

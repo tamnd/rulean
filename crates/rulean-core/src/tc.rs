@@ -387,6 +387,8 @@ pub struct Checker {
     pub engine: Engine,
     /// `--confirm all`: engine R confirms each "equal" answer of engine F.
     pub confirm_all: bool,
+    /// The largest value term, in distinct nodes, that engine F checks if the term is not deep. The default is 0, so engine F checks only a deep value, as for a type (spec perf/04.13). A test can set a larger cap to check the inference of engine F on small values.
+    pub f_term_cap: u32,
     /// The counts of engine F since the checker was made.
     pub f_stats: FStats,
     /// The rules that the current engine F query used, as the bits `F_DELTA` and `F_TYPED`.
@@ -527,6 +529,7 @@ impl Checker {
             c_quote: Lossy::new(),
             q_depth: 0,
             engine: Engine::R,
+            f_term_cap: 0,
             confirm_all: false,
             f_stats: FStats::default(),
             f_bits: 0,
